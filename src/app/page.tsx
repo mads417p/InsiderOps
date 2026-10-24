@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   Cpu,
   Eye,
   EyeOff,
@@ -62,6 +63,7 @@ export default function Dashboard() {
   const [councilLoading, setCouncilLoading] = useState<boolean>(false);
   const [activeVerdict, setActiveVerdict] = useState<CouncilVerdict | null>(null);
   const [verdictHistory, setVerdictHistory] = useState<Record<string, CouncilVerdict>>({});
+  const [showContextNotes, setShowContextNotes] = useState<boolean>(true);
 
   const fetchScan = useCallback(async (selectedSource: 'mock' | 'live') => {
     setLoading(true);
@@ -666,6 +668,34 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
+
+              {/* Live Market & News Context Notes Fold-Out Panel */}
+              {selectedTx.contextNotes && (
+                <div className="rounded bg-slate-900/60 border border-slate-800 overflow-hidden shadow-sm">
+                  <button
+                    onClick={() => setShowContextNotes(!showContextNotes)}
+                    className="w-full px-4 py-2.5 bg-slate-900/90 hover:bg-slate-800/80 transition-colors flex items-center justify-between text-left font-mono text-xs"
+                  >
+                    <div className="flex items-center gap-2 text-cyan-400 font-bold tracking-wide">
+                      <Activity className="w-3.5 h-3.5" />
+                      <span>MARKEDSKONTEKST & NYHEDER (GRUNDLAG FOR RÅDETS DOM)</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-400 text-[11px]">
+                      <span>{showContextNotes ? 'Skjul detaljer' : 'Vis kurs & nyheder'}</span>
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 transition-transform ${
+                          showContextNotes ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </div>
+                  </button>
+                  {showContextNotes && (
+                    <div className="p-4 border-t border-slate-800/80 bg-slate-950/60 text-xs font-sans space-y-2 text-slate-300 leading-relaxed whitespace-pre-line">
+                      {selectedTx.contextNotes}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

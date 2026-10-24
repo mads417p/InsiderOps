@@ -1,4 +1,5 @@
 import { InsiderTransaction, TransactionCode } from '@/types/insider';
+import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 
 /**
  * Trin 2: Hård filtrering uden API-omkostninger.
@@ -45,7 +46,7 @@ export function getMockTransactions(): InsiderTransaction[] {
       recentPriceChange30dPct: -28.0,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1029384/000102938426000042/form4.xml',
       contextNotes:
-        'Massivt CFO + General Counsel cluster-køb efter 28% kursfald grundet forsinket FDA-møde. Forøger CFOs beholdning med 42% ($480k).',
+        'Massivt CFO + General Counsel cluster-køb efter 28% kursfald grundet forsinket FDA-møde. Forøger CFOs beholdning med 42% ($480k).\n\nKurs-kontekst: Seneste lukkekurs $24.00 (-28.0% seneste 30d, -34.5% fra 3-mdr top $36.60).\n\nSeneste nyheder & katalysatorer:\n• [21 Oct] NovoCure clarifies timeline for FDA review meeting\n• [18 Oct] Analyst downgrade citing regulatory uncertainty',
     },
     {
       id: 'mock-ceo-cosmetic-buy',
@@ -65,7 +66,7 @@ export function getMockTransactions(): InsiderTransaction[] {
       recentPriceChange30dPct: -45.0,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1482910/000148291026000115/form4.xml',
       contextNotes:
-        'CEO "Cosmetic / PR Buy" i presset selskab. Køb for $65k er mikroskopisk mod en eksisterende beholdning på $18 mio. (kun +0.36% forøgelse).',
+        'CEO "Cosmetic / PR Buy" i presset selskab. Køb for $65k er mikroskopisk mod en eksisterende beholdning på $18 mio. (kun +0.36% forøgelse).\n\nKurs-kontekst: Seneste lukkekurs $13.00 (-45.0% seneste 30d, -58.0% fra 3-mdr top $31.00).\n\nSeneste nyheder & katalysatorer:\n• [20 Oct] Plexus Cloud lowers ARR guidance for Q4\n• [15 Oct] Major enterprise customer churn reported',
     },
     {
       id: 'mock-chair-cfo-earnings-buy',
@@ -85,7 +86,7 @@ export function getMockTransactions(): InsiderTransaction[] {
       recentPriceChange30dPct: 3.5,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1129381/000112938126000089/form4.xml',
       contextNotes:
-        'Stille Bestyrelsesformand + CFO køb ($310.000, +28% beholdning) i overset industriaktie to uger før kvartalsregnskab.',
+        'Stille Bestyrelsesformand + CFO køb ($310.000, +28% beholdning) i overset industriaktie to uger før kvartalsregnskab.\n\nKurs-kontekst: Seneste lukkekurs $31.00 (+3.5% seneste 30d, -2.1% fra 3-mdr top $31.65).\n\nSeneste nyheder & katalysatorer:\n• [19 Oct] Vanguard wins $85M infrastructure supply contract\n• [10 Oct] Q3 earnings scheduled for release November 6',
     },
     {
       id: 'mock-option-exercise-m',
@@ -144,14 +145,123 @@ export function getMockTransactions(): InsiderTransaction[] {
   ];
 }
 
+interface ParsedSubTransaction {
+  code: TransactionCode;
+  shares: number;
+  pricePerShare: number;
+  totalValue: number;
+  sharesOwnedFollowing: number;
+}
+
 /**
- * Henter seneste Form 4 filings fra SEC EDGAR Atom/XML feedet og parser til InsiderTransaction.
- * Falder graceful tilbage til mock data ved netværksfejl, tomme feeds eller SEC rate-limits.
+ * Parser og aggregerer transaktionsblokke (håndterer split-lots og summerer del-handler for samme insider).
  */
-export async function fetchLiveSecForm4s(limit: number = 10): Promise<InsiderTransaction[]> {
-  const userAgent = process.env.SEC_USER_AGENT || 'InsiderOps mads@example.com';
+function parseAndAggregateTransactions(xml: string): {
+  code: TransactionCode;
+  shares: number;
+  pricePerShare: number;
+  totalValueUsd: number;
+  sharesOwnedFollowing: number;
+  holdingsIncreasePct: number;
+} | null {
+  const txMatches = [...xml.matchAll(/<nonDerivativeTransaction>([\s\S]*?)<\/nonDerivativeTransaction>/gi)];
+
+  const parsedSubTxs: ParsedSubTransaction[] = [];
+
+  for (const match of txMatches) {
+    const block = match[1];
+    const rawCode = block.match(/<transactionCode>\s*([A-Z])\s*<\/transactionCode>/i)?.[1]?.trim() as TransactionCode;
+    const sharesStr = block.match(/<transactionShares>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1]?.trim();
+    const priceStr = block.match(/<transactionPricePerShare>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1]?.trim();
+    const ownedFollowingStr = block.match(
+      /<sharesOwnedFollowingTransaction>\s*<value>\s*(.*?)\s*<\/value>/i
+    )?.[1]?.trim();
+
+    if (!rawCode) continue;
+
+    const shares = parseFloat(sharesStr || '0');
+    const price = parseFloat(priceStr || '0');
+    const ownedFollowing = parseFloat(ownedFollowingStr || '0');
+    const totalVal = shares * price;
+
+    const validCode: TransactionCode = ['P', 'S', 'A', 'M'].includes(rawCode) ? rawCode : 'P';
+
+    parsedSubTxs.push({
+      code: validCode,
+      shares,
+      pricePerShare: price,
+      totalValue: totalVal,
+      sharesOwnedFollowing: ownedFollowing,
+    });
+  }
+
+  // Fallback hvis ingen standard nonDerivativeTransaction blokke blev fundet
+  if (parsedSubTxs.length === 0) {
+    const rawCode = xml.match(/<transactionCode>\s*([A-Z])\s*<\/transactionCode>/i)?.[1]?.trim() as TransactionCode;
+    if (!rawCode) return null;
+    const shares = parseFloat(xml.match(/<transactionShares>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1] || '0');
+    const price = parseFloat(xml.match(/<transactionPricePerShare>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1] || '0');
+    const owned = parseFloat(
+      xml.match(/<sharesOwnedFollowingTransaction>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1] || '0'
+    );
+    const validCode: TransactionCode = ['P', 'S', 'A', 'M'].includes(rawCode) ? rawCode : 'P';
+    const prior = owned - shares;
+    const pct = prior > 0 ? parseFloat(((shares / prior) * 100).toFixed(2)) : 100.0;
+    return {
+      code: validCode,
+      shares,
+      pricePerShare: price,
+      totalValueUsd: shares * price,
+      sharesOwnedFollowing: owned,
+      holdingsIncreasePct: pct,
+    };
+  }
+
+  // Prioriter Open Market Purchases ('P') og aggreger alle del-linjer
+  const pTransactions = parsedSubTxs.filter((t) => t.code === 'P');
+
+  if (pTransactions.length > 0) {
+    const totalShares = pTransactions.reduce((acc, t) => acc + t.shares, 0);
+    const totalValueUsd = pTransactions.reduce((acc, t) => acc + t.totalValue, 0);
+    const avgPrice = totalShares > 0 ? Number((totalValueUsd / totalShares).toFixed(4)) : pTransactions[0].pricePerShare;
+    const sharesOwnedFollowing = Math.max(...pTransactions.map((t) => t.sharesOwnedFollowing));
+    const priorShares = sharesOwnedFollowing - totalShares;
+    const holdingsIncreasePct =
+      priorShares > 0 ? parseFloat(((totalShares / priorShares) * 100).toFixed(2)) : 100.0;
+
+    return {
+      code: 'P',
+      shares: totalShares,
+      pricePerShare: avgPrice,
+      totalValueUsd,
+      sharesOwnedFollowing,
+      holdingsIncreasePct,
+    };
+  }
+
+  // Hvis ingen 'P', tag den første eller største transaktion (f.eks. M eller S)
+  const primaryTx = parsedSubTxs[0];
+  const prior = primaryTx.sharesOwnedFollowing - primaryTx.shares;
+  const pct = prior > 0 ? parseFloat(((primaryTx.shares / prior) * 100).toFixed(2)) : 100.0;
+
+  return {
+    code: primaryTx.code,
+    shares: primaryTx.shares,
+    pricePerShare: primaryTx.pricePerShare,
+    totalValueUsd: primaryTx.totalValue,
+    sharesOwnedFollowing: primaryTx.sharesOwnedFollowing,
+    holdingsIncreasePct: pct,
+  };
+}
+
+/**
+ * Henter seneste Form 4 filings fra SEC EDGAR Atom/XML feedet i parallelle batches af 8.
+ * Summerer del-linjer og beriger godkendte handler med live kurs- og nyhedsdata.
+ */
+export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTransaction[]> {
+  const userAgent = process.env.SEC_USER_AGENT || 'InsiderOps/1.0 (mads.rosengaard2003@gmail.com)';
   const feedUrl =
-    'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&company=&dateb=&owner=only&start=0&count=20&output=atom';
+    'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&company=&dateb=&owner=only&start=0&count=40&output=atom';
 
   try {
     const feedResponse = await fetch(feedUrl, {
@@ -174,13 +284,14 @@ export async function fetchLiveSecForm4s(limit: number = 10): Promise<InsiderTra
       return getMockTransactions();
     }
 
-    const transactions: InsiderTransaction[] = [];
-    const entriesToProcess = entryMatches.slice(0, Math.min(limit, 10));
+    // Udvælg op til de første entries
+    const entriesToProcess = entryMatches.slice(0, Math.min(entryMatches.length, limit * 2, 32));
 
-    for (const match of entriesToProcess) {
-      const entryContent = match[1];
+    // Hjælpefunktion til at hente og parse en enkelt Form 4 filing
+    const parseEntry = async (entryMatch: RegExpMatchArray): Promise<InsiderTransaction | null> => {
+      const entryContent = entryMatch[1];
       const linkMatch = entryContent.match(/<link[^>]*href=["']([^"']+)["']/i);
-      if (!linkMatch) continue;
+      if (!linkMatch) return null;
 
       let indexUrl = linkMatch[1];
       if (!indexUrl.startsWith('http')) {
@@ -192,11 +303,11 @@ export async function fetchLiveSecForm4s(limit: number = 10): Promise<InsiderTra
           headers: { 'User-Agent': userAgent },
         });
 
-        if (!indexResponse.ok) continue;
+        if (!indexResponse.ok) return null;
 
         const indexHtml = await indexResponse.text();
         const xmlMatch = indexHtml.match(/href=["'](\/Archives\/edgar\/data\/[^"']+\.xml)["']/i);
-        if (!xmlMatch) continue;
+        if (!xmlMatch) return null;
 
         // Strip stylesheet prefix (f.eks. /xslF345X06/) for at få den rå XML-fil
         const rawXmlPath = xmlMatch[1].replace(/\/xsl[^\/]+\//i, '/');
@@ -206,17 +317,20 @@ export async function fetchLiveSecForm4s(limit: number = 10): Promise<InsiderTra
           headers: { 'User-Agent': userAgent },
         });
 
-        if (!xmlResponse.ok) continue;
+        if (!xmlResponse.ok) return null;
 
         const xml = await xmlResponse.text();
 
-        // Udtræk kerne-felter via regex
+        // Udtræk selskabs- og ejer-info
         const ticker = xml.match(/<issuerTradingSymbol>\s*(.*?)\s*<\/issuerTradingSymbol>/i)?.[1]?.trim();
         const companyName = xml.match(/<issuerName>\s*(.*?)\s*<\/issuerName>/i)?.[1]?.trim();
         const insiderName = xml.match(/<rptOwnerName>\s*(.*?)\s*<\/rptOwnerName>/i)?.[1]?.trim();
-        const rawCode = xml.match(/<transactionCode>\s*(.*?)\s*<\/transactionCode>/i)?.[1]?.trim() as TransactionCode;
 
-        if (!ticker || !insiderName || !rawCode) continue;
+        if (!ticker || !insiderName) return null;
+
+        // Udtræk og aggreger del-linjer (split-lots)
+        const aggregated = parseAndAggregateTransactions(xml);
+        if (!aggregated) return null;
 
         // Udtræk titel / rolle
         let insiderTitle = xml.match(/<officerTitle>\s*(.*?)\s*<\/officerTitle>/i)?.[1]?.trim();
@@ -236,25 +350,6 @@ export async function fetchLiveSecForm4s(limit: number = 10): Promise<InsiderTra
           xml.match(/<periodOfReport>\s*(.*?)\s*<\/periodOfReport>/i)?.[1]?.trim() ||
           new Date().toISOString().split('T')[0];
 
-        const sharesStr = xml.match(/<transactionShares>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1]?.trim();
-        const priceStr = xml.match(/<transactionPricePerShare>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1]?.trim();
-        const ownedFollowingStr = xml.match(
-          /<sharesOwnedFollowingTransaction>\s*<value>\s*(.*?)\s*<\/value>/i
-        )?.[1]?.trim();
-
-        const shares = parseFloat(sharesStr || '0');
-        const pricePerShare = parseFloat(priceStr || '0');
-        const totalValueUsd = shares * pricePerShare;
-        const sharesOwnedFollowing = parseFloat(ownedFollowingStr || '0');
-
-        const priorShares = sharesOwnedFollowing - shares;
-        const holdingsIncreasePct =
-          priorShares > 0 ? parseFloat(((shares / priorShares) * 100).toFixed(2)) : 100.0;
-
-        const validTransactionCode: TransactionCode = ['P', 'S', 'A', 'M'].includes(rawCode)
-          ? rawCode
-          : 'P';
-
         const transaction: InsiderTransaction = {
           id: `sec-${ticker}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
           filingDate,
@@ -262,24 +357,40 @@ export async function fetchLiveSecForm4s(limit: number = 10): Promise<InsiderTra
           companyName: companyName || ticker,
           insiderName,
           insiderTitle,
-          transactionCode: validTransactionCode,
-          shares,
-          pricePerShare,
-          totalValueUsd,
-          sharesOwnedFollowing,
-          holdingsIncreasePct,
-          isClusterBuy: false, // Beregnes efterfølgende på tværs af batch
+          transactionCode: aggregated.code,
+          shares: aggregated.shares,
+          pricePerShare: aggregated.pricePerShare,
+          totalValueUsd: aggregated.totalValueUsd,
+          sharesOwnedFollowing: aggregated.sharesOwnedFollowing,
+          holdingsIncreasePct: aggregated.holdingsIncreasePct,
+          isClusterBuy: false,
           clusterCount: 1,
           secFilingUrl: rawXmlUrl,
         };
 
-        transactions.push(transaction);
+        return transaction;
       } catch (err) {
-        console.warn(`Fejl ved hentning af individuel Form 4 (${indexUrl}):`, err);
+        console.warn(`Fejl ved parsing af ${indexUrl}:`, err);
+        return null;
       }
+    };
+
+    // Hent i batches af 8 ad gangen for at respektere SEC rate-limits (max 10 req/sekund)
+    const transactions: InsiderTransaction[] = [];
+    const BATCH_SIZE = 8;
+
+    for (let i = 0; i < entriesToProcess.length; i += BATCH_SIZE) {
+      const chunk = entriesToProcess.slice(i, i + BATCH_SIZE);
+      const chunkResults = await Promise.all(chunk.map(parseEntry));
+
+      for (const tx of chunkResults) {
+        if (tx) transactions.push(tx);
+      }
+
+      // Hvis vi har nok gyldige transaktioner, stop batching
+      if (transactions.length >= limit) break;
     }
 
-    // Hvis ingen gyldige transaktioner blev fundet, brug mock data
     if (transactions.length === 0) {
       return getMockTransactions();
     }
@@ -297,6 +408,12 @@ export async function fetchLiveSecForm4s(limit: number = 10): Promise<InsiderTra
         tx.clusterCount = count;
       }
     }
+
+    // Berig transaktioner der består hard filter med live kurs- og nyhedsdata
+    const passingTxs = transactions.filter((tx) => applyHardFilter(tx).passed);
+    const toEnrich = passingTxs.length > 0 ? passingTxs.slice(0, 10) : transactions.slice(0, 3);
+
+    await Promise.all(toEnrich.map((tx) => enrichTransactionWithMarketData(tx)));
 
     return transactions;
   } catch (error) {
