@@ -3,6 +3,47 @@ import { applyHardFilter } from '@/lib/sec-scanner';
 import { GatekeeperResult, InsiderTransaction } from '@/types/insider';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
+let cachedGeminiFlashModel: string | null = null;
+
+/**
+ * Auto-resolver for nyeste tilgængelige Gemini Flash model på nøglen.
+ */
+export async function resolveGeminiFlashModel(ai?: GoogleGenAI): Promise<string> {
+  if (process.env.GEMINI_FAST_MODEL && process.env.GEMINI_FAST_MODEL.trim() !== '') {
+    return process.env.GEMINI_FAST_MODEL.trim();
+  }
+  if (cachedGeminiFlashModel) {
+    return cachedGeminiFlashModel;
+  }
+
+  let chosen = DEFAULT_MODEL;
+
+  if (ai) {
+    try {
+      const list = await ai.models.list();
+      const names: string[] = [];
+      for await (const m of list) {
+        if (m.name) names.push(m.name.replace(/^models\//, ''));
+      }
+      const flashModels = names.filter(
+        (n) => n.includes('flash') && !n.includes('image') && !n.includes('tts')
+      );
+      if (flashModels.length > 0) {
+        const preferred =
+          flashModels.find((n) => n.includes('2.5-flash')) ||
+          flashModels.find((n) => n.includes('3.8-flash')) ||
+          flashModels.find((n) => n.includes('2.0-flash')) ||
+          flashModels[0];
+        chosen = preferred;
+      }
+    } catch {
+      // Brug standard fallback
+    }
+  }
+
+  cachedGeminiFlashModel = chosen;
+  return chosen;
+}
 
 /**
  * Deterministisk heuristisk score til test og fallback når GEMINI_API_KEY ikke er tilgængelig.
@@ -87,7 +128,7 @@ export async function evaluateWithGatekeeper(tx: InsiderTransaction): Promise<Ga
 
   try {
     const ai = new GoogleGenAI({ apiKey });
-    const model = process.env.GEMINI_MODEL || DEFAULT_MODEL;
+    const model = await resolveGeminiFlashModel(ai);
 
     const systemInstruction = `Du er en koldblodig kvantitativ Gatekeeper & Insider Parser for investeringsfonden InsiderOps.
 Din opgave er lynhurtigt at vurdere graden af sandsynlig informationsasymmetri på en skala fra 0-100 baseret på en SEC Form 4 insider-transaktion.

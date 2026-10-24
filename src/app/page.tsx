@@ -5,6 +5,7 @@ import {
   Activity,
   AlertTriangle,
   Bookmark,
+  Brain,
   CheckCircle2,
   ChevronDown,
   Cpu,
@@ -77,6 +78,8 @@ export default function Dashboard() {
   const [activeVerdict, setActiveVerdict] = useState<CouncilVerdict | null>(null);
   const [verdictHistory, setVerdictHistory] = useState<Record<string, SavedVerdictItem>>({});
   const [showContextNotes, setShowContextNotes] = useState<boolean>(true);
+  const [judgeTier, setJudgeTier] = useState<'opus' | 'sonnet'>('opus');
+  const [showThinking, setShowThinking] = useState<boolean>(true);
 
   // Indlæs gemte domme fra localStorage ved opstart
   useEffect(() => {
@@ -141,12 +144,22 @@ export default function Dashboard() {
     fetchScan(source, null);
   };
 
-  const handleConveneCouncil = async (tx: InsiderTransaction) => {
+  const handleConveneCouncil = async (
+    tx: InsiderTransaction,
+    forceRefresh: boolean = false,
+    tierOverride?: 'opus' | 'sonnet'
+  ) => {
     setSelectedTx(tx);
+    const targetTier = tierOverride || judgeTier;
 
-    // Tjek om vi allerede har afsagt dom (0 token-forbrug)
-    if (verdictHistory[tx.id]) {
-      setActiveVerdict(verdictHistory[tx.id].verdict);
+    // Tjek om vi allerede har afsagt dom med den valgte tier (0 token-forbrug)
+    const existing = verdictHistory[tx.id];
+    if (
+      !forceRefresh &&
+      existing &&
+      (!existing.verdict.modelsUsed?.judgeTier || existing.verdict.modelsUsed.judgeTier === targetTier)
+    ) {
+      setActiveVerdict(existing.verdict);
       const chamberEl = document.getElementById('council-chamber');
       if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
       return;
@@ -162,7 +175,7 @@ export default function Dashboard() {
       const res = await fetch('/api/council', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transaction: tx }),
+        body: JSON.stringify({ transaction: tx, judgeTier: targetTier }),
       });
       if (!res.ok) throw new Error('Fejl under rådsmøde');
       const data = await res.json();
@@ -248,7 +261,7 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 text-[11px] font-mono">
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-slate-800">
                 <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-slate-400">GEMINI 2.5 FLASH:</span>
+                <span className="text-slate-400">GEMINI FLASH:</span>
                 <span className={apiKeys.gemini ? 'text-emerald-400' : 'text-amber-400'}>
                   {apiKeys.gemini ? 'API AKTIV' : 'SIMULATION'}
                 </span>
@@ -256,7 +269,7 @@ export default function Dashboard() {
 
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-slate-800">
                 <span className="h-2 w-2 rounded-full bg-cyan-500 animate-pulse" />
-                <span className="text-slate-400">CLAUDE 3.7 SONNET x4:</span>
+                <span className="text-slate-400">CLAUDE SONNET + OPUS:</span>
                 <span className={apiKeys.anthropic ? 'text-cyan-400' : 'text-amber-400'}>
                   {apiKeys.anthropic ? 'API AKTIV' : 'SIMULATION'}
                 </span>
@@ -826,29 +839,78 @@ export default function Dashboard() {
 
         {/* Section: The Council Chamber */}
         <div id="council-chamber" className="mt-8">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-3 mb-4 gap-3">
             <div className="flex items-center gap-2">
               <Scale className="w-5 h-5 text-cyan-400" />
-              <h2 className="font-mono text-base font-bold text-slate-100 tracking-wider">
-                THE COUNCIL CHAMBER
-              </h2>
-              <span className="text-xs text-slate-400 font-mono">
-                [4x Claude 3.7 Sonnet Multi-Agent System]
-              </span>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-mono text-base font-bold text-slate-100 tracking-wider">
+                    THE COUNCIL CHAMBER
+                  </h2>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-950 border border-purple-800 text-purple-300">
+                    TIERED MULTI-MODEL
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 font-mono">
+                  Gemini Flash Gatekeeper • Sonnet Specialister • Opus / Sonnet CIO
+                </p>
+              </div>
             </div>
 
-            {activeVerdict && (
-              <button
-                onClick={() => {
-                  setActiveVerdict(null);
-                  setSelectedTx(null);
-                }}
-                className="text-xs font-mono text-slate-400 hover:text-slate-200 flex items-center gap-1"
-              >
-                <X className="w-3.5 h-3.5" />
-                Luk Chamber
-              </button>
-            )}
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* CIO Judge Tier Selector */}
+              <div className="flex items-center rounded border border-slate-800 bg-slate-900 p-0.5 text-xs font-mono">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setJudgeTier('opus');
+                    if (selectedTx && activeVerdict?.modelsUsed?.judgeTier !== 'opus') {
+                      handleConveneCouncil(selectedTx, true, 'opus');
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded transition-all flex items-center gap-1.5 ${
+                    judgeTier === 'opus'
+                      ? 'bg-purple-950/90 text-purple-200 font-bold border border-purple-600/70 shadow-sm shadow-purple-950'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title="Anbefalet: Claude Opus med 2048 tokens Extended Thinking for maksimal ræsonnering"
+                >
+                  <Brain className="w-3.5 h-3.5 text-purple-400" />
+                  <span>🧠 OPUS CIO (Deep Thinking)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setJudgeTier('sonnet');
+                    if (selectedTx && activeVerdict?.modelsUsed?.judgeTier !== 'sonnet') {
+                      handleConveneCouncil(selectedTx, true, 'sonnet');
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded transition-all flex items-center gap-1.5 ${
+                    judgeTier === 'sonnet'
+                      ? 'bg-cyan-950/90 text-cyan-200 font-bold border border-cyan-600/70 shadow-sm shadow-cyan-950'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title="Claude Sonnet for hurtig, omkostningseffektiv syntese"
+                >
+                  <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>⚡ SONNET CIO (Fast Mode)</span>
+                </button>
+              </div>
+
+              {activeVerdict && (
+                <button
+                  onClick={() => {
+                    setActiveVerdict(null);
+                    setSelectedTx(null);
+                  }}
+                  className="text-xs font-mono text-slate-400 hover:text-slate-200 flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-800"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Luk Chamber
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Loading State for The Council */}
@@ -936,7 +998,67 @@ export default function Dashboard() {
                     {activeVerdict.synthesis}
                   </p>
                 </div>
+
+                {/* Model Badges */}
+                <div className="mt-3 pt-3 border-t border-slate-800/60 flex flex-wrap items-center gap-2 text-[10px] font-mono">
+                  <span className="text-slate-500 uppercase tracking-wider">Aktive Modeller:</span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-300">
+                    Gatekeeper: {activeVerdict.modelsUsed?.gatekeeper || 'gemini-2.5-flash'}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800 text-cyan-300">
+                    Specialister: {activeVerdict.modelsUsed?.specialists || 'claude-3-7-sonnet'} (x3)
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded border ${
+                      activeVerdict.modelsUsed?.judgeTier === 'opus'
+                        ? 'bg-purple-950/80 border-purple-700 text-purple-200 font-semibold'
+                        : 'bg-cyan-950/80 border-cyan-700 text-cyan-200'
+                    }`}
+                  >
+                    CIO Dommer:{' '}
+                    {activeVerdict.modelsUsed?.judge ||
+                      (activeVerdict.modelsUsed?.judgeTier === 'sonnet'
+                        ? 'claude-3-7-sonnet'
+                        : 'claude-3-opus')}{' '}
+                    {activeVerdict.modelsUsed?.judgeTier === 'opus'
+                      ? '[Extended Thinking 2048 tok]'
+                      : '[Fast Mode]'}
+                  </span>
+                </div>
               </div>
+
+              {/* CIO Extended Thinking Trace Fold-Out Panel */}
+              {activeVerdict.judgeThinking && (
+                <div className="rounded bg-slate-950 border border-purple-900/60 overflow-hidden shadow-lg shadow-purple-950/20">
+                  <button
+                    onClick={() => setShowThinking(!showThinking)}
+                    className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-950/60 via-slate-900 to-slate-900 hover:from-purple-950/80 transition-colors flex items-center justify-between text-left font-mono text-xs border-b border-purple-900/40"
+                  >
+                    <div className="flex items-center gap-2 text-purple-300 font-bold tracking-wide">
+                      <Brain className="w-4 h-4 text-purple-400 animate-pulse" />
+                      <span>🧠 CIO EXTENDED THINKING // INTERN RÆSONNERING (RAW COGNITIVE TRACE)</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-purple-300/80 text-[11px]">
+                      <span className="px-1.5 py-0.5 rounded bg-purple-900/50 border border-purple-700/60 text-purple-200">
+                        {activeVerdict.modelsUsed?.judgeTier === 'opus'
+                          ? 'OPUS • 2048 TOKENS BUDGET'
+                          : 'SONNET • FAST REASONING'}
+                      </span>
+                      <span>{showThinking ? 'Skjul tankestrøm' : 'Vis tankestrøm'}</span>
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 transition-transform ${
+                          showThinking ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </div>
+                  </button>
+                  {showThinking && (
+                    <div className="p-4 bg-slate-950 text-[11px] font-mono leading-relaxed text-purple-200/90 whitespace-pre-wrap max-h-80 overflow-y-auto selection:bg-purple-900 selection:text-purple-100 border-t border-purple-950 space-y-1">
+                      {activeVerdict.judgeThinking}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* 3 Specialist Reports Side by Side */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

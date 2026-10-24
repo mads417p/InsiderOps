@@ -2,11 +2,11 @@ import { NextResponse } from 'next/server';
 import { conveneCouncil } from '@/lib/claude-council';
 import { InsiderTransaction } from '@/types/insider';
 
-
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const tx = body.transaction as InsiderTransaction | undefined;
+    const judgeTier = (body.judgeTier === 'sonnet' ? 'sonnet' : 'opus') as 'opus' | 'sonnet';
 
     if (!tx || !tx.ticker || !tx.insiderName) {
       return NextResponse.json(
@@ -15,10 +15,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const verdict = await conveneCouncil(tx);
+    const verdict = await conveneCouncil(tx, judgeTier);
 
     return NextResponse.json({
       success: true,
+      judgeTier,
       verdict,
     });
   } catch (error: unknown) {

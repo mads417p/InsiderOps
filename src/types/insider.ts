@@ -41,6 +41,13 @@ export type CouncilVerdictType =
   | 'MODERATE SIGNAL (OVERVÅG)'
   | 'PR STUNT / STØJ (IGNORER)';
 
+export interface CouncilModelsUsed {
+  gatekeeper: string;
+  specialists: string;
+  judge: string;
+  judgeTier?: 'opus' | 'sonnet';
+}
+
 export interface CouncilVerdict {
   asymmetryScore: number; // 1-100
   verdict: CouncilVerdictType;
@@ -48,4 +55,6 @@ export interface CouncilVerdict {
   synthesis: string;
   reports: CouncilReports;
   timestamp: string;
+  judgeThinking?: string;
+  modelsUsed?: CouncilModelsUsed;
 }

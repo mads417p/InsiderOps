@@ -1,20 +1,96 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { CouncilReports, CouncilVerdict, CouncilVerdictType, InsiderTransaction } from '@/types/insider';
+import {
+  CouncilReports,
+  CouncilVerdict,
+  CouncilVerdictType,
+  InsiderTransaction,
+} from '@/types/insider';
 
-const PRIMARY_MODEL = process.env.CLAUDE_MODEL || 'claude-3-7-sonnet-latest';
-const FALLBACK_MODEL = 'claude-3-5-sonnet-20241022';
+let cachedSpecialistModel: string | null = null;
+let cachedJudgeOpusModel: string | null = null;
+let cachedJudgeSonnetModel: string | null = null;
 
 /**
- * Hjælpefunktion til kald af Claude med automatisk modelfallback.
+ * Dynamisk model-resolver: Finder de nyeste tilgængelige Sonnet og Opus modeller på kontoen.
  */
-async function callClaude(
+export async function resolveAnthropicModels(client?: Anthropic): Promise<{
+  specialistModel: string;
+  judgeOpusModel: string;
+  judgeSonnetModel: string;
+}> {
+  if (
+    process.env.CLAUDE_SPECIALIST_MODEL &&
+    process.env.CLAUDE_JUDGE_MODEL &&
+    process.env.CLAUDE_SPECIALIST_MODEL.trim() !== '' &&
+    process.env.CLAUDE_JUDGE_MODEL.trim() !== ''
+  ) {
+    return {
+      specialistModel: process.env.CLAUDE_SPECIALIST_MODEL.trim(),
+      judgeOpusModel: process.env.CLAUDE_JUDGE_MODEL.trim(),
+      judgeSonnetModel: process.env.CLAUDE_SPECIALIST_MODEL.trim(),
+    };
+  }
+
+  if (cachedSpecialistModel && cachedJudgeOpusModel && cachedJudgeSonnetModel) {
+    return {
+      specialistModel: cachedSpecialistModel,
+      judgeOpusModel: cachedJudgeOpusModel,
+      judgeSonnetModel: cachedJudgeSonnetModel,
+    };
+  }
+
+  let specialist = process.env.CLAUDE_SPECIALIST_MODEL || 'claude-3-7-sonnet-latest';
+  let opus = process.env.CLAUDE_JUDGE_MODEL || 'claude-3-opus-latest';
+  let sonnet = specialist;
+
+  if (client) {
+    try {
+      const list = await client.models.list({ limit: 50 });
+      const modelIds = list.data.map((m) => m.id);
+
+      const sonnetMatches = modelIds.filter((id) => id.includes('sonnet'));
+      if (sonnetMatches.length > 0) {
+        const preferredSonnet =
+          sonnetMatches.find((id) => id.includes('3-7') || id.includes('latest')) ||
+          sonnetMatches[0];
+        specialist = preferredSonnet;
+        sonnet = preferredSonnet;
+      }
+
+      const opusMatches = modelIds.filter((id) => id.includes('opus'));
+      if (opusMatches.length > 0) {
+        opus = opusMatches.find((id) => id.includes('latest')) || opusMatches[0];
+      } else {
+        opus = sonnet;
+      }
+    } catch (err) {
+      console.warn('Kunne ikke hente modeller fra Anthropic API, bruger standard-modeller:', err);
+    }
+  }
+
+  cachedSpecialistModel = specialist;
+  cachedJudgeOpusModel = opus;
+  cachedJudgeSonnetModel = sonnet;
+
+  return {
+    specialistModel: specialist,
+    judgeOpusModel: opus,
+    judgeSonnetModel: sonnet,
+  };
+}
+
+/**
+ * Hjælpefunktion til standard Claude-kald (bruges af specialist-agenterne).
+ */
+async function callClaudeSpecialist(
   client: Anthropic,
+  model: string,
   systemPrompt: string,
   userPrompt: string
 ): Promise<string> {
   try {
     const response = await client.messages.create({
-      model: PRIMARY_MODEL,
+      model,
       max_tokens: 1024,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
@@ -25,9 +101,9 @@ async function callClaude(
       .map((block) => (block as { type: 'text'; text: string }).text)
       .join('\n');
   } catch (error: unknown) {
-    console.warn(`Primær model ${PRIMARY_MODEL} afvist eller fejlede, skifter til ${FALLBACK_MODEL}:`, error);
+    console.warn(`Model ${model} fejlede for specialist, prøver fallback model:`, error);
     const fallbackResponse = await client.messages.create({
-      model: FALLBACK_MODEL,
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
@@ -41,9 +117,71 @@ async function callClaude(
 }
 
 /**
+ * Kald til The Judge med Extended Thinking (budget: 2048 tokens, max_tokens: 3500).
+ * Falder automatisk tilbage til standardkald hvis modellen eller kontoen ikke understøtter thinking.
+ */
+async function callClaudeJudgeWithThinking(
+  client: Anthropic,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string
+): Promise<{ text: string; thinking?: string }> {
+  try {
+    const response = await client.messages.create({
+      model,
+      max_tokens: 3500,
+      thinking: {
+        type: 'enabled',
+        budget_tokens: 2048,
+      },
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    });
+
+    let thinkingText = '';
+    let responseText = '';
+
+    for (const block of response.content) {
+      if (block.type === 'thinking') {
+        thinkingText += (block as { type: 'thinking'; thinking: string }).thinking;
+      } else if (block.type === 'text') {
+        responseText += (block as { type: 'text'; text: string }).text;
+      }
+    }
+
+    return {
+      text: responseText,
+      thinking: thinkingText.trim() || undefined,
+    };
+  } catch (thinkingError: unknown) {
+    console.warn(
+      `Extended Thinking ikke understøttet på ${model}, falder tilbage til standardkald:`,
+      thinkingError
+    );
+
+    const fallbackResponse = await client.messages.create({
+      model,
+      max_tokens: 1500,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    });
+
+    const responseText = fallbackResponse.content
+      .filter((b) => b.type === 'text')
+      .map((b) => (b as { type: 'text'; text: string }).text)
+      .join('\n');
+
+    return { text: responseText };
+  }
+}
+
+/**
  * Genererer en hyper-realistisk simuleret rådsanalyse når ANTHROPIC_API_KEY mangler.
  */
-function generateSimulatedCouncil(tx: InsiderTransaction): CouncilVerdict {
+function generateSimulatedCouncil(
+  tx: InsiderTransaction,
+  judgeTier: 'opus' | 'sonnet' = 'opus'
+): CouncilVerdict {
   const isCFOorGC = /cfo|chief financial|general counsel|chief legal/i.test(tx.insiderTitle);
   const isCosmetic = tx.holdingsIncreasePct < 2.0;
   const isCluster = tx.isClusterBuy;
@@ -55,6 +193,7 @@ function generateSimulatedCouncil(tx: InsiderTransaction): CouncilVerdict {
   let verdict: CouncilVerdictType = 'MODERATE SIGNAL (OVERVÅG)';
   let headline = `[SIMULERET RÅD - Mangler API-nøgle] Analyse af ${tx.insiderTitle} køb i ${tx.ticker}`;
   let synthesis = '';
+  let judgeThinking = '';
 
   if (isCosmetic) {
     asymmetryScore = 24;
@@ -72,6 +211,25 @@ function generateSimulatedCouncil(tx: InsiderTransaction): CouncilVerdict {
     synthesis = `The Council forkaster enstemmigt transaktionen som et kosmetisk PR-stunt. Investeringen på $${Math.round(
       tx.totalValueUsd
     ).toLocaleString()} repræsenterer ingen personlig finansiel risiko for ${tx.insiderName}. Anbefaling: Ignorer signalet fuldstændigt.`;
+
+    judgeThinking = `[Trin 1: Indledende analyse af transaktionsstruktur]
+- Selskab: ${tx.ticker} (${tx.companyName}).
+- Insider: ${tx.insiderName}, Titel: ${tx.insiderTitle}.
+- Nominelt handelsbeløb: $${Math.round(tx.totalValueUsd).toLocaleString()} USD.
+- Beregnet stigning i eksisterende beholdning: +${tx.holdingsIncreasePct}%.
+
+[Trin 2: Krydsforhør af Profiler vs Skeptic]
+- The Insider Profiler noterer, at insiderens samlede formue i selskabet er mangefold større end det aktuelle køb.
+- The Forensic Skeptic leverer et afgørende modargument: Købet udgør under 1% af den samlede position, hvilket er en velkendt PR-taktik i selskaber under pres for at bremse detailinvestorers paniksalg.
+- Dommer-overvejelse: Ville jeg satse fondens kapital på et signal, hvor insideren selv kun risikerer 0.36% af sin portefølje? Svaret er et utvetydigt nej.
+
+[Trin 3: Katalysator & Timing]
+- The Catalyst Hunter kan ikke påvise nogen reel driftsmæssig forbedring eller regnskabsmæssig positiv overraskelse.
+- Kursen er nede med ${Math.abs(tx.recentPriceChange30dPct ?? 45)}%, og markedet har sandsynligvis ret i sin skepsis.
+
+[Trin 4: Endelig scoring og afgørelse]
+- Asymmetry Score fastsættes til 24/100 (Støj / PR Stunt).
+- Dom: PR STUNT / STØJ (IGNORER).`;
   } else if (isCFOorGC || (isCluster && tx.holdingsIncreasePct > 20)) {
     asymmetryScore = 92;
     verdict = 'STRONG ASYMMETRY (KØB)';
@@ -84,6 +242,25 @@ function generateSimulatedCouncil(tx: InsiderTransaction): CouncilVerdict {
     )}% slår ${tx.isClusterBuy ? 'flere nøglepersoner til i et koordineret cluster-køb' : 'ledelsen til'}. Det indikerer, at markedets seneste bekymringer er stærkt overgjorte, og at en markant positiv korrektion er under opsejling forud for næste rapportering.`;
     skepticReport = `Selvom selskabet har oplevet modvind, kan selv djævelens advokat ikke overse den ekstreme personlige eksponering. Risikoen er begrænset til makroøkonomisk støj; den selskabsspecifikke asymmetri er markant i købernes favør.`;
     synthesis = `The Council vurderer enstemmigt dette som et førsteklasses asymmetrisk købssignal. Kombinationen af høj ledelsesposition, massiv stigning i personlig beholdning (+${tx.holdingsIncreasePct}%) og cluster-adfærd gør risikoforholdet exceptionelt attraktivt.`;
+
+    judgeThinking = `[Trin 1: Indledende analyse af transaktionsstruktur]
+- Selskab: ${tx.ticker} (${tx.companyName}).
+- Insider: ${tx.insiderName}, Titel: ${tx.insiderTitle}.
+- Handelsværdi: $${Math.round(tx.totalValueUsd).toLocaleString()} USD med egne beskattede midler.
+- Beholdningsforøgelse: +${tx.holdingsIncreasePct}% (ekstremt højt 'skin-in-the-game').
+- Cluster: ${tx.isClusterBuy ? `Ja (${tx.clusterCount ?? 2} ledere har købt)` : 'Nej'}.
+
+[Trin 2: Vurdering af Profiler vs Skeptic]
+- The Profiler har en stærk pointe: CFO/General Counsel kender kassebeholdningen, gældsforpligtelser og potentielle tvister ned til mindste detalje. De begår ikke formue-selvmord på åbent marked.
+- The Forensic Skeptic advarer mod markedsmodvind og kursfaldet på ${Math.abs(tx.recentPriceChange30dPct ?? 28)}%.
+- Dommer-overvejelse: Netop kombinationen af et overgjort kursfald og et aggressivt +${tx.holdingsIncreasePct}% indkøb fra selskabets øverste finansansvarlige er selve definitionen på ægte informationsasymmetri. Skepticens advarsel er relevant, men den personlige risiko for insideren bekræfter, at markedets frygt er overdrevet.
+
+[Trin 3: Katalysator-syntese]
+- Cluster-timing tyder på koordineret intern tillid forud for kommende milepæle.
+
+[Trin 4: Endelig scoring og afgørelse]
+- Asymmetry Score: 92/100.
+- Dom: STRONG ASYMMETRY (KØB).`;
   } else {
     asymmetryScore = 78;
     verdict = 'STRONG ASYMMETRY (KØB)';
@@ -94,6 +271,14 @@ function generateSimulatedCouncil(tx: InsiderTransaction): CouncilVerdict {
     catalystReport = `Købet sker i en stabil fase og kan indikere intern viden om en stærkere pipeline eller stærkere kvartalstal end konsensus forventer.`;
     skepticReport = `Der er altid en risiko for, at ledelsen overvurderer det kortsigtede markedsmomentum, men transaktionsstørrelsen gør det usandsynligt, at det er rent pynt.`;
     synthesis = `Et solidt insider-køb med god risiko/afkast-profil. Signifikant forøgelse af egen beholdning uden tegn på PR-motivation.`;
+
+    judgeThinking = `[Trin 1: Transaktionsgennemgang]
+- Beløb: $${Math.round(tx.totalValueUsd).toLocaleString()} USD, forøgelse: +${tx.holdingsIncreasePct}%.
+- Vurderer forholdet mellem personlig likviditet og selskabsstabilitet.
+
+[Trin 2: Afvejning af specialisternes argumenter]
+- Profiler bekræfter solidt engagement. Skeptic finder ingen åbenlyse røde flag, men noterer mangel på massiv cluster-støtte.
+- Afgørelse: Godkendt som stærkt asymmetrisk køb med score 78.`;
   }
 
   return {
@@ -107,21 +292,35 @@ function generateSimulatedCouncil(tx: InsiderTransaction): CouncilVerdict {
       skeptic: skepticReport,
     },
     timestamp: new Date().toISOString(),
+    judgeThinking,
+    modelsUsed: {
+      gatekeeper: 'Gemini 2.5 Flash',
+      specialists: 'Claude 3.7 Sonnet (3x Parallel)',
+      judge:
+        judgeTier === 'opus'
+          ? 'Claude 3 Opus (Extended Thinking 2048t)'
+          : 'Claude 3.7 Sonnet (Fast Mode)',
+      judgeTier,
+    },
   };
 }
 
 /**
- * Samler "The Council" (3 parallelle specialist-agenter efterfulgt af The Judge) for en insider-transaktion.
+ * Samler "The Council" (3 parallelle specialist-agenter efterfulgt af The Judge med Extended Thinking).
  */
-export async function conveneCouncil(tx: InsiderTransaction): Promise<CouncilVerdict> {
+export async function conveneCouncil(
+  tx: InsiderTransaction,
+  judgeTier: 'opus' | 'sonnet' = 'opus'
+): Promise<CouncilVerdict> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
   // Fallback til simuleret råd hvis API-nøgle ikke er angivet
   if (!apiKey || apiKey.trim() === '' || apiKey.includes('your-') || apiKey === 'placeholder') {
-    return generateSimulatedCouncil(tx);
+    return generateSimulatedCouncil(tx, judgeTier);
   }
 
   const client = new Anthropic({ apiKey });
+  const models = await resolveAnthropicModels(client);
 
   const txDetails = `
 TICKER: ${tx.ticker} (${tx.companyName})
@@ -138,29 +337,29 @@ SEC FILING URL: ${tx.secFilingUrl}
 KONTEKST / NOTER: ${tx.contextNotes || 'Ingen yderligere noter'}
   `.trim();
 
-  // Specialist 1: The Insider Profiler
+  // Specialist 1: The Insider Profiler (Sonnet)
   const profilerSystem = `Du er "The Insider Profiler" i investeringsrådet The Council.
 Din rolle er at dissekere personen og deres reelle motivation. Analyser rollen (CFO/General Counsel kender tallene/juraen; CEO har ofte PR-incitamenter) og conviction (holdingsIncreasePct og absolut dollarværdi).
 Er dette et ægte "skin-in-the-game" træk med egne sparepenge eller blot kosmetisk signalværdi?
 SKRIV PÅ DANSK. Maksimalt 140 ord. Skarp, direkte tone uden høflighedsfraser.`;
 
-  // Specialist 2: The Catalyst & Asymmetry Hunter
+  // Specialist 2: The Catalyst & Asymmetry Hunter (Sonnet)
   const catalystSystem = `Du er "The Catalyst & Asymmetry Hunter" i investeringsrådet The Council.
 Din rolle er at analysere det grå felt mellem lovlig insider-akkumulering og endnu ikke-offentliggjort positiv information.
 Hvorfor køber de NETOP NU? Er det overreaktion på et kursfald, accelererende ordrebog forud for regnskab, opkøbsrygter eller koordineret cluster-timing?
 SKRIV PÅ DANSK. Maksimalt 140 ord. Skarp, analytisk tone.`;
 
-  // Specialist 3: The Forensic Skeptic (Djævelens Advokat)
+  // Specialist 3: The Forensic Skeptic (Sonnet)
   const skepticSystem = `Du er "The Forensic Skeptic" (Djævelens Advokat) i investeringsrådet The Council.
 Dit eneste mål er at DRÆBE købs-tesen og beskytte fondens kapital. Find alle svagheder: Er det et PR-stunt, en "faldende kniv" / value trap, likviditetsproblemer, eller forsøg på at skabe falsk tryghed før dårlige nyheder?
 SKRIV PÅ DANSK. Maksimalt 140 ord. Nådesløs og kritisk.`;
 
   try {
-    // Kør de 3 specialist-agenter 100% parallelt via Promise.all
+    // Kør de 3 specialist-agenter 100% parallelt via Promise.all med Sonnet
     const [profilerReport, catalystReport, skepticReport] = await Promise.all([
-      callClaude(client, profilerSystem, `Analyser følgende transaktion:\n\n${txDetails}`),
-      callClaude(client, catalystSystem, `Analyser katalysator og asymmetri for følgende transaktion:\n\n${txDetails}`),
-      callClaude(client, skepticSystem, `Kritiser og find svaghederne ved følgende transaktion:\n\n${txDetails}`),
+      callClaudeSpecialist(client, models.specialistModel, profilerSystem, `Analyser følgende transaktion:\n\n${txDetails}`),
+      callClaudeSpecialist(client, models.specialistModel, catalystSystem, `Analyser katalysator og asymmetri for følgende transaktion:\n\n${txDetails}`),
+      callClaudeSpecialist(client, models.specialistModel, skepticSystem, `Kritiser og find svaghederne ved følgende transaktion:\n\n${txDetails}`),
     ]);
 
     const reports: CouncilReports = {
@@ -169,10 +368,12 @@ SKRIV PÅ DANSK. Maksimalt 140 ord. Nådesløs og kritisk.`;
       skeptic: skepticReport.trim(),
     };
 
-    // 4. Dommer-agenten: The Judge (Chief Investment Officer)
+    // 4. Dommer-agenten: The Judge / CIO (Opus eller Sonnet med Extended Thinking)
+    const judgeModel = judgeTier === 'opus' ? models.judgeOpusModel : models.judgeSonnetModel;
+
     const judgeSystem = `Du er "The Judge" (Chief Investment Officer) for investeringsrådet The Council.
 Du har modtaget 3 uafhængige rapporter fra dine specialister (Profiler, Catalyst, Skeptic) om en insider-transaktion.
-Din opgave er at fælde den endelige, autoritative dom.
+Din opgave er at fælde den endelige, autoritative dom baseret på en dyb, analytisk afvejning af argumenterne.
 
 Du SKAL returnere et JSON-objekt med præcis denne struktur:
 {
@@ -185,7 +386,7 @@ Du SKAL returnere et JSON-objekt med præcis denne struktur:
 Regler for dommen:
 - Hvis CFO/General Counsel køber markant (+15% beholdning) og/eller cluster-køb: Typisk score 80-98 og STRONG ASYMMETRY.
 - Hvis CEO/insider køber for småpenge i forhold til formue (<2% stigning i beholdning): Typisk score <35 og PR STUNT / STØJ.
-- Returner KUN ren JSON.`;
+- Returner KUN ren JSON i dit afsluttende svar.`;
 
     const judgePrompt = `Her er data for transaktionen:
 ${txDetails}
@@ -202,11 +403,16 @@ ${reports.catalyst}
 ${reports.skeptic}
 ---
 
-Fæld din endelige dom og returner KUN det specificerede JSON-objekt.`;
+Gennemfør en grundig intern ræsonnering og afsig din endelige CIO-dom som JSON.`;
 
-    const judgeRawResponse = await callClaude(client, judgeSystem, judgePrompt);
+    // Kald The Judge med Extended Thinking
+    const judgeCallResult = await callClaudeJudgeWithThinking(
+      client,
+      judgeModel,
+      judgeSystem,
+      judgePrompt
+    );
 
-    // Parse JSON fra dommeren med robust regex-fallback
     let parsedJudge: {
       asymmetryScore: number;
       verdict: CouncilVerdictType;
@@ -215,7 +421,7 @@ Fæld din endelige dom og returner KUN det specificerede JSON-objekt.`;
     };
 
     try {
-      const jsonMatch = judgeRawResponse.match(/\{[\s\S]*\}/);
+      const jsonMatch = judgeCallResult.text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         throw new Error('Intet JSON-format fundet i dommerens svar');
       }
@@ -226,7 +432,7 @@ Fæld din endelige dom og returner KUN det specificerede JSON-objekt.`;
         asymmetryScore: 70,
         verdict: 'MODERATE SIGNAL (OVERVÅG)',
         headline: `Rådsdom for ${tx.ticker}: ${tx.insiderTitle} køb`,
-        synthesis: judgeRawResponse,
+        synthesis: judgeCallResult.text,
       };
     }
 
@@ -237,9 +443,16 @@ Fæld din endelige dom og returner KUN det specificerede JSON-objekt.`;
       synthesis: parsedJudge.synthesis,
       reports,
       timestamp: new Date().toISOString(),
+      judgeThinking: judgeCallResult.thinking,
+      modelsUsed: {
+        gatekeeper: 'Gemini 2.5 Flash',
+        specialists: models.specialistModel,
+        judge: `${judgeModel}${judgeCallResult.thinking ? ' (Extended Thinking)' : ''}`,
+        judgeTier,
+      },
     };
   } catch (councilError) {
     console.warn('Fejl under kørsel af The Council via Claude API, skifter til simuleret råd:', councilError);
-    return generateSimulatedCouncil(tx);
+    return generateSimulatedCouncil(tx, judgeTier);
   }
 }
