@@ -2,7 +2,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { applyHardFilter } from '@/lib/sec-scanner';
 import { GatekeeperResult, InsiderTransaction } from '@/types/insider';
 
-const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_MODEL = 'gemini-3-flash-preview';
 let cachedGeminiFlashModel: string | null = null;
 
 /**
@@ -30,9 +30,10 @@ export async function resolveGeminiFlashModel(ai?: GoogleGenAI): Promise<string>
       );
       if (flashModels.length > 0) {
         const preferred =
-          flashModels.find((n) => n.includes('2.5-flash')) ||
+          flashModels.find((n) => n === 'gemini-3-flash-preview') ||
           flashModels.find((n) => n.includes('3.8-flash')) ||
-          flashModels.find((n) => n.includes('2.0-flash')) ||
+          flashModels.find((n) => n.includes('3.5-flash')) ||
+          flashModels.find((n) => n.includes('2.5-flash')) ||
           flashModels[0];
         chosen = preferred;
       }
@@ -204,17 +205,150 @@ Kontekst / Noter: ${tx.contextNotes || 'Ingen yderligere noter'}`;
 }
 
 /**
- * Evaluerer en hel liste af transaktioner parallelt via Gemini Gatekeeper.
+ * Evaluerer en hel liste af transaktioner med Gemini Gatekeeper.
+ * OPTIMERET TIL GEMINI FREE TIER:
+ * 1. Hard Filter afviser støj lokalt (0 requests, 0 tokens).
+ * 2. Alle godkendte handler samles i ÉT enkelt struktureret batch-kald til Gemini (kun 1 API-request pr. scan!).
+ * 3. Automatisk fallback til heuristisk vurdering ved eventuel netværksfejl eller HTTP 429.
  */
 export async function evaluateBatchWithGatekeeper(
   transactions: InsiderTransaction[]
 ): Promise<Array<{ transaction: InsiderTransaction; result: GatekeeperResult }>> {
-  const evaluations = await Promise.all(
-    transactions.map(async (tx) => {
-      const result = await evaluateWithGatekeeper(tx);
-      return { transaction: tx, result };
-    })
-  );
+  if (transactions.length === 0) return [];
 
-  return evaluations;
+  // 1. Filtrer først alle transaktioner med det lokale Hard Filter
+  const initialResults = transactions.map((tx) => {
+    const hardFilter = applyHardFilter(tx);
+    return { tx, hardFilter };
+  });
+
+  const rejectedItems = initialResults.filter((item) => !item.hardFilter.passed);
+  const candidatesToScore = initialResults.filter((item) => item.hardFilter.passed);
+
+  const resultMap = new Map<string, GatekeeperResult>();
+
+  // Gem afviste resultater med det samme (koster 0 kald)
+  for (const { tx, hardFilter } of rejectedItems) {
+    resultMap.set(tx.id, {
+      passedHardFilter: false,
+      hardFilterReason: hardFilter.reason,
+      geminiPreScore: 0,
+      asymmetrySignal: 'NOISE',
+      quickReasoning: hardFilter.reason || 'Afvist af det regelbaserede hard filter.',
+    });
+  }
+
+  // Hvis ingen transaktioner bestod Hard Filter, returnér straks
+  if (candidatesToScore.length === 0) {
+    return transactions.map((tx) => ({
+      transaction: tx,
+      result: resultMap.get(tx.id)!,
+    }));
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  // Hvis ingen API-nøgle er sat, brug heuristik for kandidaterne
+  if (!apiKey || apiKey.trim() === '' || apiKey.includes('your-')) {
+    for (const { tx } of candidatesToScore) {
+      resultMap.set(tx.id, evaluateHeuristicGatekeeper(tx));
+    }
+    return transactions.map((tx) => ({
+      transaction: tx,
+      result: resultMap.get(tx.id)!,
+    }));
+  }
+
+  // 2. Kør ÉT samlet batch-kald for alle godkendte transaktioner
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const model = await resolveGeminiFlashModel(ai);
+
+    const batchPayload = candidatesToScore.map(({ tx }) => ({
+      id: tx.id,
+      ticker: tx.ticker,
+      companyName: tx.companyName,
+      insiderName: tx.insiderName,
+      insiderTitle: tx.insiderTitle,
+      shares: tx.shares,
+      pricePerShare: tx.pricePerShare,
+      totalValueUsd: Math.round(tx.totalValueUsd),
+      holdingsIncreasePct: tx.holdingsIncreasePct,
+      isClusterBuy: tx.isClusterBuy,
+      clusterCount: tx.clusterCount ?? 1,
+      recentPriceChange30dPct: tx.recentPriceChange30dPct,
+      contextNotes: tx.contextNotes || '',
+    }));
+
+    const response = await ai.models.generateContent({
+      model,
+      contents: `Du er InsiderOps Gatekeeper. Evaluer hver af følgende ${batchPayload.length} godkendte insider-transaktioner:
+${JSON.stringify(batchPayload, null, 2)}`,
+      config: {
+        systemInstruction: `Du er Gatekeeper for en kvantitativ investeringsfond. Vurder graden af sandsynlig informationsasymmetri på en skala fra 0-100 for hver transaktion.
+Vægt CFO og General Counsel køb ekstremt højt.
+Vægt høj holdingsIncreasePct (>15%) og isClusterBuy højt.
+Straffe "Cosmetic/PR buys" (hvor en direktør køber for et beløb der øger beholdningen med <2%).
+Kategoriser asymmetrySignal som 'HIGH' (score >= 75), 'MEDIUM' (50-74), 'LOW' (25-49), eller 'NOISE' (< 25).
+Returner en præcis JSON-array med et element for hver transaktion med id, geminiPreScore, asymmetrySignal og 1-2 knivskarpe sætninger på dansk i quickReasoning.`,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              id: { type: Type.STRING },
+              geminiPreScore: { type: Type.INTEGER },
+              asymmetrySignal: {
+                type: Type.STRING,
+                enum: ['HIGH', 'MEDIUM', 'LOW', 'NOISE'],
+              },
+              quickReasoning: { type: Type.STRING },
+            },
+            required: ['id', 'geminiPreScore', 'asymmetrySignal', 'quickReasoning'],
+          },
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text || '[]') as Array<{
+      id: string;
+      geminiPreScore: number;
+      asymmetrySignal: GatekeeperResult['asymmetrySignal'];
+      quickReasoning: string;
+    }>;
+
+    for (const item of parsed) {
+      if (item.id) {
+        resultMap.set(item.id, {
+          passedHardFilter: true,
+          geminiPreScore: Math.round(item.geminiPreScore),
+          asymmetrySignal: item.asymmetrySignal,
+          quickReasoning: item.quickReasoning,
+        });
+      }
+    }
+
+    // Udfyld eventuelle manglende med heuristik som sikkerhedsnet
+    for (const { tx } of candidatesToScore) {
+      if (!resultMap.has(tx.id)) {
+        resultMap.set(tx.id, evaluateHeuristicGatekeeper(tx));
+      }
+    }
+  } catch (batchErr) {
+    console.warn(
+      'Gemini batch evaluering fejlede (f.eks. rate-limit eller timeout), falder tilbage til heuristik:',
+      batchErr
+    );
+    for (const { tx } of candidatesToScore) {
+      if (!resultMap.has(tx.id)) {
+        resultMap.set(tx.id, evaluateHeuristicGatekeeper(tx));
+      }
+    }
+  }
+
+  return transactions.map((tx) => ({
+    transaction: tx,
+    result: resultMap.get(tx.id) || evaluateHeuristicGatekeeper(tx),
+  }));
 }

@@ -39,8 +39,8 @@ export async function resolveAnthropicModels(client?: Anthropic): Promise<{
     };
   }
 
-  let specialist = process.env.CLAUDE_SPECIALIST_MODEL || 'claude-3-7-sonnet-latest';
-  let opus = process.env.CLAUDE_JUDGE_MODEL || 'claude-3-opus-latest';
+  let specialist = process.env.CLAUDE_SPECIALIST_MODEL || 'claude-3-7-sonnet-20250219';
+  let opus = process.env.CLAUDE_JUDGE_MODEL || 'claude-3-opus-20240229';
   let sonnet = specialist;
 
   if (client) {
