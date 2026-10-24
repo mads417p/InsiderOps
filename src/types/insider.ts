@@ -1,0 +1,51 @@
+export type TransactionCode = 'P' | 'S' | 'A' | 'M';
+
+export interface InsiderTransaction {
+  id: string;
+  filingDate: string;
+  ticker: string;
+  companyName: string;
+  insiderName: string;
+  insiderTitle: string; // f.eks. "CFO", "CEO", "General Counsel", "Director", "10% Owner"
+  transactionCode: TransactionCode;
+  shares: number;
+  pricePerShare: number;
+  totalValueUsd: number;
+  sharesOwnedFollowing: number;
+  holdingsIncreasePct: number; // beregnet % stigning i insiderens samlede beholdning
+  isClusterBuy: boolean; // om flere insidere har købt inden for 10 dage
+  clusterCount?: number;
+  recentPriceChange30dPct?: number; // kursændring seneste 30 dage op til købet
+  secFilingUrl: string;
+  contextNotes?: string;
+}
+
+export type AsymmetrySignal = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';
+
+export interface GatekeeperResult {
+  passedHardFilter: boolean;
+  hardFilterReason?: string;
+  geminiPreScore: number; // 0-100
+  asymmetrySignal: AsymmetrySignal;
+  quickReasoning: string;
+}
+
+export interface CouncilReports {
+  profiler: string;
+  catalyst: string;
+  skeptic: string;
+}
+
+export type CouncilVerdictType =
+  | 'STRONG ASYMMETRY (KØB)'
+  | 'MODERATE SIGNAL (OVERVÅG)'
+  | 'PR STUNT / STØJ (IGNORER)';
+
+export interface CouncilVerdict {
+  asymmetryScore: number; // 1-100
+  verdict: CouncilVerdictType;
+  headline: string;
+  synthesis: string;
+  reports: CouncilReports;
+  timestamp: string;
+}

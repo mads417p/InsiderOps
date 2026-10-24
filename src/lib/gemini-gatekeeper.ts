@@ -1,0 +1,179 @@
+import { GoogleGenAI, Type } from '@google/genai';
+import { applyHardFilter } from '@/lib/sec-scanner';
+import { GatekeeperResult, InsiderTransaction } from '@/types/insider';
+
+const DEFAULT_MODEL = 'gemini-2.5-flash';
+
+/**
+ * Deterministisk heuristisk score til test og fallback når GEMINI_API_KEY ikke er tilgængelig.
+ */
+function evaluateHeuristicGatekeeper(tx: InsiderTransaction): GatekeeperResult {
+  const isCFOorGC = /cfo|chief financial|general counsel|chief legal|jurist/i.test(tx.insiderTitle);
+  const isCosmetic = tx.holdingsIncreasePct < 2.0;
+  const isStrongIncrease = tx.holdingsIncreasePct >= 15.0;
+  const isCluster = tx.isClusterBuy;
+  const isLargeValue = tx.totalValueUsd >= 250000;
+  const hadPriceDrop = (tx.recentPriceChange30dPct ?? 0) <= -15.0;
+
+  // Håndter kosmetiske PR-køb
+  if (isCosmetic) {
+    return {
+      passedHardFilter: true,
+      geminiPreScore: 24,
+      asymmetrySignal: 'LOW',
+      quickReasoning: `Kosmetisk PR-køb: Selvom beløbet er $${Math.round(tx.totalValueUsd).toLocaleString()}, forøges insiderens samlede beholdning kun med ${tx.holdingsIncreasePct}%, hvilket tyder på symbolsk signalværdi frem for reel asymmetri.`,
+    };
+  }
+
+  let score = 50;
+
+  if (isCFOorGC) score += 20;
+  if (isStrongIncrease) score += 15;
+  if (isCluster) score += 15;
+  if (hadPriceDrop) score += 10;
+  if (isLargeValue) score += 5;
+
+  score = Math.min(Math.max(score, 10), 98);
+
+  let asymmetrySignal: GatekeeperResult['asymmetrySignal'] = 'LOW';
+  if (score >= 75) asymmetrySignal = 'HIGH';
+  else if (score >= 50) asymmetrySignal = 'MEDIUM';
+  else if (score >= 25) asymmetrySignal = 'LOW';
+  else asymmetrySignal = 'NOISE';
+
+  let quickReasoning = '';
+  if (asymmetrySignal === 'HIGH') {
+    if (isCluster && isCFOorGC) {
+      quickReasoning = `Ekstrem asymmetri: ${tx.insiderTitle} deltager i et koordineret cluster-køb efter kursfald og øger sin position med ${tx.holdingsIncreasePct}%.`;
+    } else {
+      quickReasoning = `Stærkt asymmetrisk signal: ${tx.insiderTitle} allokerer betydelige egne midler og øger beholdningen med ${tx.holdingsIncreasePct}%.`;
+    }
+  } else if (asymmetrySignal === 'MEDIUM') {
+    quickReasoning = `Moderat signal: ${tx.insiderTitle} køber for $${Math.round(tx.totalValueUsd).toLocaleString()} (+${tx.holdingsIncreasePct}% beholdning), hvilket indikerer tiltro til værdiansættelsen.`;
+  } else {
+    quickReasoning = `Begrænset signal: Købet repræsenterer moderat overbevisning uden stærke cluster- eller rollerelaterede katalysatorer.`;
+  }
+
+  return {
+    passedHardFilter: true,
+    geminiPreScore: score,
+    asymmetrySignal,
+    quickReasoning,
+  };
+}
+
+/**
+ * Evaluerer en insider-transaktion via Gemini Gatekeeper / Parser.
+ * Kører først 0-token Hard Filter. Falder tilbage til heuristik hvis API-nøgle mangler.
+ */
+export async function evaluateWithGatekeeper(tx: InsiderTransaction): Promise<GatekeeperResult> {
+  // 1. Kør Hard Filter (koster 0 tokens)
+  const hardFilter = applyHardFilter(tx);
+  if (!hardFilter.passed) {
+    return {
+      passedHardFilter: false,
+      hardFilterReason: hardFilter.reason,
+      geminiPreScore: 0,
+      asymmetrySignal: 'NOISE',
+      quickReasoning: hardFilter.reason || 'Afvist af det regelbaserede hard filter.',
+    };
+  }
+
+  // 2. Tjek om Gemini API-nøgle er tilgængelig
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey.trim() === '' || apiKey.includes('your-')) {
+    return evaluateHeuristicGatekeeper(tx);
+  }
+
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const model = process.env.GEMINI_MODEL || DEFAULT_MODEL;
+
+    const systemInstruction = `Du er en koldblodig kvantitativ Gatekeeper & Insider Parser for investeringsfonden InsiderOps.
+Din opgave er lynhurtigt at vurdere graden af sandsynlig informationsasymmetri på en skala fra 0-100 baseret på en SEC Form 4 insider-transaktion.
+
+Regler for scoring:
+1. CFO (Finansdirektør) og General Counsel (Chefjurist) kender virksomhedens likviditet, retssager og regnskabstal bedre end nogen andre: Vægt deres køb EKSTREMT højt (+20-30 point).
+2. Stor forøgelse af beholdning (holdingsIncreasePct > 15%) viser reel "skin-in-the-game" overbevisning: Vægt højt.
+3. Cluster-køb (isClusterBuy = true, flere insidere køber inden for 10 dage): Vægt meget højt.
+4. Straffe "Cosmetic / PR buys" hårdt med en lav score (<35): Hvis en direktør (f.eks. CEO) køber for et pænt beløb over $50k, men det kun øger deres beholdning med < 2%, er det et PR-stunt designet til at narre detailinvestorer.
+5. quickReasoning SKAL være 1-2 knivskarpe sætninger på præcist dansk.`;
+
+    const prompt = `Evaluer følgende insider-transaktion for informationsasymmetri:
+Ticker: ${tx.ticker} (${tx.companyName})
+Insider: ${tx.insiderName}
+Titel: ${tx.insiderTitle}
+Transaktion: Kode ${tx.transactionCode} (${tx.shares.toLocaleString()} aktier a $${tx.pricePerShare})
+Samlet værdi: $${Math.round(tx.totalValueUsd).toLocaleString()} USD
+Holdings efter køb: ${tx.sharesOwnedFollowing.toLocaleString()} aktier
+Forøgelse af egen beholdning: +${tx.holdingsIncreasePct}%
+Cluster-køb: ${tx.isClusterBuy ? `Ja (${tx.clusterCount ?? 2} insidere)` : 'Nej'}
+Kursændring seneste 30 dage: ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'Ukendt'}
+Kontekst / Noter: ${tx.contextNotes || 'Ingen yderligere noter'}`;
+
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+      config: {
+        systemInstruction,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            geminiPreScore: {
+              type: Type.NUMBER,
+              description: 'Vurdering af informationsasymmetri fra 0 til 100.',
+            },
+            asymmetrySignal: {
+              type: Type.STRING,
+              enum: ['HIGH', 'MEDIUM', 'LOW', 'NOISE'],
+              description: 'Kategorisering af asymmetri-signalet.',
+            },
+            quickReasoning: {
+              type: Type.STRING,
+              description: '1-2 knivskarpe sætninger på dansk om vurderingen.',
+            },
+          },
+          required: ['geminiPreScore', 'asymmetrySignal', 'quickReasoning'],
+        },
+      },
+    });
+
+    const outputText = response.text;
+    if (!outputText) {
+      return evaluateHeuristicGatekeeper(tx);
+    }
+
+    const parsed = JSON.parse(outputText) as {
+      geminiPreScore: number;
+      asymmetrySignal: GatekeeperResult['asymmetrySignal'];
+      quickReasoning: string;
+    };
+
+    return {
+      passedHardFilter: true,
+      geminiPreScore: Math.round(parsed.geminiPreScore),
+      asymmetrySignal: parsed.asymmetrySignal,
+      quickReasoning: parsed.quickReasoning,
+    };
+  } catch (error) {
+    console.warn('Gemini API kald fejlede, bruger heuristisk gatekeeper:', error);
+    return evaluateHeuristicGatekeeper(tx);
+  }
+}
+
+/**
+ * Evaluerer en hel liste af transaktioner parallelt via Gemini Gatekeeper.
+ */
+export async function evaluateBatchWithGatekeeper(
+  transactions: InsiderTransaction[]
+): Promise<Array<{ transaction: InsiderTransaction; result: GatekeeperResult }>> {
+  const evaluations = await Promise.all(
+    transactions.map(async (tx) => {
+      const result = await evaluateWithGatekeeper(tx);
+      return { transaction: tx, result };
+    })
+  );
+
+  return evaluations;
+}
