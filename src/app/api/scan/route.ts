@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getMockTransactions, fetchLiveSecForm4s, scanTickerSecForm4s } from '@/lib/sec-scanner';
+import { fetchNordicInsiderTransactions } from '@/lib/nordic-scanner';
 import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
 
 export async function GET(request: Request) {
@@ -11,6 +12,8 @@ export async function GET(request: Request) {
     let transactions;
     if (ticker && ticker.length > 0) {
       transactions = await scanTickerSecForm4s(ticker);
+    } else if (source === 'nordic') {
+      transactions = await fetchNordicInsiderTransactions();
     } else if (source === 'live') {
       transactions = await fetchLiveSecForm4s(16);
     } else {

@@ -7,9 +7,20 @@ import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
  */
 export function applyHardFilter(tx: InsiderTransaction): { passed: boolean; reason?: string } {
   if (tx.transactionCode !== 'P') {
+    const codeName =
+      tx.transactionCode === 'M'
+        ? "Option Exercise / RSU Vesting ('M')"
+        : tx.transactionCode === 'S'
+        ? "Almindeligt Salg ('S')"
+        : tx.transactionCode === 'F'
+        ? "Skatte-salg / Withholding ('F')"
+        : tx.transactionCode === 'A'
+        ? "Tildeling / Grant ('A')"
+        : `Transaktionskode '${tx.transactionCode}'`;
+
     return {
       passed: false,
-      reason: `Afvist: Transaktionskode er '${tx.transactionCode}'. Kun åbne markedskøb (kode 'P') for egne midler analyseres.`,
+      reason: `Afvist: ${codeName}. Kun ægte åbne markedskøb (kode 'P' med egne midler) analyseres.`,
     };
   }
 
@@ -147,6 +158,7 @@ export function getMockTransactions(): InsiderTransaction[] {
 
 interface ParsedSubTransaction {
   code: TransactionCode;
+  isAcquisition: boolean;
   shares: number;
   pricePerShare: number;
   totalValue: number;
@@ -155,6 +167,7 @@ interface ParsedSubTransaction {
 
 /**
  * Parser og aggregerer transaktionsblokke (håndterer split-lots og summerer del-handler for samme insider).
+ * Verificerer strengt at kode P kun accepteres hvis transaktionen er en reel erhvervelse (Acquired 'A').
  */
 function parseAndAggregateTransactions(xml: string): {
   code: TransactionCode;
@@ -170,24 +183,37 @@ function parseAndAggregateTransactions(xml: string): {
 
   for (const match of txMatches) {
     const block = match[1];
-    const rawCode = block.match(/<transactionCode>\s*([A-Z])\s*<\/transactionCode>/i)?.[1]?.trim() as TransactionCode;
+    const codeMatch = block.match(/<transactionCoding>[\s\S]*?<transactionCode>\s*([A-Za-z])\s*<\/transactionCode>/i);
+    const adMatch = block.match(/<transactionAcquiredDisposedCode>\s*<value>\s*([A-Za-z])\s*<\/value>/i);
+    const rawCode = (codeMatch ? codeMatch[1].toUpperCase() : '') as TransactionCode;
+    const adCode = adMatch ? adMatch[1].toUpperCase() : '';
+
+    if (!rawCode) continue;
+
     const sharesStr = block.match(/<transactionShares>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1]?.trim();
     const priceStr = block.match(/<transactionPricePerShare>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1]?.trim();
     const ownedFollowingStr = block.match(
       /<sharesOwnedFollowingTransaction>\s*<value>\s*(.*?)\s*<\/value>/i
     )?.[1]?.trim();
 
-    if (!rawCode) continue;
-
     const shares = parseFloat(sharesStr || '0');
     const price = parseFloat(priceStr || '0');
     const ownedFollowing = parseFloat(ownedFollowingStr || '0');
     const totalVal = shares * price;
 
-    const validCode: TransactionCode = ['P', 'S', 'A', 'M'].includes(rawCode) ? rawCode : 'P';
+    // Et åbent markedskøb SKAL være eksplicit kode 'P' OG have acquiredDisposedCode 'A' (Acquired)
+    const isTruePurchase = rawCode === 'P' && adCode === 'A';
+    const validCode: TransactionCode = isTruePurchase
+      ? 'P'
+      : ['S', 'A', 'M', 'F', 'G', 'D'].includes(rawCode)
+      ? rawCode
+      : adCode === 'D'
+      ? 'S'
+      : 'A';
 
     parsedSubTxs.push({
       code: validCode,
+      isAcquisition: adCode === 'A',
       shares,
       pricePerShare: price,
       totalValue: totalVal,
@@ -197,16 +223,28 @@ function parseAndAggregateTransactions(xml: string): {
 
   // Fallback hvis ingen standard nonDerivativeTransaction blokke blev fundet
   if (parsedSubTxs.length === 0) {
-    const rawCode = xml.match(/<transactionCode>\s*([A-Z])\s*<\/transactionCode>/i)?.[1]?.trim() as TransactionCode;
+    const codeMatch = xml.match(/<transactionCoding>[\s\S]*?<transactionCode>\s*([A-Za-z])\s*<\/transactionCode>/i);
+    const adMatch = xml.match(/<transactionAcquiredDisposedCode>\s*<value>\s*([A-Za-z])\s*<\/value>/i);
+    const rawCode = (codeMatch ? codeMatch[1].toUpperCase() : '') as TransactionCode;
+    const adCode = adMatch ? adMatch[1].toUpperCase() : '';
     if (!rawCode) return null;
+
+    const isTruePurchase = rawCode === 'P' && adCode === 'A';
+    const validCode: TransactionCode = isTruePurchase
+      ? 'P'
+      : ['S', 'A', 'M', 'F', 'G', 'D'].includes(rawCode)
+      ? rawCode
+      : adCode === 'D'
+      ? 'S'
+      : 'A';
+
     const shares = parseFloat(xml.match(/<transactionShares>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1] || '0');
     const price = parseFloat(xml.match(/<transactionPricePerShare>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1] || '0');
     const owned = parseFloat(
       xml.match(/<sharesOwnedFollowingTransaction>\s*<value>\s*(.*?)\s*<\/value>/i)?.[1] || '0'
     );
-    const validCode: TransactionCode = ['P', 'S', 'A', 'M'].includes(rawCode) ? rawCode : 'P';
     const prior = owned - shares;
-    const pct = prior > 0 ? parseFloat(((shares / prior) * 100).toFixed(2)) : 100.0;
+    const pct = prior > 0 ? parseFloat(((shares / prior) * 100).toFixed(2)) : 0.0;
     return {
       code: validCode,
       shares,
@@ -217,7 +255,7 @@ function parseAndAggregateTransactions(xml: string): {
     };
   }
 
-  // Prioriter Open Market Purchases ('P') og aggreger alle del-linjer
+  // Prioriter Open Market Purchases ('P' med 'A') og aggreger alle del-linjer
   const pTransactions = parsedSubTxs.filter((t) => t.code === 'P');
 
   if (pTransactions.length > 0) {
@@ -239,10 +277,10 @@ function parseAndAggregateTransactions(xml: string): {
     };
   }
 
-  // Hvis ingen 'P', tag den første eller største transaktion (f.eks. M eller S)
+  // Hvis ingen 'P', tag den første eller største transaktion (f.eks. F, S, M eller A)
   const primaryTx = parsedSubTxs[0];
-  const prior = primaryTx.sharesOwnedFollowing - primaryTx.shares;
-  const pct = prior > 0 ? parseFloat(((primaryTx.shares / prior) * 100).toFixed(2)) : 100.0;
+  const prior = primaryTx.sharesOwnedFollowing - (primaryTx.isAcquisition ? primaryTx.shares : -primaryTx.shares);
+  const pct = prior > 0 ? parseFloat(((primaryTx.shares / prior) * 100).toFixed(2)) : 0.0;
 
   return {
     code: primaryTx.code,

@@ -57,7 +57,7 @@ interface ScanResponse {
 const STORAGE_KEY = 'insiderops_verdicts_v1';
 
 export default function Dashboard() {
-  const [source, setSource] = useState<'mock' | 'live'>('mock');
+  const [source, setSource] = useState<'mock' | 'live' | 'nordic'>('mock');
   const [searchTicker, setSearchTicker] = useState<string>('');
   const [activeTickerQuery, setActiveTickerQuery] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'radar' | 'watchlist'>('radar');
@@ -92,7 +92,7 @@ export default function Dashboard() {
   }, []);
 
   const fetchScan = useCallback(
-    async (selectedSource: 'mock' | 'live', tickerQuery?: string | null) => {
+    async (selectedSource: 'mock' | 'live' | 'nordic', tickerQuery?: string | null) => {
       setLoading(true);
       setError(null);
       try {
@@ -270,7 +270,7 @@ export default function Dashboard() {
                   setActiveTickerQuery(null);
                   setSource('mock');
                 }}
-                className={`px-3 py-1 rounded transition-colors ${
+                className={`px-2.5 py-1 rounded transition-colors ${
                   source === 'mock' && !activeTickerQuery
                     ? 'bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-500/30'
                     : 'text-slate-400 hover:text-slate-200'
@@ -283,13 +283,26 @@ export default function Dashboard() {
                   setActiveTickerQuery(null);
                   setSource('live');
                 }}
-                className={`px-3 py-1 rounded transition-colors ${
+                className={`px-2.5 py-1 rounded transition-colors ${
                   source === 'live' && !activeTickerQuery
                     ? 'bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-500/30'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
                 Live SEC Feed
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTickerQuery(null);
+                  setSource('nordic');
+                }}
+                className={`px-2.5 py-1 rounded transition-colors flex items-center gap-1 ${
+                  source === 'nordic' && !activeTickerQuery
+                    ? 'bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <span>Nordic / DK (MAR Art. 19)</span>
               </button>
             </div>
 
@@ -567,8 +580,23 @@ export default function Dashboard() {
                                   ? 'bg-emerald-950/60 border-emerald-800 text-emerald-400'
                                   : tx.transactionCode === 'M'
                                   ? 'bg-purple-950/60 border-purple-800 text-purple-400'
+                                  : tx.transactionCode === 'A'
+                                  ? 'bg-blue-950/60 border-blue-800 text-blue-400'
+                                  : tx.transactionCode === 'F'
+                                  ? 'bg-amber-950/60 border-amber-800 text-amber-400'
                                   : 'bg-rose-950/60 border-rose-800 text-rose-400'
                               }`}
+                              title={
+                                tx.transactionCode === 'P'
+                                  ? 'Open Market Purchase'
+                                  : tx.transactionCode === 'M'
+                                  ? 'Option Exercise / RSU'
+                                  : tx.transactionCode === 'A'
+                                  ? 'Grant / Tildeling'
+                                  : tx.transactionCode === 'F'
+                                  ? 'Skatte-salg / Withholding'
+                                  : 'Salg'
+                              }
                             >
                               {tx.transactionCode}
                             </span>

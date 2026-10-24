@@ -1,4 +1,4 @@
-export type TransactionCode = 'P' | 'S' | 'A' | 'M';
+export type TransactionCode = 'P' | 'S' | 'A' | 'M' | 'F' | 'G' | 'D';
 
 export interface InsiderTransaction {
   id: string;
