@@ -1,17 +1,21 @@
 import { NextResponse } from 'next/server';
-import { getMockTransactions, fetchLiveSecForm4s } from '@/lib/sec-scanner';
+import { getMockTransactions, fetchLiveSecForm4s, scanTickerSecForm4s } from '@/lib/sec-scanner';
 import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
-
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const source = searchParams.get('source') || 'mock';
+    const ticker = searchParams.get('ticker')?.trim().toUpperCase();
 
-    const transactions =
-      source === 'live'
-        ? await fetchLiveSecForm4s(12)
-        : getMockTransactions();
+    let transactions;
+    if (ticker && ticker.length > 0) {
+      transactions = await scanTickerSecForm4s(ticker);
+    } else if (source === 'live') {
+      transactions = await fetchLiveSecForm4s(16);
+    } else {
+      transactions = getMockTransactions();
+    }
 
     const evaluations = await evaluateBatchWithGatekeeper(transactions);
 
@@ -37,7 +41,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       success: true,
-      source,
+      source: ticker ? `ticker:${ticker}` : source,
+      ticker: ticker || null,
       apiKeysConfigured,
       count: sortedEvaluations.length,
       items: sortedEvaluations,

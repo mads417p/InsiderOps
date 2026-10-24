@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Activity,
   AlertTriangle,
-  ArrowRight,
+  Bookmark,
   CheckCircle2,
   ChevronDown,
   Cpu,
@@ -12,11 +12,11 @@ import {
   EyeOff,
   FileText,
   Filter,
-  Layers,
   RefreshCw,
   Scale,
+  Search,
   ShieldAlert,
-  Sparkles,
+  Trash2,
   TrendingDown,
   TrendingUp,
   UserCheck,
@@ -36,9 +36,16 @@ interface ScanItem {
   result: GatekeeperResult;
 }
 
+interface SavedVerdictItem {
+  transaction: InsiderTransaction;
+  verdict: CouncilVerdict;
+  savedAt: string;
+}
+
 interface ScanResponse {
   success: boolean;
   source: string;
+  ticker?: string | null;
   apiKeysConfigured: {
     gemini: boolean;
     anthropic: boolean;
@@ -47,8 +54,14 @@ interface ScanResponse {
   items: ScanItem[];
 }
 
+const STORAGE_KEY = 'insiderops_verdicts_v1';
+
 export default function Dashboard() {
   const [source, setSource] = useState<'mock' | 'live'>('mock');
+  const [searchTicker, setSearchTicker] = useState<string>('');
+  const [activeTickerQuery, setActiveTickerQuery] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'radar' | 'watchlist'>('radar');
+
   const [hideNoise, setHideNoise] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,44 +71,93 @@ export default function Dashboard() {
     anthropic: false,
   });
 
-  // The Council State
+  // The Council & Persistent Watchlist State
   const [selectedTx, setSelectedTx] = useState<InsiderTransaction | null>(null);
   const [councilLoading, setCouncilLoading] = useState<boolean>(false);
   const [activeVerdict, setActiveVerdict] = useState<CouncilVerdict | null>(null);
-  const [verdictHistory, setVerdictHistory] = useState<Record<string, CouncilVerdict>>({});
+  const [verdictHistory, setVerdictHistory] = useState<Record<string, SavedVerdictItem>>({});
   const [showContextNotes, setShowContextNotes] = useState<boolean>(true);
 
-  const fetchScan = useCallback(async (selectedSource: 'mock' | 'live') => {
-    setLoading(true);
-    setError(null);
+  // Indlæs gemte domme fra localStorage ved opstart
+  useEffect(() => {
     try {
-      const res = await fetch(`/api/scan?source=${selectedSource}`);
-      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      const data: ScanResponse = await res.json();
-      setItems(data.items || []);
-      setApiKeys(data.apiKeysConfigured || { gemini: false, anthropic: false });
-    } catch (err: unknown) {
-      console.error(err);
-      setError('Kunne ikke hente Form 4 filings. Prøv venligst igen.');
-    } finally {
-      setLoading(false);
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        setVerdictHistory(parsed);
+      }
+    } catch (e) {
+      console.warn('Kunne ikke hente gemt historik fra localStorage:', e);
     }
   }, []);
 
+  const fetchScan = useCallback(
+    async (selectedSource: 'mock' | 'live', tickerQuery?: string | null) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const url = tickerQuery
+          ? `/api/scan?ticker=${encodeURIComponent(tickerQuery)}`
+          : `/api/scan?source=${selectedSource}`;
+
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+        const data: ScanResponse = await res.json();
+        setItems(data.items || []);
+        setApiKeys(data.apiKeysConfigured || { gemini: false, anthropic: false });
+
+        if (tickerQuery && data.items.length === 0) {
+          setError(`Ingen Form 4 filings fundet hos SEC for '${tickerQuery}'.`);
+        }
+      } catch (err: unknown) {
+        console.error(err);
+        setError('Kunne ikke hente filings fra SEC. Prøv venligst igen.');
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
-    fetchScan(source);
-  }, [fetchScan, source]);
+    if (!activeTickerQuery) {
+      fetchScan(source, null);
+    }
+  }, [fetchScan, source, activeTickerQuery]);
+
+  const handleTickerSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = searchTicker.trim().toUpperCase();
+    if (!clean) return;
+
+    setActiveTickerQuery(clean);
+    setActiveTab('radar');
+    fetchScan(source, clean);
+  };
+
+  const handleResetSearch = () => {
+    setSearchTicker('');
+    setActiveTickerQuery(null);
+    fetchScan(source, null);
+  };
 
   const handleConveneCouncil = async (tx: InsiderTransaction) => {
     setSelectedTx(tx);
-    // Tjek om vi allerede har analyseret denne transaktion
+
+    // Tjek om vi allerede har afsagt dom (0 token-forbrug)
     if (verdictHistory[tx.id]) {
-      setActiveVerdict(verdictHistory[tx.id]);
+      setActiveVerdict(verdictHistory[tx.id].verdict);
+      const chamberEl = document.getElementById('council-chamber');
+      if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
       return;
     }
 
     setCouncilLoading(true);
     setActiveVerdict(null);
+
+    const chamberEl = document.getElementById('council-chamber');
+    if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
+
     try {
       const res = await fetch('/api/council', {
         method: 'POST',
@@ -105,8 +167,21 @@ export default function Dashboard() {
       if (!res.ok) throw new Error('Fejl under rådsmøde');
       const data = await res.json();
       if (data.verdict) {
+        const newRecord: SavedVerdictItem = {
+          transaction: tx,
+          verdict: data.verdict,
+          savedAt: new Date().toISOString(),
+        };
+
+        const updatedHistory = { ...verdictHistory, [tx.id]: newRecord };
         setActiveVerdict(data.verdict);
-        setVerdictHistory((prev) => ({ ...prev, [tx.id]: data.verdict }));
+        setVerdictHistory(updatedHistory);
+
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedHistory));
+        } catch (storageErr) {
+          console.warn('Kunne ikke gemme dom i localStorage:', storageErr);
+        }
       }
     } catch (err) {
       console.error(err);
@@ -115,11 +190,29 @@ export default function Dashboard() {
     }
   };
 
+  const handleRemoveFromWatchlist = (txId: string) => {
+    const updated = { ...verdictHistory };
+    delete updated[txId];
+    setVerdictHistory(updated);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    } catch (err) {
+      console.warn(err);
+    }
+    if (selectedTx?.id === txId) {
+      setActiveVerdict(null);
+      setSelectedTx(null);
+    }
+  };
+
   // KPI Beregninger
   const totalScanned = items.length;
   const hardFilterRejected = items.filter((i) => !i.result.passedHardFilter).length;
   const highAsymmetryCount = items.filter((i) => i.result.geminiPreScore >= 75).length;
-  const councilsConvenedCount = Object.keys(verdictHistory).length;
+  const savedVerdictItems = Object.values(verdictHistory).sort(
+    (a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore
+  );
+  const councilsConvenedCount = savedVerdictItems.length;
 
   const filteredItems = hideNoise
     ? items.filter((i) => i.result.passedHardFilter)
@@ -140,7 +233,7 @@ export default function Dashboard() {
                   INSIDER<span className="text-cyan-400">//</span>OPS
                 </h1>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                  v1.0-RADAR
+                  v1.2-RADAR
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-mono tracking-tight">
@@ -157,7 +250,7 @@ export default function Dashboard() {
                 <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="text-slate-400">GEMINI 2.5 FLASH:</span>
                 <span className={apiKeys.gemini ? 'text-emerald-400' : 'text-amber-400'}>
-                  {apiKeys.gemini ? 'API AKTIV' : 'SIMULATION MODE'}
+                  {apiKeys.gemini ? 'API AKTIV' : 'SIMULATION'}
                 </span>
               </div>
 
@@ -165,7 +258,7 @@ export default function Dashboard() {
                 <span className="h-2 w-2 rounded-full bg-cyan-500 animate-pulse" />
                 <span className="text-slate-400">CLAUDE 3.7 SONNET x4:</span>
                 <span className={apiKeys.anthropic ? 'text-cyan-400' : 'text-amber-400'}>
-                  {apiKeys.anthropic ? 'API AKTIV' : 'SIMULATION MODE'}
+                  {apiKeys.anthropic ? 'API AKTIV' : 'SIMULATION'}
                 </span>
               </div>
             </div>
@@ -173,35 +266,41 @@ export default function Dashboard() {
             {/* Source Switcher */}
             <div className="flex items-center rounded border border-slate-800 bg-slate-900 p-0.5 text-xs font-mono">
               <button
-                onClick={() => setSource('mock')}
+                onClick={() => {
+                  setActiveTickerQuery(null);
+                  setSource('mock');
+                }}
                 className={`px-3 py-1 rounded transition-colors ${
-                  source === 'mock'
+                  source === 'mock' && !activeTickerQuery
                     ? 'bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-500/30'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Test Cases (Asymmetry Lab)
+                Asymmetry Lab
               </button>
               <button
-                onClick={() => setSource('live')}
+                onClick={() => {
+                  setActiveTickerQuery(null);
+                  setSource('live');
+                }}
                 className={`px-3 py-1 rounded transition-colors ${
-                  source === 'live'
+                  source === 'live' && !activeTickerQuery
                     ? 'bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-500/30'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Live SEC EDGAR Feed
+                Live SEC Feed
               </button>
             </div>
 
             {/* Scan Refresh Button */}
             <button
-              onClick={() => fetchScan(source)}
+              onClick={() => fetchScan(source, activeTickerQuery)}
               disabled={loading}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-mono text-slate-200 transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-cyan-400' : ''}`} />
-              Scan Now
+              Scan
             </button>
           </div>
         </div>
@@ -219,7 +318,7 @@ export default function Dashboard() {
             <div className="mt-2 text-2xl font-mono font-bold text-slate-100">
               {loading ? '-' : totalScanned}
             </div>
-            <div className="text-[11px] text-slate-500 mt-1">Form 4 transaktioner i batchet</div>
+            <div className="text-[11px] text-slate-500 mt-1">Form 4 transaktioner</div>
           </div>
 
           <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded">
@@ -246,39 +345,109 @@ export default function Dashboard() {
 
           <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded">
             <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-              <span>RÅDS-DOMME AFSAGT</span>
-              <Scale className="w-3.5 h-3.5 text-cyan-400" />
+              <span>WATCHLIST / DOMME</span>
+              <Bookmark className="w-3.5 h-3.5 text-cyan-400" />
             </div>
             <div className="mt-2 text-2xl font-mono font-bold text-cyan-400">
               {councilsConvenedCount}
             </div>
-            <div className="text-[11px] text-slate-500 mt-1">Claude The Council analyser</div>
+            <div className="text-[11px] text-slate-500 mt-1">Gemt i localStorage</div>
           </div>
         </div>
 
-        {/* Toolbar: Noise filter toggle & status */}
-        <div className="flex items-center justify-between border-b border-slate-800 pb-2 text-xs font-mono">
-          <div className="flex items-center gap-2 text-slate-400">
-            <Activity className="w-3.5 h-3.5 text-cyan-400" />
-            <span>RADAR FEED: {source === 'mock' ? 'ASYMMETRY LAB (6 CASES)' : 'SEC EDGAR LIVE'}</span>
+        {/* Ticker Search Bar */}
+        <div className="p-3.5 rounded bg-slate-900/70 border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <form
+            onSubmit={handleTickerSearch}
+            className="flex items-center gap-2 w-full sm:w-auto flex-1 max-w-xl"
+          >
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchTicker}
+                onChange={(e) => setSearchTicker(e.target.value)}
+                placeholder="Deep-Scan US Ticker (f.eks. NVDA, PLTR, SOFI, CELH)..."
+                className="w-full pl-9 pr-3 py-2 rounded bg-slate-950 border border-slate-800 text-xs font-mono text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 transition-colors uppercase"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading || !searchTicker.trim()}
+              className="px-4 py-2 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-slate-950 font-mono font-bold text-xs flex items-center gap-1.5 transition-colors whitespace-nowrap"
+            >
+              <Cpu className="w-3.5 h-3.5" />
+              Deep Scan CIK
+            </button>
+          </form>
+
+          {activeTickerQuery && (
+            <div className="flex items-center gap-2 text-xs font-mono bg-cyan-950/60 border border-cyan-800/80 px-3 py-1.5 rounded text-cyan-300">
+              <span>SØGER PÅ TICKER:</span>
+              <span className="font-bold tracking-wider">${activeTickerQuery}</span>
+              <button
+                onClick={handleResetSearch}
+                className="hover:text-cyan-100 text-cyan-400 ml-1.5"
+                title="Ryd søgning"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Navigation Tabs */}
+        <div className="flex items-center justify-between border-b border-slate-800 pb-1">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setActiveTab('radar')}
+              className={`px-4 py-2 font-mono text-xs font-bold tracking-wider border-b-2 transition-colors flex items-center gap-2 ${
+                activeTab === 'radar'
+                  ? 'border-cyan-400 text-cyan-300 bg-slate-900/40'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Activity className="w-3.5 h-3.5" />
+              <span>RADAR SCAN</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
+                {filteredItems.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('watchlist')}
+              className={`px-4 py-2 font-mono text-xs font-bold tracking-wider border-b-2 transition-colors flex items-center gap-2 ${
+                activeTab === 'watchlist'
+                  ? 'border-cyan-400 text-cyan-300 bg-slate-900/40'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Bookmark className="w-3.5 h-3.5" />
+              <span>WATCHLIST / GEMTE DOMME</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-800 text-cyan-300">
+                {savedVerdictItems.length}
+              </span>
+            </button>
           </div>
 
-          <button
-            onClick={() => setHideNoise(!hideNoise)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 transition-colors"
-          >
-            {hideNoise ? (
-              <>
-                <Eye className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Vis afvist støj ({hardFilterRejected})</span>
-              </>
-            ) : (
-              <>
-                <EyeOff className="w-3.5 h-3.5 text-slate-400" />
-                <span>Skjul afvist støj ({hardFilterRejected})</span>
-              </>
-            )}
-          </button>
+          {activeTab === 'radar' && (
+            <button
+              onClick={() => setHideNoise(!hideNoise)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 transition-colors text-xs font-mono"
+            >
+              {hideNoise ? (
+                <>
+                  <Eye className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Vis afvist støj ({hardFilterRejected})</span>
+                </>
+              ) : (
+                <>
+                  <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Skjul afvist støj ({hardFilterRejected})</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Error message */}
@@ -289,220 +458,343 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Radar Table */}
-        <div className="border border-slate-800 rounded bg-slate-900/40 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs font-mono">
-              <thead>
-                <tr className="bg-slate-900/80 border-b border-slate-800 text-slate-400 text-[11px]">
-                  <th className="py-3 px-3">TICKER / SELSKAB</th>
-                  <th className="py-3 px-3">INSIDER & ROLLE</th>
-                  <th className="py-3 px-2 text-center">TYPE</th>
-                  <th className="py-3 px-3 text-right">BELØB (USD)</th>
-                  <th className="py-3 px-3 text-right">BEHOLDNINGS-ÆNDRING</th>
-                  <th className="py-3 px-3">GEMINI GATEKEEPER PRE-SCORE</th>
-                  <th className="py-3 px-3 text-right">HANDLING</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {loading ? (
-                  <tr>
-                    <td colSpan={7} className="py-12 text-center text-slate-400">
-                      <div className="flex flex-col items-center justify-center gap-2">
-                        <RefreshCw className="w-5 h-5 animate-spin text-cyan-400" />
-                        <span>Scanner SEC Form 4 filings og afvikler Gemini Gatekeeper...</span>
-                      </div>
-                    </td>
+        {/* TAB 1: RADAR TABLE */}
+        {activeTab === 'radar' && (
+          <div className="border border-slate-800 rounded bg-slate-900/40 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs font-mono">
+                <thead>
+                  <tr className="bg-slate-900/80 border-b border-slate-800 text-slate-400 text-[11px]">
+                    <th className="py-3 px-3">TICKER / SELSKAB</th>
+                    <th className="py-3 px-3">INSIDER & ROLLE</th>
+                    <th className="py-3 px-2 text-center">TYPE</th>
+                    <th className="py-3 px-3 text-right">BELØB (USD)</th>
+                    <th className="py-3 px-3 text-right">BEHOLDNINGS-ÆNDRING</th>
+                    <th className="py-3 px-3">GATEKEEPER & RÅD</th>
+                    <th className="py-3 px-3 text-right">HANDLING</th>
                   </tr>
-                ) : filteredItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-500">
-                      Ingen transaktioner at vise.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredItems.map(({ transaction: tx, result: res }) => {
-                    const isSelected = selectedTx?.id === tx.id;
-                    const isCFOorGC = /cfo|chief financial|general counsel|chief legal/i.test(
-                      tx.insiderTitle
-                    );
-                    const isCosmeticBuy =
-                      tx.transactionCode === 'P' && tx.holdingsIncreasePct < 1.0;
-
-                    return (
-                      <tr
-                        key={tx.id}
-                        className={`transition-colors ${
-                          isSelected
-                            ? 'bg-cyan-950/30'
-                            : !res.passedHardFilter
-                            ? 'bg-slate-950/60 opacity-60 hover:opacity-100'
-                            : 'hover:bg-slate-900/60'
-                        }`}
-                      >
-                        {/* Ticker & Company */}
-                        <td className="py-3 px-3 font-semibold">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-cyan-400 font-bold tracking-wider">{tx.ticker}</span>
-                            {tx.recentPriceChange30dPct !== undefined && (
-                              <span
-                                className={`text-[10px] px-1 rounded ${
-                                  tx.recentPriceChange30dPct < 0
-                                    ? 'text-rose-400 bg-rose-950/40 border border-rose-900/60'
-                                    : 'text-emerald-400 bg-emerald-950/40 border border-emerald-900/60'
-                                }`}
-                              >
-                                {tx.recentPriceChange30dPct > 0 ? '+' : ''}
-                                {tx.recentPriceChange30dPct}% 30d
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-slate-400 truncate max-w-[160px] font-sans">
-                            {tx.companyName}
-                          </div>
-                        </td>
-
-                        {/* Insider & Role */}
-                        <td className="py-3 px-3">
-                          <div className="text-slate-200 font-medium font-sans">{tx.insiderName}</div>
-                          <div className="flex flex-wrap items-center gap-1 mt-0.5">
-                            <span
-                              className={`text-[10px] px-1.5 py-0.2 rounded border ${
-                                isCFOorGC
-                                  ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300 font-bold'
-                                  : 'bg-slate-800/80 border-slate-700 text-slate-300'
-                              }`}
-                            >
-                              {tx.insiderTitle}
-                            </span>
-                            {tx.isClusterBuy && (
-                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950/60 border border-amber-800 text-amber-300 flex items-center gap-0.5">
-                                <Users className="w-2.5 h-2.5" />
-                                Cluster ({tx.clusterCount ?? 2})
-                              </span>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Code */}
-                        <td className="py-3 px-2 text-center">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[11px] font-bold border ${
-                              tx.transactionCode === 'P'
-                                ? 'bg-emerald-950/60 border-emerald-800 text-emerald-400'
-                                : tx.transactionCode === 'M'
-                                ? 'bg-purple-950/60 border-purple-800 text-purple-400'
-                                : 'bg-rose-950/60 border-rose-800 text-rose-400'
-                            }`}
-                          >
-                            {tx.transactionCode}
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-400">
+                        <div className="flex flex-col items-center justify-center gap-2">
+                          <RefreshCw className="w-5 h-5 animate-spin text-cyan-400" />
+                          <span>
+                            {activeTickerQuery
+                              ? `Slår CIK op og henter Form 4 filings for ${activeTickerQuery}...`
+                              : 'Scanner SEC Form 4 filings og afvikler Gemini Gatekeeper...'}
                           </span>
-                        </td>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : filteredItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-500">
+                        Ingen transaktioner at vise.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredItems.map(({ transaction: tx, result: res }) => {
+                      const isSelected = selectedTx?.id === tx.id;
+                      const saved = verdictHistory[tx.id];
+                      const isCFOorGC = /cfo|chief financial|general counsel|chief legal/i.test(
+                        tx.insiderTitle
+                      );
+                      const isCosmeticBuy =
+                        tx.transactionCode === 'P' && tx.holdingsIncreasePct < 1.0;
 
-                        {/* Total Value */}
-                        <td className="py-3 px-3 text-right font-mono">
-                          <div className="text-slate-100 font-semibold">
-                            ${Math.round(tx.totalValueUsd).toLocaleString()}
-                          </div>
-                          <div className="text-[10px] text-slate-500">
-                            {tx.shares.toLocaleString()} stk a ${tx.pricePerShare}
-                          </div>
-                        </td>
-
-                        {/* Holdings change */}
-                        <td className="py-3 px-3 text-right font-mono">
-                          <div
-                            className={`font-semibold flex items-center justify-end gap-1 ${
-                              tx.holdingsIncreasePct >= 15
-                                ? 'text-emerald-400'
-                                : isCosmeticBuy
-                                ? 'text-amber-400'
-                                : 'text-slate-300'
-                            }`}
-                          >
-                            {tx.holdingsIncreasePct > 0 ? (
-                              <TrendingUp className="w-3 h-3" />
-                            ) : (
-                              <TrendingDown className="w-3 h-3" />
-                            )}
-                            {tx.holdingsIncreasePct > 0 ? '+' : ''}
-                            {tx.holdingsIncreasePct}%
-                          </div>
-                          {isCosmeticBuy && (
-                            <div className="text-[10px] text-amber-400/80 font-sans">
-                              Kosmetisk PR-køb
-                            </div>
-                          )}
-                        </td>
-
-                        {/* Gemini Gatekeeper Pre-Score */}
-                        <td className="py-3 px-3 max-w-[280px]">
-                          {res.passedHardFilter ? (
-                            <div>
-                              <div className="flex items-center gap-2">
+                      return (
+                        <tr
+                          key={tx.id}
+                          className={`transition-colors ${
+                            isSelected
+                              ? 'bg-cyan-950/30'
+                              : !res.passedHardFilter
+                              ? 'bg-slate-950/60 opacity-60 hover:opacity-100'
+                              : 'hover:bg-slate-900/60'
+                          }`}
+                        >
+                          {/* Ticker & Company */}
+                          <td className="py-3 px-3 font-semibold">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-cyan-400 font-bold tracking-wider">{tx.ticker}</span>
+                              {tx.recentPriceChange30dPct !== undefined && (
                                 <span
-                                  className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                                    res.geminiPreScore >= 75
-                                      ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
-                                      : res.geminiPreScore >= 50
-                                      ? 'bg-cyan-950/70 border-cyan-700 text-cyan-300'
-                                      : 'bg-amber-950/70 border-amber-700 text-amber-300'
+                                  className={`text-[10px] px-1 rounded ${
+                                    tx.recentPriceChange30dPct < 0
+                                      ? 'text-rose-400 bg-rose-950/40 border border-rose-900/60'
+                                      : 'text-emerald-400 bg-emerald-950/40 border border-emerald-900/60'
                                   }`}
                                 >
-                                  Score: {res.geminiPreScore}/100
+                                  {tx.recentPriceChange30dPct > 0 ? '+' : ''}
+                                  {tx.recentPriceChange30dPct}% 30d
                                 </span>
-                                <span className="text-[10px] text-slate-400 font-mono">
-                                  [{res.asymmetrySignal}]
-                                </span>
-                              </div>
-                              <p className="text-[11px] text-slate-300 mt-1 line-clamp-2 font-sans">
-                                {res.quickReasoning}
-                              </p>
+                              )}
                             </div>
-                          ) : (
-                            <div className="flex items-start gap-1.5 text-rose-400/90 text-[11px] font-sans">
-                              <XCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                              <span className="line-clamp-2">{res.hardFilterReason}</span>
+                            <div className="text-[11px] text-slate-400 truncate max-w-[160px] font-sans">
+                              {tx.companyName}
                             </div>
-                          )}
-                        </td>
+                          </td>
 
-                        {/* Action: Saml Rådet */}
-                        <td className="py-3 px-3 text-right">
-                          {res.passedHardFilter ? (
-                            <button
-                              onClick={() => handleConveneCouncil(tx)}
-                              disabled={councilLoading && isSelected}
-                              className={`px-3 py-1.5 rounded text-xs font-mono font-medium transition-all flex items-center gap-1.5 ml-auto ${
-                                isSelected
-                                  ? 'bg-cyan-500 text-slate-950 shadow-lg shadow-cyan-500/20'
-                                  : 'bg-slate-800 hover:bg-cyan-950/80 hover:text-cyan-300 border border-slate-700 text-slate-200'
+                          {/* Insider & Role */}
+                          <td className="py-3 px-3">
+                            <div className="text-slate-200 font-medium font-sans">{tx.insiderName}</div>
+                            <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                              <span
+                                className={`text-[10px] px-1.5 py-0.2 rounded border ${
+                                  isCFOorGC
+                                    ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300 font-bold'
+                                    : 'bg-slate-800/80 border-slate-700 text-slate-300'
+                                }`}
+                              >
+                                {tx.insiderTitle}
+                              </span>
+                              {tx.isClusterBuy && (
+                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950/60 border border-amber-800 text-amber-300 flex items-center gap-0.5">
+                                  <Users className="w-2.5 h-2.5" />
+                                  Cluster ({tx.clusterCount ?? 2})
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Code */}
+                          <td className="py-3 px-2 text-center">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[11px] font-bold border ${
+                                tx.transactionCode === 'P'
+                                  ? 'bg-emerald-950/60 border-emerald-800 text-emerald-400'
+                                  : tx.transactionCode === 'M'
+                                  ? 'bg-purple-950/60 border-purple-800 text-purple-400'
+                                  : 'bg-rose-950/60 border-rose-800 text-rose-400'
                               }`}
                             >
-                              {councilLoading && isSelected ? (
-                                <>
-                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                  <span>Afventer...</span>
-                                </>
+                              {tx.transactionCode}
+                            </span>
+                          </td>
+
+                          {/* Total Value */}
+                          <td className="py-3 px-3 text-right font-mono">
+                            <div className="text-slate-100 font-semibold">
+                              ${Math.round(tx.totalValueUsd).toLocaleString()}
+                            </div>
+                            <div className="text-[10px] text-slate-500">
+                              {tx.shares.toLocaleString()} stk a ${tx.pricePerShare}
+                            </div>
+                          </td>
+
+                          {/* Holdings change */}
+                          <td className="py-3 px-3 text-right font-mono">
+                            <div
+                              className={`font-semibold flex items-center justify-end gap-1 ${
+                                tx.holdingsIncreasePct >= 15
+                                  ? 'text-emerald-400'
+                                  : isCosmeticBuy
+                                  ? 'text-amber-400'
+                                  : 'text-slate-300'
+                              }`}
+                            >
+                              {tx.holdingsIncreasePct > 0 ? (
+                                <TrendingUp className="w-3 h-3" />
                               ) : (
-                                <>
-                                  <Scale className="w-3.5 h-3.5" />
-                                  <span>Saml Rådet</span>
-                                </>
+                                <TrendingDown className="w-3 h-3" />
                               )}
-                            </button>
-                          ) : (
-                            <span className="text-[11px] text-slate-600 font-mono">Afvist</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                              {tx.holdingsIncreasePct > 0 ? '+' : ''}
+                              {tx.holdingsIncreasePct}%
+                            </div>
+                            {isCosmeticBuy && (
+                              <div className="text-[10px] text-amber-400/80 font-sans">
+                                Kosmetisk PR-køb
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Gemini Gatekeeper Pre-Score & Saved Council Verdict */}
+                          <td className="py-3 px-3 max-w-[280px]">
+                            {res.passedHardFilter ? (
+                              <div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                      res.geminiPreScore >= 75
+                                        ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
+                                        : res.geminiPreScore >= 50
+                                        ? 'bg-cyan-950/70 border-cyan-700 text-cyan-300'
+                                        : 'bg-amber-950/70 border-amber-700 text-amber-300'
+                                    }`}
+                                  >
+                                    Score: {res.geminiPreScore}/100
+                                  </span>
+
+                                  {/* Badge hvis der allerede findes en afsagt dom */}
+                                  {saved && (
+                                    <span
+                                      className={`px-2 py-0.5 rounded text-[10px] font-bold border flex items-center gap-1 ${
+                                        saved.verdict.verdict === 'STRONG ASYMMETRY (KØB)'
+                                          ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                                          : saved.verdict.verdict === 'MODERATE SIGNAL (OVERVÅG)'
+                                          ? 'bg-amber-950 border-amber-600 text-amber-300'
+                                          : 'bg-rose-950 border-rose-600 text-rose-300'
+                                      }`}
+                                    >
+                                      <Scale className="w-2.5 h-2.5" />
+                                      CIO: {saved.verdict.asymmetryScore}/100
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-300 mt-1 line-clamp-2 font-sans">
+                                  {res.quickReasoning}
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="flex items-start gap-1.5 text-rose-400/90 text-[11px] font-sans">
+                                <XCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                                <span className="line-clamp-2">{res.hardFilterReason}</span>
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Action Button */}
+                          <td className="py-3 px-3 text-right">
+                            {res.passedHardFilter ? (
+                              <button
+                                onClick={() => handleConveneCouncil(tx)}
+                                disabled={councilLoading && isSelected}
+                                className={`px-3 py-1.5 rounded text-xs font-mono font-medium transition-all flex items-center gap-1.5 ml-auto ${
+                                  saved
+                                    ? 'bg-cyan-950/80 border border-cyan-500/60 text-cyan-300 hover:bg-cyan-900'
+                                    : isSelected
+                                    ? 'bg-cyan-500 text-slate-950 shadow-lg shadow-cyan-500/20'
+                                    : 'bg-slate-800 hover:bg-cyan-950/80 hover:text-cyan-300 border border-slate-700 text-slate-200'
+                                }`}
+                              >
+                                {councilLoading && isSelected ? (
+                                  <>
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Rådet tænker...</span>
+                                  </>
+                                ) : saved ? (
+                                  <>
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />
+                                    <span>Vis Rådsdom</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Scale className="w-3.5 h-3.5" />
+                                    <span>Saml Rådet</span>
+                                  </>
+                                )}
+                              </button>
+                            ) : (
+                              <span className="text-[11px] text-slate-600 font-mono">Afvist</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* TAB 2: WATCHLIST / GEMTE DOMME */}
+        {activeTab === 'watchlist' && (
+          <div className="space-y-4">
+            {savedVerdictItems.length === 0 ? (
+              <div className="border border-dashed border-slate-800 rounded p-12 text-center text-slate-500 font-mono text-xs">
+                <Bookmark className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+                <p>Ingen rådsdomme er gemt endnu.</p>
+                <p className="mt-1 text-slate-400">
+                  Gå til &quot;Radar Scan&quot;, vælg en transaktion og klik &quot;Saml Rådet&quot;
+                  for at gemme en case på din watchlist.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {savedVerdictItems.map(({ transaction: tx, verdict, savedAt }) => (
+                  <div
+                    key={tx.id}
+                    className="p-4 rounded bg-slate-900/60 border border-slate-800 hover:border-slate-700 transition-all flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-base font-bold text-cyan-400 font-mono tracking-wider">
+                            ${tx.ticker}
+                          </span>
+                          <span className="text-xs text-slate-400 font-sans truncate max-w-[150px]">
+                            {tx.companyName}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold border ${
+                              verdict.verdict === 'STRONG ASYMMETRY (KØB)'
+                                ? 'bg-emerald-950/80 border-emerald-600 text-emerald-300'
+                                : verdict.verdict === 'MODERATE SIGNAL (OVERVÅG)'
+                                ? 'bg-amber-950/80 border-amber-600 text-amber-300'
+                                : 'bg-rose-950/80 border-rose-600 text-rose-300'
+                            }`}
+                          >
+                            Score: {verdict.asymmetryScore}/100
+                          </span>
+
+                          <button
+                            onClick={() => handleRemoveFromWatchlist(tx.id)}
+                            className="text-slate-500 hover:text-rose-400 p-1"
+                            title="Fjern fra watchlist"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 text-xs text-slate-300 font-sans font-medium">
+                        {tx.insiderName} ({tx.insiderTitle}) • ${Math.round(tx.totalValueUsd).toLocaleString()} (+{tx.holdingsIncreasePct}%)
+                      </div>
+
+                      <h4 className="mt-2 text-xs font-bold text-slate-100 font-sans leading-snug line-clamp-2">
+                        {verdict.headline}
+                      </h4>
+
+                      <p className="mt-1 text-[11px] text-slate-400 font-sans line-clamp-3">
+                        {verdict.synthesis}
+                      </p>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono">
+                      <span className="text-slate-500">
+                        {new Date(savedAt).toLocaleDateString('da-DK', {
+                          day: 'numeric',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+
+                      <button
+                        onClick={() => {
+                          setSelectedTx(tx);
+                          setActiveVerdict(verdict);
+                          const chamberEl = document.getElementById('council-chamber');
+                          if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
+                        }}
+                        className="px-2.5 py-1 rounded bg-cyan-950 hover:bg-cyan-900 border border-cyan-800 text-cyan-300 transition-colors flex items-center gap-1"
+                      >
+                        <Scale className="w-3 h-3" />
+                        <span>Åbn i Council Chamber</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Section: The Council Chamber */}
         <div id="council-chamber" className="mt-8">
