@@ -2,6 +2,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { InsiderTransaction, TransactionCode } from '@/types/insider';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { isExecutiveTitle } from '@/lib/sec-scanner';
+import { resolveGeminiFlashModel } from '@/lib/gemini-gatekeeper';
 
 const DKK_TO_USD_RATE = 0.145; // 1 DKK ≈ $0.145 USD
 const SEK_TO_USD_RATE = 0.095; // 1 SEK ≈ $0.095 USD
@@ -316,7 +317,7 @@ Regler for udtræk:
 9. sharesOwnedFollowing: Beholdning efter transaktionen hvis nævnt.
 10. notes: Korte, præcise noter om transaktionen.`;
 
-      const fastModel = process.env.GEMINI_FAST_MODEL || 'gemini-3-flash-preview';
+      const fastModel = await resolveGeminiFlashModel(ai);
       const schemaConfig = {
         responseMimeType: 'application/json',
         responseSchema: {
@@ -357,15 +358,20 @@ Regler for udtræk:
           config: schemaConfig,
         });
       } catch (primaryErr) {
-        console.warn(`Primær model ${fastModel} overbelastet, skifter til gemini-2.5-flash:`, primaryErr);
-        response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: prompt,
-          config: schemaConfig,
-        });
+        console.warn(`Primær Gemini model ${fastModel} fejlede, forsøger gemini-2.0-flash:`, primaryErr);
+        try {
+          response = await ai.models.generateContent({
+            model: 'gemini-2.0-flash',
+            contents: prompt,
+            config: schemaConfig,
+          });
+        } catch {
+          // Falder automatisk tilbage til deterministisk regex parsing nedenfor
+          response = null;
+        }
       }
 
-      if (response.text) {
+      if (response && response.text) {
         const parsedList: ParsedNordicMarItem[] = JSON.parse(response.text);
         for (const item of parsedList) {
           results.set(item.id, item);
