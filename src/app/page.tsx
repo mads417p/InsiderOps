@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Bookmark,
   Brain,
+  Calculator,
   CheckCircle2,
   ChevronDown,
   Cpu,
@@ -33,6 +34,7 @@ import {
   GatekeeperResult,
   InsiderTransaction,
 } from '@/types/insider';
+import { generateTradeExecutionPlan } from '@/lib/trade-planner';
 
 interface ScanItem {
   transaction: InsiderTransaction;
@@ -58,6 +60,7 @@ interface ScanResponse {
 }
 
 const STORAGE_KEY = 'insiderops_verdicts_v1';
+const CAPITAL_STORAGE_KEY = 'insiderops_capital_frame_dkk';
 
 export default function Dashboard() {
   const [source, setSource] = useState<'mock' | 'live' | 'nordic' | 'csuite'>('mock');
@@ -84,6 +87,7 @@ export default function Dashboard() {
   const [judgeTier, setJudgeTier] = useState<'opus' | 'sonnet'>('opus');
   const [showThinking, setShowThinking] = useState<boolean>(true);
   const [memoCopied, setMemoCopied] = useState<boolean>(false);
+  const [maxCapitalDkk, setMaxCapitalDkk] = useState<number>(25000);
   const [autoPilotRunning, setAutoPilotRunning] = useState<boolean>(false);
   const [autoPilotProgress, setAutoPilotProgress] = useState<{
     current: number;
@@ -175,7 +179,29 @@ ${verdict.synthesis}
 
 ---
 
-## 5. Specialisternes Rapporter (Claude Sonnet 5.5)
+## 5. Kvantitativ Eksekverings- & Risikoplan (Frie Midler)
+${(() => {
+  const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk);
+  if (plan.status === 'DO_NOT_TRADE') {
+    return `- **Status:** 🛡️ Kapitalbeskyttelse aktiveret (${plan.reason})`;
+  }
+  return `- **Allokeringsramme:** ${maxCapitalDkk.toLocaleString()} DKK
+- **Anbefalet Allokering:** ${plan.recommendedAllocationDkk.toLocaleString()} DKK (~$${plan.recommendedAllocationUsd.toLocaleString()} USD)
+- **Positionstype / Antal:** ${plan.totalShares} aktier
+- **Volatilitet (14d ATR):** ${plan.volatilityTag} (14d ATR: $${tx.atr14d || 'N/A'})
+- **Entry Zone:** $${plan.entryZoneMin} - $${plan.entryZoneMax} (${plan.entryZoneLabel})
+- **Stop-Loss (Hard Invalidation):** $${plan.stopLossPrice} (${plan.stopLossRiskPct}% risiko • Maksimalt DKK tab: ${plan.maxLossDkk.toLocaleString()} DKK)
+- **Target 1 (90d Modstand / 3.5x ATR):** $${plan.targetPrice1} (+${plan.targetReturnPct1}%)
+- **Risk / Reward Ratio:** 1 : ${plan.riskRewardRatio}
+
+### Tranche Opdeling:
+- **Tranche 1 (60%):** ${plan.tranche1.description} • ${plan.tranche1.allocationDkk.toLocaleString()} DKK
+- **Tranche 2 (40%):** ${plan.tranche2.description} • ${plan.tranche2.allocationDkk.toLocaleString()} DKK`;
+})()}
+
+---
+
+## 6. Specialisternes Rapporter (Claude Sonnet 5.5)
 
 ### [The Insider Profiler]
 ${verdict.reports.profiler}
@@ -188,14 +214,14 @@ ${verdict.reports.skeptic}
 
 ---
 
-## 6. Fundamentale Noter & SEC Form 4 Fodnoter
+## 7. Fundamentale Noter & SEC Form 4 Fodnoter
 ${tx.contextNotes || 'Ingen yderligere noter registreret.'}
 
 ${
   verdict.judgeThinking
     ? `---
 
-## 7. CIO Extended Thinking Trace
+## 8. CIO Extended Thinking Trace
 \`\`\`
 ${verdict.judgeThinking}
 \`\`\`
@@ -239,6 +265,18 @@ ${verdict.judgeThinking}
       }
     } catch (e) {
       console.warn('Kunne ikke hente gemt historik fra localStorage:', e);
+    }
+
+    try {
+      const storedCap = localStorage.getItem(CAPITAL_STORAGE_KEY);
+      if (storedCap) {
+        const val = parseInt(storedCap, 10);
+        if ([10000, 25000, 50000, 100000].includes(val)) {
+          setMaxCapitalDkk(val);
+        }
+      }
+    } catch {
+      // ignore
     }
 
     // Synkroniser med den persistente server-side database (/api/council)
@@ -308,6 +346,15 @@ ${verdict.judgeThinking}
     setSearchTicker('');
     setActiveTickerQuery(null);
     fetchScan(source, null);
+  };
+
+  const handleSelectCapitalFrame = (amt: number) => {
+    setMaxCapitalDkk(amt);
+    try {
+      localStorage.setItem(CAPITAL_STORAGE_KEY, amt.toString());
+    } catch {
+      // ignore
+    }
   };
 
   const handleConveneCouncil = async (
@@ -1942,6 +1989,193 @@ ${verdict.judgeThinking}
                   )}
                 </div>
               )}
+
+              {/* Quantitative Trade Execution, ATR Volatility & Position Sizing Plan */}
+              {(() => {
+                const plan = generateTradeExecutionPlan(selectedTx, activeVerdict, maxCapitalDkk);
+                const isDkk = selectedTx.ticker.endsWith('.CO') || selectedTx.exchange?.includes('Copenhagen');
+                const isSek = selectedTx.ticker.endsWith('.ST') || selectedTx.exchange?.includes('Stockholm');
+                const currSym = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';
+
+                return (
+                  <div className="p-4 rounded-lg bg-slate-900/90 border border-slate-800 shadow-xl space-y-4">
+                    {/* Header with Title, Volatility Tag & Capital Selector */}
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-2 rounded bg-emerald-950/60 border border-emerald-700/50 text-emerald-400">
+                          <Calculator className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-xs font-mono font-bold tracking-wider text-slate-200">
+                              📐 QUANTITATIVE EXECUTION & RISK PLAN (FRIE MIDLER)
+                            </h4>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
+                                plan.status === 'DO_NOT_TRADE'
+                                  ? 'bg-rose-950/60 border-rose-800/80 text-rose-300'
+                                  : plan.volatilityTag.includes('Ekstrem')
+                                  ? 'bg-amber-950/60 border-amber-700/80 text-amber-300'
+                                  : 'bg-emerald-950/60 border-emerald-700/80 text-emerald-300'
+                              }`}
+                            >
+                              {plan.volatilityTag}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                            ATR-baseret stop-loss, positionsstørrelse & 2-tranche limit eksekvering
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Capital Frame Selector */}
+                      <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded border border-slate-800 self-start md:self-auto">
+                        <span className="text-[10px] font-mono text-slate-400 px-2 font-medium">Allokeringsramme:</span>
+                        {[10000, 25000, 50000, 100000].map((amt) => {
+                          const isSelected = maxCapitalDkk === amt;
+                          return (
+                            <button
+                              key={amt}
+                              onClick={() => handleSelectCapitalFrame(amt)}
+                              className={`px-2 py-1 rounded text-[10px] font-mono font-bold transition-all ${
+                                isSelected
+                                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/40'
+                                  : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                              }`}
+                            >
+                              {(amt / 1000).toFixed(0)}k kr.
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {plan.status === 'DO_NOT_TRADE' ? (
+                      <div className="p-3.5 rounded bg-rose-950/30 border border-rose-900/60 text-rose-200 text-xs font-mono space-y-1">
+                        <div className="flex items-center gap-2 font-bold text-rose-300">
+                          <AlertTriangle className="w-4 h-4 text-rose-400" />
+                          <span>KAPITALBESKYTTELSE AKTIV // INGEN ORDRE ANBEFALES</span>
+                        </div>
+                        <p className="text-slate-300 text-[11px] leading-relaxed">
+                          {plan.reason}
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        {/* 4 Quantitative Metric Cards */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                          {/* Card 1: Allokering & Aktier */}
+                          <div className="p-3 rounded bg-slate-950/70 border border-slate-800 space-y-1">
+                            <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                              <span>Position & Aktier</span>
+                              <Zap className="w-3.5 h-3.5 text-emerald-400" />
+                            </div>
+                            <div className="text-base font-bold font-mono text-emerald-400">
+                              {plan.recommendedAllocationDkk.toLocaleString('da-DK')} DKK
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-300">
+                              {plan.totalShares} aktier {!isDkk && `($${plan.recommendedAllocationUsd.toLocaleString('en-US')})`}
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/60">
+                              T1: {plan.tranche1.shares} stk. | T2: {plan.tranche2.shares} stk.
+                            </div>
+                          </div>
+
+                          {/* Card 2: Entry Zone */}
+                          <div className="p-3 rounded bg-slate-950/70 border border-slate-800 space-y-1">
+                            <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                              <span>Entry Zone</span>
+                              <Target className="w-3.5 h-3.5 text-cyan-400" />
+                            </div>
+                            <div className="text-base font-bold font-mono text-cyan-300">
+                              {currSym}{plan.entryZoneMin} - {currSym}{plan.entryZoneMax}
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-300">
+                              Insider køb: {currSym}{selectedTx.pricePerShare || '-'}
+                            </div>
+                            <div className="text-[10px] font-mono text-cyan-400/90 truncate pt-1 border-t border-slate-800/60" title={plan.entryZoneLabel}>
+                              {plan.entryZoneLabel}
+                            </div>
+                          </div>
+
+                          {/* Card 3: ATR Volatilitet Stop-Loss */}
+                          <div className="p-3 rounded bg-slate-950/70 border border-slate-800 space-y-1">
+                            <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                              <span>ATR Stop-Loss (Hard)</span>
+                              <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+                            </div>
+                            <div className="text-base font-bold font-mono text-rose-400">
+                              {currSym}{plan.stopLossPrice}
+                            </div>
+                            <div className="text-[11px] font-mono text-rose-300">
+                              {plan.stopLossRiskPct}% risiko fra aktuel
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/60">
+                              Maks tab: -{plan.maxLossDkk.toLocaleString('da-DK')} DKK
+                            </div>
+                          </div>
+
+                          {/* Card 4: Kursmål & Risk/Reward */}
+                          <div className="p-3 rounded bg-slate-950/70 border border-slate-800 space-y-1">
+                            <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                              <span>Kursmål (90d Modstand)</span>
+                              <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                            </div>
+                            <div className="text-base font-bold font-mono text-emerald-300">
+                              {currSym}{plan.targetPrice1} (+{plan.targetReturnPct1}%)
+                            </div>
+                            <div className="text-[11px] font-mono text-amber-300 font-semibold">
+                              Risk / Reward: 1 : {plan.riskRewardRatio}
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/60">
+                              14d ATR: {currSym}{selectedTx.atr14d || '-'} ({selectedTx.dailyVolatilityPct || '-'}%/dag)
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Tranche Eksekverings-Instruktioner */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                          <div className="p-3 rounded bg-emerald-950/20 border border-emerald-900/50 space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-mono font-bold text-emerald-400 flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                                TRANCHE 1: 60% EKSEKVERING
+                              </span>
+                              <span className="text-[11px] font-mono font-bold text-emerald-300">
+                                {plan.tranche1.allocationDkk.toLocaleString('da-DK')} DKK
+                              </span>
+                            </div>
+                            <p className="text-xs font-mono text-slate-200 font-medium">
+                              {plan.tranche1.shares} aktier @ {currSym}{plan.tranche1.price} (Markedsåbning / Limit)
+                            </p>
+                            <p className="text-[10px] font-mono text-slate-400 leading-relaxed">
+                              Lægges straks for at sikre indgangskurs tæt på insiderens køb og undgå at misse et ryk opad.
+                            </p>
+                          </div>
+
+                          <div className="p-3 rounded bg-cyan-950/20 border border-cyan-900/50 space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-mono font-bold text-cyan-400 flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
+                                TRANCHE 2: 40% PULLBACK LIMIT
+                              </span>
+                              <span className="text-[11px] font-mono font-bold text-cyan-300">
+                                {plan.tranche2.allocationDkk.toLocaleString('da-DK')} DKK
+                              </span>
+                            </div>
+                            <p className="text-xs font-mono text-slate-200 font-medium">
+                              {plan.tranche2.shares} aktier @ {currSym}{plan.tranche2.price} (Støtte / Pullback)
+                            </p>
+                            <p className="text-[10px] font-mono text-slate-400 leading-relaxed">
+                              Lægges som stående limit-ordre i bunden af ordrebogen for at gribe eventuelle intradag-dips.
+                            </p>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* CIO Extended Thinking Trace Fold-Out Panel */}
               {activeVerdict.judgeThinking && (

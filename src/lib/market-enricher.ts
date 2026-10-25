@@ -15,6 +15,10 @@ interface MarketDataSummary {
   avgDailyDollarVolume?: number;
   shortName?: string;
   longName?: string;
+  atr14d?: number;
+  dailyVolatilityPct?: number;
+  supportLow30d?: number;
+  resistanceHigh90d?: number;
 }
 
 interface NewsHeadline {
@@ -61,6 +65,8 @@ async function fetchMarketPrices(
   const data = await res.json();
   const res0 = data.chart?.result?.[0];
   const meta = res0?.meta;
+  const rawHighs = res0?.indicators?.quote?.[0]?.high;
+  const rawLows = res0?.indicators?.quote?.[0]?.low;
   const rawCloses = res0?.indicators?.quote?.[0]?.close;
   const rawVolumes = res0?.indicators?.quote?.[0]?.volume;
 
@@ -105,6 +111,50 @@ async function fetchMarketPrices(
     }
   }
 
+  // Beregn 14-dages ATR (Average True Range), normal daglig volatilitet samt support/resistance
+  let atr14d: number | undefined;
+  let dailyVolatilityPct: number | undefined;
+  let supportLow30d: number | undefined;
+  let resistanceHigh90d: number | undefined;
+
+  if (Array.isArray(rawHighs) && Array.isArray(rawLows) && Array.isArray(rawCloses)) {
+    const trs: number[] = [];
+    for (let i = 1; i < rawCloses.length; i++) {
+      const h = rawHighs[i];
+      const l = rawLows[i];
+      const prevC = rawCloses[i - 1];
+      if (
+        typeof h === 'number' &&
+        typeof l === 'number' &&
+        typeof prevC === 'number' &&
+        h > 0 &&
+        l > 0 &&
+        prevC > 0
+      ) {
+        const tr = Math.max(h - l, Math.abs(h - prevC), Math.abs(l - prevC));
+        trs.push(tr);
+      }
+    }
+
+    if (trs.length >= 5) {
+      const last14 = trs.slice(-14);
+      const avgAtr = last14.reduce((sum, val) => sum + val, 0) / last14.length;
+      atr14d = Number(avgAtr.toFixed(2));
+      dailyVolatilityPct = Number(((atr14d / currentPrice) * 100).toFixed(2));
+    }
+
+    const validLows = rawLows.filter((l: unknown): l is number => typeof l === 'number' && l > 0);
+    const validHighs = rawHighs.filter((h: unknown): h is number => typeof h === 'number' && h > 0);
+
+    if (validLows.length > 0) {
+      const recentLows = validLows.slice(-22);
+      supportLow30d = Number(Math.min(...recentLows).toFixed(2));
+    }
+    if (validHighs.length > 0) {
+      resistanceHigh90d = Number(Math.max(...validHighs).toFixed(2));
+    }
+  }
+
   return {
     currentPrice: Number(currentPrice.toFixed(2)),
     recentPriceChange30dPct,
@@ -117,6 +167,10 @@ async function fetchMarketPrices(
     avgDailyDollarVolume,
     shortName: meta?.shortName,
     longName: meta?.longName,
+    atr14d,
+    dailyVolatilityPct,
+    supportLow30d,
+    resistanceHigh90d,
   };
 }
 
@@ -401,6 +455,10 @@ export async function enrichTransactionWithMarketData(
     if (prices) {
       tx.recentPriceChange30dPct = prices.recentPriceChange30dPct;
       tx.currentMarketPrice = prices.currentPrice;
+      tx.atr14d = prices.atr14d;
+      tx.dailyVolatilityPct = prices.dailyVolatilityPct;
+      tx.supportLow30d = prices.supportLow30d;
+      tx.resistanceHigh90d = prices.resistanceHigh90d;
 
       if (tx.pricePerShare > 0 && tx.transactionCode === 'P') {
         const diffPct = Number(

@@ -32,6 +32,38 @@ export interface InsiderTransaction {
   is10b51Plan?: boolean; // True hvis handlen er udført under en forudbestemt Rule 10b5-1 automatisk handelsplan
   footnotesSummary?: string; // Ekstraherede fodnoter fra indberetningen
   trackRecord?: InsiderTrackRecord; // Historisk træfsikkerhed og win-rate for insideren/ledelsen
+  atr14d?: number; // 14-dages Average True Range i aktiens valuta
+  dailyVolatilityPct?: number; // (atr14d / currentMarketPrice) * 100 - normal daglig udsving i %
+  supportLow30d?: number; // Laveste lukkekurs de seneste 30 dage
+  resistanceHigh90d?: number; // Højeste kurs de seneste 90 dage
+}
+
+export interface TradeTranche {
+  shares: number;
+  price: number;
+  allocationDkk: number;
+  allocationUsd: number;
+  description: string;
+}
+
+export interface TradeExecutionPlan {
+  status: 'ACTIVE_PLAN' | 'DO_NOT_TRADE';
+  reason?: string;
+  recommendedAllocationDkk: number;
+  recommendedAllocationUsd: number;
+  totalShares: number;
+  entryZoneMin: number;
+  entryZoneMax: number;
+  entryZoneLabel: string;
+  stopLossPrice: number;
+  stopLossRiskPct: number;
+  maxLossDkk: number;
+  targetPrice1: number;
+  targetReturnPct1: number;
+  riskRewardRatio: number;
+  tranche1: TradeTranche;
+  tranche2: TradeTranche;
+  volatilityTag: string;
 }
 
 export type TrackRecordReputation =
