@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Cpu,
+  ExternalLink,
   Eye,
   EyeOff,
   FileText,
@@ -82,6 +83,12 @@ export default function Dashboard() {
   const [judgeTier, setJudgeTier] = useState<'opus' | 'sonnet'>('opus');
   const [showThinking, setShowThinking] = useState<boolean>(true);
   const [memoCopied, setMemoCopied] = useState<boolean>(false);
+  const [autoPilotRunning, setAutoPilotRunning] = useState<boolean>(false);
+  const [autoPilotProgress, setAutoPilotProgress] = useState<{
+    current: number;
+    total: number;
+    ticker: string;
+  } | null>(null);
 
   const generateInvestmentMemoMarkdown = (tx: InsiderTransaction, verdict: CouncilVerdict): string => {
     const dateFormatted = tx.filingDate || new Date().toISOString().split('T')[0];
@@ -367,6 +374,106 @@ ${verdict.judgeThinking}
     }
   };
 
+  const handleRunAutoPilotTop3 = async () => {
+    if (autoPilotRunning || loading) return;
+
+    // 1. Filtrer godkendte kandidater, der bestod hard filter og er handlbare i DK
+    const passedTradable = items.filter(
+      (item) => item.result.passedHardFilter && item.transaction.isTradableInDK !== false
+    );
+
+    if (passedTradable.length === 0) {
+      alert('Ingen godkendte og handlbare transaktioner fundet i det aktuelle scan.');
+      return;
+    }
+
+    // Sorter efter Gemini Pre-Score faldende
+    const sorted = [...passedTradable].sort(
+      (a, b) => b.result.geminiPreScore - a.result.geminiPreScore
+    );
+
+    // Prioriter dem, der ikke allerede ligger i råds-cachen for denne tier
+    const unanalyzed = sorted.filter((item) => {
+      const rec = verdictHistory[item.transaction.id];
+      return !rec || (rec.verdict.modelsUsed?.judgeTier && rec.verdict.modelsUsed.judgeTier !== judgeTier);
+    });
+
+    const candidates = unanalyzed.length >= 3 ? unanalyzed.slice(0, 3) : sorted.slice(0, 3);
+
+    setAutoPilotRunning(true);
+    setActiveTab('radar');
+
+    const completed: Array<{ tx: InsiderTransaction; verdict: CouncilVerdict }> = [];
+    let currentHistory = { ...verdictHistory };
+
+    try {
+      for (let i = 0; i < candidates.length; i++) {
+        const item = candidates[i];
+        const tx = item.transaction;
+
+        setAutoPilotProgress({
+          current: i + 1,
+          total: candidates.length,
+          ticker: tx.ticker,
+        });
+
+        // Tjek om eksisterende dom findes for denne tier (spar tokens)
+        const existing = currentHistory[tx.id];
+        if (
+          existing &&
+          (!existing.verdict.modelsUsed?.judgeTier ||
+            existing.verdict.modelsUsed.judgeTier === judgeTier)
+        ) {
+          completed.push({ tx, verdict: existing.verdict });
+          continue;
+        }
+
+        const res = await fetch('/api/council', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transaction: tx, judgeTier }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.verdict) {
+            const newRecord: SavedVerdictItem = {
+              transaction: tx,
+              verdict: data.verdict,
+              savedAt: new Date().toISOString(),
+            };
+            currentHistory = { ...currentHistory, [tx.id]: newRecord };
+            setVerdictHistory(currentHistory);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(currentHistory));
+            } catch (storageErr) {
+              console.warn(storageErr);
+            }
+            completed.push({ tx, verdict: data.verdict });
+          }
+        }
+      }
+
+      // Find vinderen med højest asymmetryScore og vis i The Council Chamber
+      if (completed.length > 0) {
+        completed.sort((a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore);
+        const winner = completed[0];
+        setSelectedTx(winner.tx);
+        setActiveVerdict(winner.verdict);
+
+        setTimeout(() => {
+          const chamberEl = document.getElementById('council-chamber');
+          if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
+        }, 300);
+      }
+    } catch (err) {
+      console.error('Fejl under Auto-Pilot:', err);
+    } finally {
+      setAutoPilotRunning(false);
+      setAutoPilotProgress(null);
+    }
+  };
+
   // KPI Beregninger
   const totalScanned = items.length;
   const hardFilterRejected = items.filter((i) => !i.result.passedHardFilter).length;
@@ -516,11 +623,30 @@ ${verdict.judgeThinking}
             {/* Scan Refresh Button */}
             <button
               onClick={() => fetchScan(source, activeTickerQuery)}
-              disabled={loading}
+              disabled={loading || autoPilotRunning}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-mono text-slate-200 transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-cyan-400' : ''}`} />
               Scan
+            </button>
+
+            {/* Auto-Pilot Top 3 Button */}
+            <button
+              onClick={handleRunAutoPilotTop3}
+              disabled={loading || autoPilotRunning}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded text-xs font-mono font-bold transition-all shadow-md ${
+                autoPilotRunning
+                  ? 'bg-amber-500/20 border border-amber-500/60 text-amber-300 shadow-amber-950 animate-pulse'
+                  : 'bg-gradient-to-r from-purple-900 to-cyan-900 hover:from-purple-800 hover:to-cyan-800 border border-cyan-500/60 text-cyan-200 hover:text-white shadow-cyan-950'
+              }`}
+              title="Kør automatisk The Council på de 3 stærkeste godkendte picks og vis vinderen"
+            >
+              <Zap className={`w-3.5 h-3.5 ${autoPilotRunning ? 'text-amber-400 animate-spin' : 'text-cyan-400'}`} />
+              <span>
+                {autoPilotRunning && autoPilotProgress
+                  ? `Auto-Pilot: Voterer ${autoPilotProgress.current}/${autoPilotProgress.total} (${autoPilotProgress.ticker})...`
+                  : '⚡ Auto-Pilot (Top 3 til Rådet)'}
+              </span>
             </button>
           </div>
         </div>
@@ -678,6 +804,24 @@ ${verdict.judgeThinking}
           </div>
         )}
 
+        {/* Auto-Pilot Live Indicator Banner */}
+        {autoPilotRunning && autoPilotProgress && (
+          <div className="p-4 rounded bg-purple-950/70 border border-purple-500/80 text-purple-200 text-xs font-mono flex items-center justify-between gap-3 shadow-lg shadow-purple-950/40 animate-pulse">
+            <div className="flex items-center gap-2.5">
+              <Zap className="w-4 h-4 text-amber-400 animate-spin" />
+              <div>
+                <span className="font-bold text-amber-300">⚡ AUTO-PILOT AKTIV: </span>
+                <span>The Council voterer på </span>
+                <span className="font-bold text-cyan-300">${autoPilotProgress.ticker}</span>
+                <span> ({autoPilotProgress.current} af {autoPilotProgress.total} kandidater)...</span>
+              </div>
+            </div>
+            <div className="text-[11px] text-purple-300/80 hidden sm:block">
+              Kører Claude Sonnet Specialister + Claude Opus CIO med Extended Thinking
+            </div>
+          </div>
+        )}
+
         {/* TAB 1: RADAR TABLE */}
         {activeTab === 'radar' && (
           <div className="border border-slate-800 rounded bg-slate-900/40 overflow-hidden">
@@ -832,6 +976,47 @@ ${verdict.judgeThinking}
                                   ) : null}
                                 </span>
                               ) : null}
+                            </div>
+                            {/* Quick Broker / Chart Links */}
+                            <div className="mt-1.5 flex items-center gap-1.5 text-[10px] font-mono">
+                              <a
+                                href={`https://finance.yahoo.com/quote/${encodeURIComponent(tx.ticker)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-slate-400 hover:text-cyan-300 transition-colors flex items-center gap-0.5"
+                                title="Åbn chart og nøgletal på Yahoo Finance"
+                              >
+                                <span>📈 Yahoo</span>
+                                <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                              </a>
+                              <span className="text-slate-600">•</span>
+                              <a
+                                href={`https://www.nordnet.dk/markedet/aktiekurser?query=${encodeURIComponent(
+                                  tx.ticker.replace(/\.(CO|ST)$/i, '')
+                                )}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-slate-400 hover:text-emerald-300 transition-colors flex items-center gap-0.5"
+                                title="Søg aktien på Nordnet"
+                              >
+                                <span>🔎 Nordnet</span>
+                                <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                              </a>
+                              {tx.secFilingUrl && (
+                                <>
+                                  <span className="text-slate-600">•</span>
+                                  <a
+                                    href={tx.secFilingUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-slate-400 hover:text-purple-300 transition-colors flex items-center gap-0.5"
+                                    title="Åbn officiel indberetning"
+                                  >
+                                    <span>📄 Filing</span>
+                                    <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                                  </a>
+                                </>
+                              )}
                             </div>
                           </td>
 
@@ -1423,6 +1608,41 @@ ${verdict.judgeThinking}
                         ) : null}
                       </div>
                     )}
+
+                    {/* Direct Broker & Chart Quick Links */}
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2 font-mono text-xs">
+                      <a
+                        href={`https://finance.yahoo.com/quote/${encodeURIComponent(selectedTx.ticker)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 transition-colors flex items-center gap-1.5"
+                      >
+                        <span>📈 Yahoo Finance Chart</span>
+                        <ExternalLink className="w-3 h-3 text-cyan-400" />
+                      </a>
+                      <a
+                        href={`https://www.nordnet.dk/markedet/aktiekurser?query=${encodeURIComponent(
+                          selectedTx.ticker.replace(/\.(CO|ST)$/i, '')
+                        )}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 rounded bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-700 text-emerald-300 transition-colors flex items-center gap-1.5"
+                      >
+                        <span>🔎 Søg på Nordnet</span>
+                        <ExternalLink className="w-3 h-3 text-emerald-400" />
+                      </a>
+                      {selectedTx.secFilingUrl && (
+                        <a
+                          href={selectedTx.secFilingUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2.5 py-1 rounded bg-purple-950/60 hover:bg-purple-900/60 border border-purple-700 text-purple-300 transition-colors flex items-center gap-1.5"
+                        >
+                          <span>📄 Officiel Filing</span>
+                          <ExternalLink className="w-3 h-3 text-purple-400" />
+                        </a>
+                      )}
+                    </div>
                   </div>
 
                   {/* Verdict Badge & Score */}
