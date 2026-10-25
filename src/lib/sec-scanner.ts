@@ -743,3 +743,74 @@ export async function scanTickerSecForm4s(ticker: string): Promise<InsiderTransa
     return [];
   }
 }
+
+/**
+ * Henter og udtrækker de juridiske fodnoter (<footnotes>) fra en Form 4 filing via SEC EDGAR.
+ * Stripper automatisk eventuelle XSLT-stylesheets (/xslF345.../) for at hente den rå XML.
+ */
+export async function fetchSecForm4Footnotes(secUrl?: string): Promise<string[]> {
+  if (!secUrl || !secUrl.includes('sec.gov')) {
+    return [];
+  }
+
+  const userAgent = process.env.SEC_USER_AGENT || 'InsiderOps/1.0 (mads.rosengaard2003@gmail.com)';
+  const cleanUrl = secUrl.replace(/\/xsl[^\/]+\//i, '/');
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+    const res = await fetch(cleanUrl, {
+      headers: {
+        'User-Agent': userAgent,
+        Accept: 'application/xml, text/xml, text/html, */*',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) return [];
+
+    let text = await res.text();
+
+    // Hvis det var et index-dokument i stedet for direkte XML, find XML-linket
+    if (cleanUrl.endsWith('.htm') || cleanUrl.endsWith('.html') || !cleanUrl.endsWith('.xml')) {
+      const xmlMatch = text.match(/href=["'](\/Archives\/edgar\/data\/[^"']+\.xml)["']/i);
+      if (xmlMatch) {
+        const rawXmlUrl = 'https://www.sec.gov' + xmlMatch[1].replace(/\/xsl[^\/]+\//i, '/');
+        const xmlRes = await fetch(rawXmlUrl, {
+          headers: { 'User-Agent': userAgent },
+        });
+        if (xmlRes.ok) {
+          text = await xmlRes.text();
+        }
+      }
+    }
+
+    const footnotesBlock = text.match(/<footnotes>([\s\S]*?)<\/footnotes>/i);
+    if (!footnotesBlock) {
+      return [];
+    }
+
+    const matches = [...footnotesBlock[1].matchAll(/<footnote id=["']([^"']+)["']>([\s\S]*?)<\/footnote>/gi)];
+    return matches
+      .map((m) => {
+        const id = m[1];
+        const cleanText = m[2]
+          .replace(/<[^>]+>/g, '')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;|&#39;/g, "'")
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&amp;/g, '&')
+          .replace(/\s+/g, ' ')
+          .trim();
+        return `[${id}] ${cleanText}`;
+      })
+      .filter((fn) => fn.length > 5);
+  } catch (err) {
+    console.warn(`Kunne ikke hente SEC fodnoter fra ${secUrl}:`, err);
+    return [];
+  }
+}
+

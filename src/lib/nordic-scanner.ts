@@ -110,8 +110,9 @@ Regler:
 - Angiv shares, pricePerShareDkk (hvis i EUR eller SEK, omregn til DKK ca 1 EUR = 7.46 DKK, 1 SEK = 0.65 DKK).
 - totalValueDkk = shares * pricePerShareDkk.`;
 
+      const fastModel = process.env.GEMINI_FAST_MODEL || 'gemini-3-flash-preview';
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: fastModel,
         contents: prompt,
         config: {
           responseMimeType: 'application/json',

@@ -351,6 +351,12 @@ BEHOLDNING EFTER KØB: ${tx.sharesOwnedFollowing.toLocaleString()} aktier
 FORØGELSE AF EGEN BEHOLDNING: +${tx.holdingsIncreasePct}%
 CLUSTER-KØB: ${tx.isClusterBuy ? `JA (${tx.clusterCount ?? 2} ledelsespersoner)` : 'NEJ'}
 KURSUDVIKLING SENESTE 30 DAGE: ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'Ukendt'}
+AKTUEL MARKEDSKURS: ${tx.currentMarketPrice !== undefined ? `$${tx.currentMarketPrice} USD` : 'Ukendt'}
+AFKAST / DISKONT SIDEN KØB: ${
+    tx.returnSinceBuyPct !== undefined
+      ? `${tx.returnSinceBuyPct}% (${tx.isTradingBelowInsiderPrice ? 'HANDLER UNDER INSIDERENS KØBSKURS - RABAT/TAB' : 'HANDLER OVER INSIDERENS KØBSKURS - GEVINST'})`
+      : 'Ukendt'
+  }
 SEC FILING URL: ${tx.secFilingUrl}
 KONTEKST / NOTER: ${tx.contextNotes || 'Ingen yderligere noter'}
   `.trim();
@@ -370,6 +376,7 @@ SKRIV PÅ DANSK. Maksimalt 140 ord. Skarp, analytisk tone.`;
   // Specialist 3: The Forensic Skeptic (Sonnet)
   const skepticSystem = `Du er "The Forensic Skeptic" (Djævelens Advokat) i investeringsrådet The Council.
 Dit eneste mål er at DRÆBE købs-tesen og beskytte fondens kapital. Find alle svagheder: Er det et PR-stunt, en "faldende kniv" / value trap, likviditetsproblemer, eller forsøg på at skabe falsk tryghed før dårlige nyheder?
+Tjek altid SEC Form 4 fodnoter og prisforskellen mellem insiderens købskurs og aktuel kurs. Hvis en 10% ejer køber til en kurs markant OVER markedsprisen (f.eks. +30% over børskurs), eller aktien er kollapset >30% lige efter købet, skal du straks advare om, at det kan være en nødlidende rekapitalisering, gældskonvertering eller 'falling knife' fremfor et normalt åbent markedskøb!
 SKRIV PÅ DANSK. Maksimalt 140 ord. Nådesløs og kritisk.`;
 
   try {
@@ -463,7 +470,7 @@ Gennemfør en grundig intern ræsonnering og afsig din endelige CIO-dom som JSON
       timestamp: new Date().toISOString(),
       judgeThinking: judgeCallResult.thinking,
       modelsUsed: {
-        gatekeeper: 'Gemini 2.5 Flash',
+        gatekeeper: process.env.GEMINI_FAST_MODEL || 'Gemini 3 Flash Preview',
         specialists: models.specialistModel,
         judge: `${judgeModel}${judgeCallResult.thinking ? ' (Extended Thinking)' : ''}`,
         judgeTier,
