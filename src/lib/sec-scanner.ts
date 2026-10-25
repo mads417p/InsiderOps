@@ -449,10 +449,134 @@ export async function getCikForTicker(
 }
 
 /**
- * Henter seneste Form 4 filings fra SEC EDGAR Atom/XML feedet i parallelle batches af 8.
- * Summerer del-linjer og beriger godkendte handler med live kurs- og nyhedsdata.
+ * Dedikeret "Pure Kode P" Open-Market Purchase Hunter.
+ * Henter bekræftede amerikanske åbne markedskøb (Kode P) > $50.000 fra de seneste handelsdage.
+ * Detekterer cluster-buys og beriger transaktionerne med live markedskurser og alpha.
  */
-export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTransaction[]> {
+export async function fetchHighConvictionOpenMarketBuys(limit: number = 20): Promise<InsiderTransaction[]> {
+  const url = `http://openinsider.com/screener?s=&o=&pl=&ph=&ll=&lh=&fd=14&fdr=&td=0&tdr=&feession=&feession=&xp=1&vl=50&vh=&ocl=&och=&sic1=-1&sicl=100&sich=9999&grp=0&nfl=&nfh=&nil=&nih=&nol=&noh=&v2l=&v2h=&oc2l=&oc2h=&sortcol=0&cnt=${encodeURIComponent(
+    limit
+  )}&page=1`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      console.warn(`OpenInsider returnerede status ${res.status}`);
+      return [];
+    }
+
+    const html = await res.text();
+    const tableMatch = html.match(/<table[^>]*class=["']tinytable["'][\s\S]*?<\/table>/i);
+    if (!tableMatch) return [];
+
+    const trMatches = [...tableMatch[0].matchAll(/<tr[\s\S]*?<\/tr>/gi)];
+    const transactions: InsiderTransaction[] = [];
+
+    for (let i = 1; i < trMatches.length; i++) {
+      const rowHtml = trMatches[i][0];
+      const tdMatches = [...rowHtml.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => m[1]);
+      if (tdMatches.length < 13) continue;
+
+      const filingDate = tdMatches[1].replace(/<[^>]+>/g, '').trim().split(' ')[0];
+      const secLinkMatch = rowHtml.match(
+        /href="(https?:\/\/(?:www\.)?sec\.gov\/Archives\/edgar\/data\/[^\s"'>]+)"/i
+      );
+      const secFilingUrl = secLinkMatch
+        ? secLinkMatch[1].replace(/^http:/, 'https:')
+        : 'https://www.sec.gov';
+
+      const tickerMatch =
+        tdMatches[3].match(/href="\/([A-Za-z0-9.\-]+)"/i) ||
+        tdMatches[3].match(/>([A-Z0-9.\-]+)<\/a>/i);
+      const ticker = tickerMatch ? tickerMatch[1].toUpperCase() : 'UNKNOWN';
+      if (!ticker || ticker === 'UNKNOWN') continue;
+
+      const companyName = tdMatches[4].replace(/<[^>]+>/g, '').trim();
+      const insiderName = tdMatches[5].replace(/<[^>]+>/g, '').trim();
+      const insiderTitle = tdMatches[6].replace(/<[^>]+>/g, '').trim() || 'Insider';
+
+      const priceStr = tdMatches[8].replace(/<[^>]+>/g, '').replace(/[$,]/g, '').trim();
+      const pricePerShare = parseFloat(priceStr) || 0;
+
+      const qtyStr = tdMatches[9].replace(/<[^>]+>/g, '').replace(/[+,\s]/g, '').trim();
+      const shares = parseInt(qtyStr, 10) || 0;
+
+      const ownedStr = tdMatches[10].replace(/<[^>]+>/g, '').replace(/[,]/g, '').trim();
+      const sharesOwnedFollowing = parseInt(ownedStr, 10) || 0;
+
+      const deltaOwnStr = tdMatches[11].replace(/<[^>]+>/g, '').trim();
+      let holdingsIncreasePct = 0;
+      if (deltaOwnStr.toLowerCase().includes('new')) {
+        holdingsIncreasePct = 100.0;
+      } else {
+        const clean = deltaOwnStr.replace(/[%,\s]/g, '').replace(/^\+/, '');
+        holdingsIncreasePct = parseFloat(clean) || 0;
+      }
+
+      const valStr = tdMatches[12].replace(/<[^>]+>/g, '').replace(/[+$,\s]/g, '').trim();
+      const totalValueUsd = parseFloat(valStr) || shares * pricePerShare;
+
+      transactions.push({
+        id: `live-buy-${ticker}-${filingDate}-${shares}-${Math.round(totalValueUsd)}`,
+        filingDate,
+        ticker,
+        companyName,
+        insiderName,
+        insiderTitle,
+        transactionCode: 'P',
+        shares,
+        pricePerShare,
+        totalValueUsd,
+        sharesOwnedFollowing,
+        holdingsIncreasePct,
+        isClusterBuy: false,
+        secFilingUrl,
+      });
+    }
+
+    // Detekter cluster buys inden for batchet
+    const tickerCounts = new Map<string, number>();
+    for (const t of transactions) {
+      tickerCounts.set(t.ticker, (tickerCounts.get(t.ticker) || 0) + 1);
+    }
+    for (const t of transactions) {
+      const count = tickerCounts.get(t.ticker) || 1;
+      if (count > 1) {
+        t.isClusterBuy = true;
+        t.clusterCount = count;
+      }
+    }
+
+    // Berig med Yahoo Finance kurs- og nyhedsdata
+    await Promise.allSettled(
+      transactions.slice(0, 15).map((tx) => enrichTransactionWithMarketData(tx))
+    );
+
+    return transactions;
+  } catch (err) {
+    console.warn('Kunne ikke hente Open Market Purchases fra hunter kilde:', err);
+    return [];
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Henter seneste Form 4 filings fra det rå SEC EDGAR Atom/XML feed.
+ */
+async function fetchRawSecEdgarAtomFeed(limit: number = 8): Promise<InsiderTransaction[]> {
   const userAgent = process.env.SEC_USER_AGENT || 'InsiderOps/1.0 (mads.rosengaard2003@gmail.com)';
   const feedUrl =
     'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&company=&dateb=&owner=only&start=0&count=40&output=atom';
@@ -466,22 +590,17 @@ export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTra
     });
 
     if (!feedResponse.ok) {
-      console.warn(`SEC EDGAR feed returnerede status ${feedResponse.status}. Falder tilbage til mock-transaktioner.`);
-      return getMockTransactions();
+      return [];
     }
 
     const feedXml = await feedResponse.text();
     const entryMatches = [...feedXml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
 
     if (!entryMatches || entryMatches.length === 0) {
-      console.warn('Ingen entries fundet i SEC feed. Falder tilbage til mock-transaktioner.');
-      return getMockTransactions();
+      return [];
     }
 
-    // Udvælg op til de første entries
-    const entriesToProcess = entryMatches.slice(0, Math.min(entryMatches.length, limit * 2, 32));
-
-    // Hent i batches af 8 ad gangen for at respektere SEC rate-limits (max 10 req/sekund)
+    const entriesToProcess = entryMatches.slice(0, Math.min(entryMatches.length, limit * 2, 16));
     const transactions: InsiderTransaction[] = [];
     const BATCH_SIZE = 8;
 
@@ -496,31 +615,56 @@ export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTra
       if (transactions.length >= limit) break;
     }
 
-    if (transactions.length === 0) {
+    return transactions;
+  } catch (err) {
+    console.warn('Fejl ved hentning af råt SEC Atom feed:', err);
+    return [];
+  }
+}
+
+/**
+ * Kombinerer den målrettede "Pure Kode P" Open-Market Purchase Hunter med det rå SEC EDGAR Atom feed.
+ * Giver brugeren 10-15 ægte amerikanske åbne markedskøb over $50k og viser samtidig at Hard Filteret afviser støj.
+ */
+export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTransaction[]> {
+  try {
+    const [hunterResult, rawSecResult] = await Promise.allSettled([
+      fetchHighConvictionOpenMarketBuys(15),
+      fetchRawSecEdgarAtomFeed(8),
+    ]);
+
+    const hunterBuys = hunterResult.status === 'fulfilled' ? hunterResult.value : [];
+    const rawFilings = rawSecResult.status === 'fulfilled' ? rawSecResult.value : [];
+
+    const combined: InsiderTransaction[] = [];
+    const seen = new Set<string>();
+
+    for (const tx of [...hunterBuys, ...rawFilings]) {
+      const key = `${tx.ticker}_${tx.filingDate}_${tx.shares}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        combined.push(tx);
+      }
+    }
+
+    if (combined.length === 0) {
       return getMockTransactions();
     }
 
-    // Beregn cluster buy på tværs af de fundne transaktioner
-    const tickerCounts = transactions.reduce<Record<string, number>>((acc, tx) => {
-      acc[tx.ticker] = (acc[tx.ticker] || 0) + 1;
-      return acc;
-    }, {});
-
-    for (const tx of transactions) {
-      const count = tickerCounts[tx.ticker] || 1;
+    // Genberegn cluster counts
+    const tickerCounts = new Map<string, number>();
+    for (const tx of combined) {
+      tickerCounts.set(tx.ticker, (tickerCounts.get(tx.ticker) || 0) + 1);
+    }
+    for (const tx of combined) {
+      const count = tickerCounts.get(tx.ticker) || 1;
       if (count > 1) {
         tx.isClusterBuy = true;
         tx.clusterCount = count;
       }
     }
 
-    // Berig transaktioner der består hard filter med live kurs- og nyhedsdata
-    const passingTxs = transactions.filter((tx) => applyHardFilter(tx).passed);
-    const toEnrich = passingTxs.length > 0 ? passingTxs.slice(0, 10) : transactions.slice(0, 3);
-
-    await Promise.all(toEnrich.map((tx) => enrichTransactionWithMarketData(tx)));
-
-    return transactions;
+    return combined;
   } catch (error) {
     console.warn('Uventet fejl i fetchLiveSecForm4s, falder tilbage til mock-transaktioner:', error);
     return getMockTransactions();
