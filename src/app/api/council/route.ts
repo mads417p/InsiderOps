@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { conveneCouncil } from '@/lib/claude-council';
 import { fetchSecForm4Footnotes } from '@/lib/sec-scanner';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
+import { fetchInsiderTrackRecord } from '@/lib/track-record';
 import { getSavedVerdicts, saveVerdict, deleteVerdict } from '@/lib/db';
 import { InsiderTransaction } from '@/types/insider';
 
@@ -88,6 +89,15 @@ export async function POST(request: Request) {
       }
     }
 
+    // Hent og beregn historisk track record for insideren / ledelsen hvis ikke allerede sat
+    if (!tx.trackRecord) {
+      try {
+        tx.trackRecord = await fetchInsiderTrackRecord(tx);
+      } catch (trErr) {
+        console.warn('Kunne ikke hente insider track record:', trErr);
+      }
+    }
+
     const verdict = await conveneCouncil(tx, judgeTier);
 
     // Gem automatisk dommen i server-databasen data/insiderops-db.json
@@ -105,6 +115,7 @@ export async function POST(request: Request) {
       success: true,
       judgeTier,
       verdict,
+      transaction: tx,
     });
   } catch (error: unknown) {
     if (

@@ -18,6 +18,7 @@ import {
   Scale,
   Search,
   ShieldAlert,
+  Target,
   Trash2,
   TrendingDown,
   TrendingUp,
@@ -139,7 +140,32 @@ ${clusterPeersStr}
 
 ---
 
-## 3. The Council: CIO Dom & Asymmetry Score
+## 3. Insider Track Record & Historisk Træfsikkerhed
+${
+  tx.trackRecord
+    ? `- **Status & Omdømme:** ${tx.trackRecord.reputationLabel}
+- **Tidligere registrerede køb (3-4 år):** ${tx.trackRecord.historicalBuysCount} handler
+- **Historisk Win-Rate:** ${tx.trackRecord.winRatePct}%
+- **Gennemsnitligt historisk afkast:** ${tx.trackRecord.avgReturnPct > 0 ? '+' : ''}${tx.trackRecord.avgReturnPct}%
+${
+  tx.trackRecord.notablePastTrades.length > 0
+    ? `\n### Udvalgte tidligere handler i aktien:\n` +
+      tx.trackRecord.notablePastTrades
+        .map(
+          (t) =>
+            `- **${t.date}:** ${t.insiderName} (${t.insiderTitle || 'Insider'}) købte @ $${t.price} ($${Math.round(
+              t.valueUsd
+            ).toLocaleString()}) -> Nuværende afkast: **${t.returnPct > 0 ? '+' : ''}${t.returnPct}%**`
+        )
+        .join('\n')
+    : ''
+}`
+    : '- Ingen historisk track record registreret for dette selskab.'
+}
+
+---
+
+## 4. The Council: CIO Dom & Asymmetry Score
 **Afgørelse:** ${verdict.verdict}  
 **Asymmetry Score:** ${verdict.asymmetryScore}/100  
 **Overskrift:** ${verdict.headline}  
@@ -149,7 +175,7 @@ ${verdict.synthesis}
 
 ---
 
-## 4. Specialisternes Rapporter (Claude Sonnet 5.5)
+## 5. Specialisternes Rapporter (Claude Sonnet 5.5)
 
 ### [The Insider Profiler]
 ${verdict.reports.profiler}
@@ -162,14 +188,14 @@ ${verdict.reports.skeptic}
 
 ---
 
-## 5. Fundamentale Noter & SEC Form 4 Fodnoter
+## 6. Fundamentale Noter & SEC Form 4 Fodnoter
 ${tx.contextNotes || 'Ingen yderligere noter registreret.'}
 
 ${
   verdict.judgeThinking
     ? `---
 
-## 6. CIO Extended Thinking Trace
+## 7. CIO Extended Thinking Trace
 \`\`\`
 ${verdict.judgeThinking}
 \`\`\`
@@ -299,6 +325,7 @@ ${verdict.judgeThinking}
       existing &&
       (!existing.verdict.modelsUsed?.judgeTier || existing.verdict.modelsUsed.judgeTier === targetTier)
     ) {
+      if (existing.transaction) setSelectedTx(existing.transaction);
       setActiveVerdict(existing.verdict);
       const chamberEl = document.getElementById('council-chamber');
       if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
@@ -320,8 +347,10 @@ ${verdict.judgeThinking}
       if (!res.ok) throw new Error('Fejl under rådsmøde');
       const data = await res.json();
       if (data.verdict) {
+        const enrichedTx = data.transaction || tx;
+        setSelectedTx(enrichedTx);
         const newRecord: SavedVerdictItem = {
-          transaction: tx,
+          transaction: enrichedTx,
           verdict: data.verdict,
           savedAt: new Date().toISOString(),
         };
@@ -1093,6 +1122,48 @@ ${verdict.judgeThinking}
                                   🤖 10b5-1 Auto-Plan
                                 </span>
                               )}
+                              {(() => {
+                                const tr = tx.trackRecord || verdictHistory[tx.id]?.transaction.trackRecord;
+                                if (!tr) return null;
+                                if (tr.reputation === 'SMART_MONEY_SNIPER') {
+                                  return (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950/90 border border-emerald-500 text-emerald-300 font-bold flex items-center gap-0.5"
+                                      title={tr.reputationLabel}
+                                    >
+                                      🎯 Sniper {tr.winRatePct}%
+                                    </span>
+                                  );
+                                }
+                                if (tr.reputation === 'EARLY_OR_BAGHOLDER') {
+                                  return (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.2 rounded bg-rose-950/90 border border-rose-600 text-rose-300 font-bold flex items-center gap-0.5"
+                                      title={tr.reputationLabel}
+                                    >
+                                      ⚠️ Bagholder
+                                    </span>
+                                  );
+                                }
+                                if (tr.reputation === 'FIRST_TIME_OR_RARE') {
+                                  return (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950/80 border border-cyan-700 text-cyan-300 font-medium flex items-center gap-0.5"
+                                      title={tr.reputationLabel}
+                                    >
+                                      🆕 1. gang
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span
+                                    className="text-[10px] px-1.5 py-0.2 rounded bg-blue-950/80 border border-blue-700 text-blue-300 font-medium flex items-center gap-0.5"
+                                    title={tr.reputationLabel}
+                                  >
+                                    📈 {tr.winRatePct}% Win
+                                  </span>
+                                );
+                              })()}
                             </div>
                           </td>
 
@@ -1751,6 +1822,126 @@ ${verdict.judgeThinking}
                   </span>
                 </div>
               </div>
+
+              {/* Dedicated Insider Track Record & Sniper Engine Card */}
+              {selectedTx.trackRecord && (
+                <div className="p-4 rounded bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
+                    <div className="flex items-center gap-2">
+                      <Target className="w-4 h-4 text-emerald-400" />
+                      <span className="font-mono text-xs font-bold text-slate-200 uppercase tracking-wider">
+                        INSIDER TRACK RECORD & HISTORISK TRÆFSIKKERHED
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-2.5 py-1 rounded text-xs font-mono font-bold border ${
+                          selectedTx.trackRecord.reputation === 'SMART_MONEY_SNIPER'
+                            ? 'bg-emerald-950/90 border-emerald-500 text-emerald-300 shadow-md shadow-emerald-950'
+                            : selectedTx.trackRecord.reputation === 'EARLY_OR_BAGHOLDER'
+                            ? 'bg-rose-950/90 border-rose-500 text-rose-300 shadow-md shadow-rose-950'
+                            : selectedTx.trackRecord.reputation === 'FIRST_TIME_OR_RARE'
+                            ? 'bg-cyan-950/80 border-cyan-600 text-cyan-300'
+                            : 'bg-blue-950/80 border-blue-600 text-blue-300'
+                        }`}
+                      >
+                        {selectedTx.trackRecord.reputationLabel}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Key Stats Bar */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-mono text-center">
+                    <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80">
+                      <div className="text-[10px] text-slate-400 uppercase">Tidligere Åbne Køb (3-4 år)</div>
+                      <div className="text-lg font-bold text-slate-100 mt-0.5">
+                        {selectedTx.trackRecord.historicalBuysCount}
+                        <span className="text-xs text-slate-500 font-normal ml-1">handler</span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80">
+                      <div className="text-[10px] text-slate-400 uppercase">Historisk Win-Rate</div>
+                      <div
+                        className={`text-lg font-bold mt-0.5 ${
+                          selectedTx.trackRecord.winRatePct >= 65
+                            ? 'text-emerald-400'
+                            : selectedTx.trackRecord.winRatePct <= 30
+                            ? 'text-rose-400'
+                            : 'text-slate-100'
+                        }`}
+                      >
+                        {selectedTx.trackRecord.winRatePct}%
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80">
+                      <div className="text-[10px] text-slate-400 uppercase">Gennemsnitligt Afkast</div>
+                      <div
+                        className={`text-lg font-bold mt-0.5 ${
+                          selectedTx.trackRecord.avgReturnPct > 0
+                            ? 'text-emerald-400'
+                            : selectedTx.trackRecord.avgReturnPct < 0
+                            ? 'text-rose-400'
+                            : 'text-slate-100'
+                        }`}
+                      >
+                        {selectedTx.trackRecord.avgReturnPct > 0 ? '+' : ''}
+                        {selectedTx.trackRecord.avgReturnPct}%
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Notable Past Trades List */}
+                  {selectedTx.trackRecord.notablePastTrades.length > 0 ? (
+                    <div className="mt-2 space-y-1.5">
+                      <div className="text-[11px] font-mono text-slate-400 uppercase">
+                        Udvalgte historiske køb i aktien:
+                      </div>
+                      <div className="divide-y divide-slate-800/60 rounded border border-slate-800/80 bg-slate-950/40 overflow-hidden text-xs font-mono">
+                        {selectedTx.trackRecord.notablePastTrades.map((trade, idx) => (
+                          <div
+                            key={idx}
+                            className="p-2 flex flex-wrap items-center justify-between gap-2 hover:bg-slate-900/50 transition-colors"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-400">{trade.date}</span>
+                              <span className="text-slate-200 font-medium font-sans">
+                                {trade.insiderName} {trade.insiderTitle ? `(${trade.insiderTitle})` : ''}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                              <span className="text-slate-400">
+                                Købt @ ${trade.price} ($
+                                {trade.valueUsd >= 1000000
+                                  ? `${(trade.valueUsd / 1000000).toFixed(1)}M`
+                                  : `${Math.round(trade.valueUsd / 1000)}k`}
+                                )
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded font-bold ${
+                                  trade.returnPct > 0
+                                    ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800'
+                                    : 'bg-rose-950/80 text-rose-300 border border-rose-800'
+                                }`}
+                              >
+                                {trade.returnPct > 0 ? '+' : ''}
+                                {trade.returnPct}%
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-2.5 rounded bg-slate-950/40 border border-slate-800/60 text-xs text-slate-400 font-mono">
+                      Ingen tidligere registrerede åbne markedskøb i selskabet de seneste 3-4 år. Dette indikerer et sjældent regimeskift eller ny overbevisning fra ledelsen.
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* CIO Extended Thinking Trace Fold-Out Panel */}
               {activeVerdict.judgeThinking && (

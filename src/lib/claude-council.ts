@@ -382,6 +382,27 @@ AFKAST / DISKONT SIDEN KØB: ${
       ? `${tx.returnSinceBuyPct}% (${tx.isTradingBelowInsiderPrice ? 'HANDLER UNDER INSIDERENS KØBSKURS - RABAT/TAB' : 'HANDLER OVER INSIDERENS KØBSKURS - GEVINST'})`
       : 'Ukendt'
   }
+${
+  tx.trackRecord
+    ? `HISTORISK TRACK RECORD FOR INSIDEREN / LEDELSEN:
+• Status & Omdømme: ${tx.trackRecord.reputationLabel}
+• Tidligere registrerede Kode P køb (3-4 år): ${tx.trackRecord.historicalBuysCount} handler
+• Historisk Win-Rate: ${tx.trackRecord.winRatePct}% (aktier der efterfølgende gav positivt afkast)
+• Gennemsnitligt historisk afkast: ${tx.trackRecord.avgReturnPct > 0 ? '+' : ''}${tx.trackRecord.avgReturnPct}%
+${
+  tx.trackRecord.notablePastTrades.length > 0
+    ? `• Udvalgte tidligere køb i samme aktie:\n${tx.trackRecord.notablePastTrades
+        .map(
+          (t) =>
+            `  - [${t.date}] ${t.insiderName} (${t.insiderTitle || 'Insider'}) købte @ $${t.price} ($${Math.round(
+              t.valueUsd
+            ).toLocaleString()}) -> Nuværende afkast: ${t.returnPct > 0 ? '+' : ''}${t.returnPct}%`
+        )
+        .join('\n')}`
+    : '• Ingen tidligere registrerede åbne markedskøb i selskabet de seneste 3 år (sjældent signal).'
+}`
+    : ''
+}
 BØRS & HANDELBARHED (DK): ${tx.exchange || 'N/A'} - ${tx.isTradableInDK ? 'Verificeret handelbar på Nordnet / Saxo' : 'Advarsel: Begrænset / Ikke handelbar'} (${tx.tradabilityReason || ''})
 DAGLIG LIKVIDITET: ${tx.avgDailyDollarVolume ? `$${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')} USD/dag` : 'Ukendt'}
 SEC FILING URL: ${tx.secFilingUrl}
@@ -391,6 +412,7 @@ KONTEKST / NOTER: ${tx.contextNotes || 'Ingen yderligere noter'}
   // Specialist 1: The Insider Profiler (Sonnet)
   const profilerSystem = `Du er "The Insider Profiler" i investeringsrådet The Council.
 Din rolle er at dissekere personen og deres reelle motivation. Analyser rollen (CFO/General Counsel kender tallene/juraen; CEO har ofte PR-incitamenter) og conviction (holdingsIncreasePct og absolut dollarværdi).
+Inddrag altid insiderens historiske track record: Er personen/ledelsen en 'Smart Money Sniper' med en dokumenteret win-rate over 65-80% og massive afkast på tidligere køb? Eller er det første gang i flere år, at ledelsen køber (et sjældent og stærkt signal)?
 Er dette et ægte "skin-in-the-game" træk med egne sparepenge eller blot kosmetisk signalværdi?
 SKRIV PÅ DANSK. Maksimalt 140 ord. Skarp, direkte tone uden høflighedsfraser.`;
 
@@ -403,6 +425,7 @@ SKRIV PÅ DANSK. Maksimalt 140 ord. Skarp, analytisk tone.`;
   // Specialist 3: The Forensic Skeptic (Sonnet)
   const skepticSystem = `Du er "The Forensic Skeptic" (Djævelens Advokat) i investeringsrådet The Council.
 Dit eneste mål er at DRÆBE købs-tesen og beskytte fondens kapital. Find alle svagheder: Er det et PR-stunt, en "faldende kniv" / value trap, likviditetsproblemer, eller forsøg på at skabe falsk tryghed før dårlige nyheder?
+Tjek insiderens historiske track record: Hvis status er 'EARLY_OR_BAGHOLDER', eller tidligere køb viser negative afkast (-20% til -50%), skal du straks advare mod, at ledelsen lider af confirmation bias, har elendig timing og gentagne gange griber faldende knive uden kontakt med markedsrealiteterne!
 Tjek altid om handlen er gennemført under en Rule 10b5-1 forudbestemt automatisk handelsplan eller ifølge SEC-fodnoter er skemalagt lang tid forvejen. Hvis det er en 10b5-1 plan, skal du NÅDESLØST afvise den som 0% overbevisning og automatisk maskin-eksekvering uden aktuel informationsasymmetri!
 Tjek altid SEC Form 4 fodnoter og prisforskellen mellem insiderens købskurs og aktuel kurs. Hvis en 10% ejer køber til en kurs markant OVER markedsprisen (f.eks. +30% over børskurs), eller aktien er kollapset >30% lige efter købet, skal du straks advare om, at det kan være en nødlidende rekapitalisering, gældskonvertering eller 'falling knife' fremfor et normalt åbent markedskøb!
 Undersøg altid aktiens likviditet og børs: Hvis aktien handler på OTC, eller den daglige omsætning er under $2.000.000 USD/dag, skal du advare om spread-slippage og likviditetsrisiko for en institutionel/dansk investor på Nordnet/Saxo.
@@ -439,6 +462,7 @@ Du SKAL returnere et JSON-objekt med præcis denne struktur:
 
 Regler for dommen:
 - Hvis handlen er udført under en Rule 10b5-1 automatisk forudbestemt handelsplan: Sæt altid Asymmetry Score under 25 og dommen til "PR STUNT / STØJ (IGNORER)", da der er 0% aktuel informationsasymmetri eller skønsmæssigt engagement fra insideren.
+- Historisk Track Record: Hvis insideren/ledelsen er en verificeret 'SMART_MONEY_SNIPER' (win-rate >= 65% og positiv historisk alpha), forstærk overbevisningen og løft Asymmetry Scoren (typisk 85-98), da insideren har bevist timing-disciplin. Hvis insideren derimod er en 'EARLY_OR_BAGHOLDER' (køber gentagne gange i minus), skal Asymmetry Scoren reduceres markant, og du skal advare mod kronisk dårlig timing og faldende knive. Hvis status er 'FIRST_TIME_OR_RARE' (første køb i >3 år), understreg det sjældne og potentielt stærke asymmetriske regimeskift.
 - Hvis CFO/General Counsel/CEO køber markant (+15% beholdning) og/eller indgår i et verificeret cluster-køb med andre uafhængige med-købere: Typisk score 80-98 og STRONG ASYMMETRY (KØB).
 - Hvis CEO/insider køber for småpenge i forhold til formue (<2% stigning i beholdning): Typisk score <35 og PR STUNT / STØJ.
 - Vurder altid om der er med-købere i clusteret. Hvis både en CFO og et bestyrelsesmedlem køber for egne midler i samme tidsvindue, validerer de hinandens conviction.

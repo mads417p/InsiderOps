@@ -31,6 +31,31 @@ export interface InsiderTransaction {
   marketCapUsd?: number;
   is10b51Plan?: boolean; // True hvis handlen er udført under en forudbestemt Rule 10b5-1 automatisk handelsplan
   footnotesSummary?: string; // Ekstraherede fodnoter fra indberetningen
+  trackRecord?: InsiderTrackRecord; // Historisk træfsikkerhed og win-rate for insideren/ledelsen
+}
+
+export type TrackRecordReputation =
+  | 'SMART_MONEY_SNIPER'
+  | 'CREDIBLE_BUYER'
+  | 'FIRST_TIME_OR_RARE'
+  | 'EARLY_OR_BAGHOLDER';
+
+export interface NotablePastTrade {
+  date: string;
+  insiderName: string;
+  insiderTitle?: string;
+  price: number;
+  valueUsd: number;
+  returnPct: number;
+}
+
+export interface InsiderTrackRecord {
+  historicalBuysCount: number;
+  winRatePct: number;
+  avgReturnPct: number;
+  reputation: TrackRecordReputation;
+  reputationLabel: string;
+  notablePastTrades: NotablePastTrade[];
 }
 
 export type AsymmetrySignal = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';
