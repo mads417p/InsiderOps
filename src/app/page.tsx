@@ -81,6 +81,117 @@ export default function Dashboard() {
   const [showContextNotes, setShowContextNotes] = useState<boolean>(true);
   const [judgeTier, setJudgeTier] = useState<'opus' | 'sonnet'>('opus');
   const [showThinking, setShowThinking] = useState<boolean>(true);
+  const [memoCopied, setMemoCopied] = useState<boolean>(false);
+
+  const generateInvestmentMemoMarkdown = (tx: InsiderTransaction, verdict: CouncilVerdict): string => {
+    const dateFormatted = tx.filingDate || new Date().toISOString().split('T')[0];
+    const alphaStr =
+      tx.returnSinceBuyPct !== undefined
+        ? `${tx.returnSinceBuyPct > 0 ? '+' : ''}${tx.returnSinceBuyPct}% (${
+            tx.isTradingBelowInsiderPrice
+              ? 'HANDLER UNDER INSIDERENS KØBSKURS - RABAT'
+              : 'HANDLER OVER KØBSKURS'
+          })`
+        : 'Ikke beregnet';
+
+    const clusterPeersStr =
+      tx.clusterPeers && tx.clusterPeers.length > 0
+        ? tx.clusterPeers.map((p) => `- ${p}`).join('\n')
+        : tx.isClusterBuy
+        ? `Bekræftet cluster buy med ${tx.clusterCount ?? 2} deltagere.`
+        : 'Ingen andre registrerede med-købere i samme tidsvindue.';
+
+    return `# INVESTMENT MEMO: ${tx.ticker} (${tx.companyName})
+**Dato for indberetning:** ${dateFormatted}  
+**Genereret af:** InsiderOps Multi-Agent Council  
+
+---
+
+## 1. Transaktion & Ledelsesprofil
+- **Ticker:** $${tx.ticker}
+- **Selskab:** ${tx.companyName}
+- **Insider:** ${tx.insiderName}
+- **Titel / Rolle:** ${tx.insiderTitle} ${tx.isExecutiveOfficer ? '(C-Suite / Direktion)' : ''}
+- **Ejerskabets natur:** ${tx.ownershipNature === 'D' ? 'Direkte (D - Egne personlige aktier)' : 'Indirekte (I - Fond / Trust / Holdingselskab)'}
+- **Transaktionstype:** Kode ${tx.transactionCode} (Åbent markedskøb)
+- **Handelsbeløb:** $${Math.round(tx.totalValueUsd).toLocaleString()} USD (${tx.shares.toLocaleString()} aktier á $${tx.pricePerShare} USD)
+- **Beholdning efter køb:** ${tx.sharesOwnedFollowing.toLocaleString()} aktier (+${tx.holdingsIncreasePct}% stigning)
+- **Købskurs:** $${tx.pricePerShare} USD
+- **Aktuel markedskurs:** ${tx.currentMarketPrice !== undefined ? `$${tx.currentMarketPrice} USD` : 'Ukendt'}
+- **Insider Alpha / Rabat:** ${alphaStr}
+- **Kursændring 30 dage op til køb:** ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'Ukendt'}
+- **SEC Filing Link:** ${tx.secFilingUrl}
+
+---
+
+## 2. Cluster Analyse & Med-købere
+${clusterPeersStr}
+
+---
+
+## 3. The Council: CIO Dom & Asymmetry Score
+**Afgørelse:** ${verdict.verdict}  
+**Asymmetry Score:** ${verdict.asymmetryScore}/100  
+**Overskrift:** ${verdict.headline}  
+
+### CIO Syntese (${verdict.modelsUsed?.judge || 'Opus 5.5'}):
+${verdict.synthesis}
+
+---
+
+## 4. Specialisternes Rapporter (Claude Sonnet 5.5)
+
+### [The Insider Profiler]
+${verdict.reports.profiler}
+
+### [The Catalyst & Asymmetry Hunter]
+${verdict.reports.catalyst}
+
+### [The Forensic Skeptic]
+${verdict.reports.skeptic}
+
+---
+
+## 5. Fundamentale Noter & SEC Form 4 Fodnoter
+${tx.contextNotes || 'Ingen yderligere noter registreret.'}
+
+${
+  verdict.judgeThinking
+    ? `---
+
+## 6. CIO Extended Thinking Trace
+\`\`\`
+${verdict.judgeThinking}
+\`\`\`
+`
+    : ''
+}
+---
+*Genereret af InsiderOps Terminal v1.2-RADAR med Claude 5.5 & Gemini Flash.*
+`;
+  };
+
+  const handleCopyMemo = () => {
+    if (!selectedTx || !activeVerdict) return;
+    const memo = generateInvestmentMemoMarkdown(selectedTx, activeVerdict);
+    navigator.clipboard.writeText(memo);
+    setMemoCopied(true);
+    setTimeout(() => setMemoCopied(false), 2500);
+  };
+
+  const handleDownloadMemo = () => {
+    if (!selectedTx || !activeVerdict) return;
+    const memo = generateInvestmentMemoMarkdown(selectedTx, activeVerdict);
+    const blob = new Blob([memo], { type: 'text/markdown;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `InsiderOps_${selectedTx.ticker}_${selectedTx.filingDate || 'memo'}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   // Indlæs gemte domme fra localStorage ved opstart
   useEffect(() => {
@@ -1212,6 +1323,43 @@ export default function Dashboard() {
             <div className="space-y-4">
               {/* CIO / Dommerens Afgørelse */}
               <div className="p-5 rounded bg-slate-900/80 border border-slate-800 shadow-xl">
+                {/* Investment Memo Export Action Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3 mb-4">
+                  <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+                    <span className="h-2 w-2 rounded-full bg-cyan-400" />
+                    <span className="font-bold text-slate-200">INVESTMENT DUE DILIGENCE MEMO</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleCopyMemo}
+                      className="px-3 py-1.5 rounded bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-700/80 text-cyan-300 font-mono text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm shadow-cyan-950"
+                      title="Kopiér komplet formateret Due Diligence Investment Memo som Markdown"
+                    >
+                      {memoCopied ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="text-emerald-300 font-bold">Kopieret til udklipsholder!</span>
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>📋 Kopiér Investment Memo (MD)</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      onClick={handleDownloadMemo}
+                      className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono text-xs font-semibold transition-all flex items-center gap-1.5"
+                      title="Gem komplet Investment Memo som .md fil på computeren"
+                    >
+                      <Bookmark className="w-3.5 h-3.5 text-slate-400" />
+                      <span>⬇️ Download .MD Memo</span>
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
                   <div>
                     <div className="flex items-center gap-2 text-xs font-mono text-slate-400">

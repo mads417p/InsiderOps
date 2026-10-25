@@ -352,6 +352,11 @@ TOTAL HANDELSVÆRDI: $${Math.round(tx.totalValueUsd).toLocaleString()} USD
 BEHOLDNING EFTER KØB: ${tx.sharesOwnedFollowing.toLocaleString()} aktier
 FORØGELSE AF EGEN BEHOLDNING: +${tx.holdingsIncreasePct}%
 CLUSTER-KØB: ${tx.isClusterBuy ? `JA (${tx.clusterCount ?? 2} uafhængige personer)` : 'NEJ'}
+${
+  tx.clusterPeers && tx.clusterPeers.length > 0
+    ? `MED-KØBERE I SAMME AKTIE (CLUSTER PEERS):\n${tx.clusterPeers.map((p) => `  • ${p}`).join('\n')}`
+    : ''
+}
 KURSUDVIKLING SENESTE 30 DAGE: ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'Ukendt'}
 AKTUEL MARKEDSKURS: ${tx.currentMarketPrice !== undefined ? `$${tx.currentMarketPrice} USD` : 'Ukendt'}
 AFKAST / DISKONT SIDEN KØB: ${
@@ -411,8 +416,9 @@ Du SKAL returnere et JSON-objekt med præcis denne struktur:
 }
 
 Regler for dommen:
-- Hvis CFO/General Counsel køber markant (+15% beholdning) og/eller cluster-køb: Typisk score 80-98 og STRONG ASYMMETRY.
+- Hvis CFO/General Counsel/CEO køber markant (+15% beholdning) og/eller indgår i et verificeret cluster-køb med andre uafhængige med-købere: Typisk score 80-98 og STRONG ASYMMETRY (KØB).
 - Hvis CEO/insider køber for småpenge i forhold til formue (<2% stigning i beholdning): Typisk score <35 og PR STUNT / STØJ.
+- Vurder altid om der er med-købere i clusteret. Hvis både en CFO og et bestyrelsesmedlem køber for egne midler i samme tidsvindue, validerer de hinandens conviction.
 - Returner KUN ren JSON i dit afsluttende svar.`;
 
     const judgePrompt = `Her er data for transaktionen:

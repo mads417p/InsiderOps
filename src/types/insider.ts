@@ -23,6 +23,7 @@ export interface InsiderTransaction {
   isTradingBelowInsiderPrice?: boolean; // true hvis aktuel kurs < insiderens købspris (kode P)
   ownershipNature?: 'D' | 'I'; // 'D' = Direct (personlige aktier), 'I' = Indirect (fond/LLC/trust)
   isExecutiveOfficer?: boolean; // true hvis CEO/CFO/COO/Pres/VP/GC/Chief/Counsel
+  clusterPeers?: string[]; // Med-købere i samme selskab inden for samme tidsvindue
 }
 
 export type AsymmetrySignal = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';

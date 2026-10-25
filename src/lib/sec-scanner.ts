@@ -125,6 +125,7 @@ export function detectOwnershipNature(
  * Beregner sande cluster-buys for en liste af transaktioner med person-deduplikering.
  * To indberetninger tæller kun som et cluster-køb, hvis mindst to FORSKELLIGE fysiske personer
  * eller uafhængige parter har købt aktier (eliminerer at 3 partnere rapporterer samme fondskøb som i RENT).
+ * Genererer desuden en fuld cluster-oversigt og gemmer med-købere i tx.clusterPeers og tx.contextNotes.
  */
 export function applyTrueClusterDeduplication(transactions: InsiderTransaction[]): void {
   const byTicker = new Map<string, InsiderTransaction[]>();
@@ -140,6 +141,7 @@ export function applyTrueClusterDeduplication(transactions: InsiderTransaction[]
       for (const tx of list) {
         tx.isClusterBuy = false;
         tx.clusterCount = 1;
+        tx.clusterPeers = [];
       }
       continue;
     }
@@ -164,9 +166,39 @@ export function applyTrueClusterDeduplication(transactions: InsiderTransaction[]
     }
 
     const isTrueCluster = distinctParticipants.length >= 2;
+    const totalClusterUsd = list.reduce((sum, item) => sum + (item.totalValueUsd || 0), 0);
+
     for (const tx of list) {
       tx.isClusterBuy = isTrueCluster;
       tx.clusterCount = isTrueCluster ? distinctParticipants.length : 1;
+
+      if (isTrueCluster) {
+        const currentClean = tx.insiderName.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const peers = list.filter((other) => {
+          const otherClean = other.insiderName.toLowerCase().replace(/[^a-z0-9]/g, '');
+          return otherClean !== currentClean;
+        });
+
+        tx.clusterPeers = peers.map(
+          (p) =>
+            `${p.insiderName} (${p.insiderTitle}): $${Math.round(p.totalValueUsd).toLocaleString()} (${p.shares.toLocaleString()} aktier á $${p.pricePerShare}) den ${p.filingDate}`
+        );
+
+        const peerSummary = peers
+          .map(
+            (p) =>
+              `${p.insiderName} (${p.insiderTitle}): $${Math.round(p.totalValueUsd).toLocaleString()} den ${p.filingDate}`
+          )
+          .join(', ');
+
+        const clusterNote = `BEKRÆFTET CLUSTER-KØB (${distinctParticipants.length} uafhængige insidere i samme vindue, samlet værdi $${Math.round(totalClusterUsd).toLocaleString()}): Udover denne handel har følgende også købt i åbent marked: ${peerSummary}`;
+
+        if (!tx.contextNotes?.includes('BEKRÆFTET CLUSTER-KØB')) {
+          tx.contextNotes = tx.contextNotes ? `${clusterNote}\n\n${tx.contextNotes}` : clusterNote;
+        }
+      } else {
+        tx.clusterPeers = [];
+      }
     }
   }
 }
@@ -781,10 +813,9 @@ async function fetchRawSecEdgarAtomFeed(limit: number = 8): Promise<InsiderTrans
 }
 
 /**
- * Dedikeret "C-Suite Executive Hunter" (Kun CEO, CFO, COO, GC, Pres, EVP > $50.000).
- * Filtrerer målrettet efter rigtige direktører, der køber for egne midler (direkte ejerskab).
+ * Rå OpenInsider scraper for C-Suite officers (isofficer=1).
  */
-export async function fetchExecutiveAndClusterBuys(limit: number = 25): Promise<InsiderTransaction[]> {
+async function fetchRawExecutiveOfficerBuys(limit: number = 25): Promise<InsiderTransaction[]> {
   const url = `http://openinsider.com/screener?s=&o=&pl=&ph=&ll=&lh=&fd=30&fdr=&td=0&tdr=&fdlyl=&fdlyh=&daysago=&xp=1&isofficer=1&vl=50&vh=&sortcol=0&cnt=${encodeURIComponent(
     limit
   )}&page=1`;
@@ -888,14 +919,50 @@ export async function fetchExecutiveAndClusterBuys(limit: number = 25): Promise<
       });
     }
 
-    applyTrueClusterDeduplication(transactions);
+    return transactions;
+  } catch (err) {
+    console.warn('Kunne ikke hente rå C-Suite Officer Purchases:', err);
+    return [];
+  }
+}
+
+/**
+ * Dedikeret "C-Suite Executive Hunter" (Kun CEO, CFO, COO, GC, Pres, EVP > $50.000).
+ * Krydstjekker automatisk med det bredere åbne marked for at forbinde C-Suite køb
+ * med eventuelle med-købere (Directors, bestyrelse, andre partnere) i samme ticker.
+ */
+export async function fetchExecutiveAndClusterBuys(limit: number = 25): Promise<InsiderTransaction[]> {
+  try {
+    const [execResult, generalResult] = await Promise.allSettled([
+      fetchRawExecutiveOfficerBuys(limit),
+      fetchHighConvictionOpenMarketBuys(25),
+    ]);
+
+    const execBuys = execResult.status === 'fulfilled' ? execResult.value : [];
+    const generalBuys = generalResult.status === 'fulfilled' ? generalResult.value : [];
+
+    const pool: InsiderTransaction[] = [];
+    const seen = new Set<string>();
+
+    for (const tx of [...execBuys, ...generalBuys]) {
+      const key = `${tx.ticker}_${tx.filingDate}_${tx.shares}_${tx.insiderName.slice(0, 10)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        pool.push(tx);
+      }
+    }
+
+    // Beregn sande cluster-køb på tværs af hele puljen med person-deduplikering og med-købere
+    applyTrueClusterDeduplication(pool);
 
     // Berig med Yahoo Finance markedskurs og alpha
     await Promise.allSettled(
-      transactions.slice(0, 15).map((tx) => enrichTransactionWithMarketData(tx))
+      pool.slice(0, 15).map((tx) => enrichTransactionWithMarketData(tx))
     );
 
-    return transactions;
+    // Returner transaktioner hvor personen er en Executive Officer (eller del af et verificeret cluster buy)
+    const result = pool.filter((tx) => tx.isExecutiveOfficer || tx.isClusterBuy);
+    return result.slice(0, Math.max(limit, 20));
   } catch (err) {
     console.warn('Kunne ikke hente C-Suite Officer Purchases:', err);
     return [];
