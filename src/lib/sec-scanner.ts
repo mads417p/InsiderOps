@@ -55,9 +55,12 @@ export function getMockTransactions(): InsiderTransaction[] {
       isClusterBuy: true,
       clusterCount: 2,
       recentPriceChange30dPct: -28.0,
+      currentMarketPrice: 22.8,
+      returnSinceBuyPct: -5.0,
+      isTradingBelowInsiderPrice: true,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1029384/000102938426000042/form4.xml',
       contextNotes:
-        'Massivt CFO + General Counsel cluster-køb efter 28% kursfald grundet forsinket FDA-møde. Forøger CFOs beholdning med 42% ($480k).\n\nKurs-kontekst: Seneste lukkekurs $24.00 (-28.0% seneste 30d, -34.5% fra 3-mdr top $36.60).\n\nSeneste nyheder & katalysatorer:\n• [21 Oct] NovoCure clarifies timeline for FDA review meeting\n• [18 Oct] Analyst downgrade citing regulatory uncertainty',
+        'Massivt CFO + General Counsel cluster-køb efter 28% kursfald grundet forsinket FDA-møde. Forøger CFOs beholdning med 42% ($480k).\n\nInsider Alpha: Købskurs $24.00 vs. Aktuel kurs $22.80 (RABAT: Handler 5.0% under insiderens købspris!)\n\nKurs-kontekst: Seneste lukkekurs $22.80 (-28.0% seneste 30d, -37.7% fra 3-mdr top $36.60).\n\nSeneste nyheder & katalysatorer:\n• [21 Oct] NovoCure clarifies timeline for FDA review meeting\n• [18 Oct] Analyst downgrade citing regulatory uncertainty',
     },
     {
       id: 'mock-ceo-cosmetic-buy',
@@ -75,9 +78,12 @@ export function getMockTransactions(): InsiderTransaction[] {
       isClusterBuy: false,
       clusterCount: 1,
       recentPriceChange30dPct: -45.0,
+      currentMarketPrice: 11.7,
+      returnSinceBuyPct: -10.0,
+      isTradingBelowInsiderPrice: true,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1482910/000148291026000115/form4.xml',
       contextNotes:
-        'CEO "Cosmetic / PR Buy" i presset selskab. Køb for $65k er mikroskopisk mod en eksisterende beholdning på $18 mio. (kun +0.36% forøgelse).\n\nKurs-kontekst: Seneste lukkekurs $13.00 (-45.0% seneste 30d, -58.0% fra 3-mdr top $31.00).\n\nSeneste nyheder & katalysatorer:\n• [20 Oct] Plexus Cloud lowers ARR guidance for Q4\n• [15 Oct] Major enterprise customer churn reported',
+        'CEO "Cosmetic / PR Buy" i presset selskab. Køb for $65k er mikroskopisk mod en eksisterende beholdning på $18 mio. (kun +0.36% forøgelse).\n\nInsider Alpha: Købskurs $13.00 vs. Aktuel kurs $11.70 (RABAT: Handler 10.0% under insiderens købspris!)\n\nKurs-kontekst: Seneste lukkekurs $11.70 (-45.0% seneste 30d, -62.3% fra 3-mdr top $31.00).\n\nSeneste nyheder & katalysatorer:\n• [20 Oct] Plexus Cloud lowers ARR guidance for Q4\n• [15 Oct] Major enterprise customer churn reported',
     },
     {
       id: 'mock-chair-cfo-earnings-buy',
@@ -95,9 +101,12 @@ export function getMockTransactions(): InsiderTransaction[] {
       isClusterBuy: true,
       clusterCount: 2,
       recentPriceChange30dPct: 3.5,
+      currentMarketPrice: 34.1,
+      returnSinceBuyPct: 10.0,
+      isTradingBelowInsiderPrice: false,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1129381/000112938126000089/form4.xml',
       contextNotes:
-        'Stille Bestyrelsesformand + CFO køb ($310.000, +28% beholdning) i overset industriaktie to uger før kvartalsregnskab.\n\nKurs-kontekst: Seneste lukkekurs $31.00 (+3.5% seneste 30d, -2.1% fra 3-mdr top $31.65).\n\nSeneste nyheder & katalysatorer:\n• [19 Oct] Vanguard wins $85M infrastructure supply contract\n• [10 Oct] Q3 earnings scheduled for release November 6',
+        'Stille Bestyrelsesformand + CFO køb ($310.000, +28% beholdning) i overset industriaktie to uger før kvartalsregnskab.\n\nInsider Alpha: Købskurs $31.00 vs. Aktuel kurs $34.10 (Insider afkast siden køb: +10.0%)\n\nKurs-kontekst: Seneste lukkekurs $34.10 (+3.5% seneste 30d, +7.7% fra 3-mdr top $31.65).\n\nSeneste nyheder & katalysatorer:\n• [19 Oct] Vanguard wins $85M infrastructure supply contract\n• [10 Oct] Q3 earnings scheduled for release November 6',
     },
     {
       id: 'mock-option-exercise-m',
@@ -131,6 +140,9 @@ export function getMockTransactions(): InsiderTransaction[] {
       sharesOwnedFollowing: 15000,
       holdingsIncreasePct: 7.1,
       isClusterBuy: false,
+      currentMarketPrice: 17.9,
+      returnSinceBuyPct: -3.24,
+      isTradingBelowInsiderPrice: true,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1392019/000139201926000005/form4.xml',
       contextNotes:
         'Småkøb (P) på $18.500 fra bestyrelsesmedlem. Under minimumsgrænsen på $50.000, typisk symbolsk eller støj.',

@@ -2,6 +2,34 @@ import { NextResponse } from 'next/server';
 import { getMockTransactions, fetchLiveSecForm4s, scanTickerSecForm4s } from '@/lib/sec-scanner';
 import { fetchNordicInsiderTransactions } from '@/lib/nordic-scanner';
 import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
+import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
+import { InsiderTransaction } from '@/types/insider';
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const transactions: InsiderTransaction[] = body.transactions || [];
+
+    const enriched = await Promise.all(
+      transactions.map((tx) => enrichTransactionWithMarketData({ ...tx }))
+    );
+
+    return NextResponse.json({
+      success: true,
+      count: enriched.length,
+      transactions: enriched,
+    });
+  } catch (error: unknown) {
+    console.error('Fejl i POST /api/scan:', error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Kunne ikke opdatere live markedskurser',
+      },
+      { status: 500 }
+    );
+  }
+}
 
 export async function GET(request: Request) {
   try {

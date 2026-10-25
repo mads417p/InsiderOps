@@ -18,6 +18,9 @@ export interface InsiderTransaction {
   recentPriceChange30dPct?: number; // kursændring seneste 30 dage op til købet
   secFilingUrl: string;
   contextNotes?: string;
+  currentMarketPrice?: number; // aktuel markedspris fra Yahoo Finance
+  returnSinceBuyPct?: number; // % ændring fra insiderens købspris til aktuel markedspris
+  isTradingBelowInsiderPrice?: boolean; // true hvis aktuel kurs < insiderens købspris (kode P)
 }
 
 export type AsymmetrySignal = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';

@@ -218,6 +218,41 @@ export default function Dashboard() {
     }
   };
 
+  const [refreshingAlpha, setRefreshingAlpha] = useState<boolean>(false);
+
+  const handleRefreshWatchlistAlpha = async () => {
+    const records = Object.values(verdictHistory);
+    if (records.length === 0) return;
+    setRefreshingAlpha(true);
+    try {
+      const txs = records.map((item) => item.transaction);
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions: txs }),
+      });
+      if (!res.ok) throw new Error('Kunne ikke hente live kurser');
+      const data = await res.json();
+      if (data.transactions && Array.isArray(data.transactions)) {
+        const updatedHistory = { ...verdictHistory };
+        for (const updatedTx of data.transactions) {
+          if (updatedHistory[updatedTx.id]) {
+            updatedHistory[updatedTx.id] = {
+              ...updatedHistory[updatedTx.id],
+              transaction: updatedTx,
+            };
+          }
+        }
+        setVerdictHistory(updatedHistory);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedHistory));
+      }
+    } catch (err) {
+      console.error('Fejl ved opdatering af live alpha:', err);
+    } finally {
+      setRefreshingAlpha(false);
+    }
+  };
+
   // KPI Beregninger
   const totalScanned = items.length;
   const hardFilterRejected = items.filter((i) => !i.result.passedHardFilter).length;
@@ -226,6 +261,21 @@ export default function Dashboard() {
     (a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore
   );
   const councilsConvenedCount = savedVerdictItems.length;
+
+  const strongBuyItems = savedVerdictItems.filter(
+    (i) =>
+      i.verdict.verdict === 'STRONG ASYMMETRY (KØB)' &&
+      i.transaction.returnSinceBuyPct !== undefined
+  );
+  const avgStrongAlpha =
+    strongBuyItems.length > 0
+      ? (
+          strongBuyItems.reduce(
+            (acc, i) => acc + (i.transaction.returnSinceBuyPct || 0),
+            0
+          ) / strongBuyItems.length
+        ).toFixed(2)
+      : null;
 
   const filteredItems = hideNoise
     ? items.filter((i) => i.result.passedHardFilter)
@@ -494,7 +544,7 @@ export default function Dashboard() {
                     <th className="py-3 px-3">TICKER / SELSKAB</th>
                     <th className="py-3 px-3">INSIDER & ROLLE</th>
                     <th className="py-3 px-2 text-center">TYPE</th>
-                    <th className="py-3 px-3 text-right">BELØB (USD)</th>
+                    <th className="py-3 px-3 text-right">BELØB / KURS & ALPHA</th>
                     <th className="py-3 px-3 text-right">BEHOLDNINGS-ÆNDRING</th>
                     <th className="py-3 px-3">GATEKEEPER & RÅD</th>
                     <th className="py-3 px-3 text-right">HANDLING</th>
@@ -615,7 +665,7 @@ export default function Dashboard() {
                             </span>
                           </td>
 
-                          {/* Total Value */}
+                          {/* Total Value & Live Insider Alpha */}
                           <td className="py-3 px-3 text-right font-mono">
                             <div className="text-slate-100 font-semibold">
                               ${Math.round(tx.totalValueUsd).toLocaleString()}
@@ -623,6 +673,30 @@ export default function Dashboard() {
                             <div className="text-[10px] text-slate-500">
                               {tx.shares.toLocaleString()} stk a ${tx.pricePerShare}
                             </div>
+                            {tx.currentMarketPrice !== undefined && tx.transactionCode === 'P' && (
+                              <div className="mt-1 flex flex-col items-end gap-0.5">
+                                <div className="text-[10px] text-slate-400">
+                                  Nu: <span className="text-slate-200 font-medium">${tx.currentMarketPrice}</span>
+                                  {tx.returnSinceBuyPct !== undefined && (
+                                    <span
+                                      className={`ml-1 font-semibold ${
+                                        tx.returnSinceBuyPct < 0 ? 'text-cyan-400' : 'text-emerald-400'
+                                      }`}
+                                    >
+                                      ({tx.returnSinceBuyPct > 0 ? '+' : ''}{tx.returnSinceBuyPct}%)
+                                    </span>
+                                  )}
+                                </div>
+                                {tx.isTradingBelowInsiderPrice &&
+                                  res.passedHardFilter &&
+                                  tx.returnSinceBuyPct !== undefined &&
+                                  tx.returnSinceBuyPct >= -25 && (
+                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-cyan-950/90 border border-cyan-500/70 text-cyan-300 flex items-center gap-1 shadow-sm shadow-cyan-950">
+                                      <span>💎 UNDER INSIDER PRIS ({tx.returnSinceBuyPct}%)</span>
+                                    </span>
+                                  )}
+                              </div>
+                            )}
                           </td>
 
                           {/* Holdings change */}
@@ -744,6 +818,49 @@ export default function Dashboard() {
         {/* TAB 2: WATCHLIST / GEMTE DOMME */}
         {activeTab === 'watchlist' && (
           <div className="space-y-4">
+            {/* Live Insider Alpha Tracker Header Bar */}
+            <div className="p-4 rounded bg-slate-900/70 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="text-sm font-bold font-mono text-slate-100 flex items-center gap-2">
+                  <Bookmark className="w-4 h-4 text-cyan-400" />
+                  <span>LIVE INSIDER ALPHA TRACKER</span>
+                </h3>
+                <p className="text-xs text-slate-400 font-sans mt-0.5">
+                  Overvågning af dine gemte cases mod aktuelle markedskurser og insider-købskurser
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Avg Alpha KPI Pill */}
+                <div className="px-3 py-1.5 rounded bg-slate-950 border border-slate-800 flex items-center gap-2 font-mono text-xs">
+                  <span className="text-slate-400">GNS. INSIDER ALPHA (STRONG BUY):</span>
+                  <span
+                    className={`font-bold ${
+                      avgStrongAlpha === null
+                        ? 'text-slate-500'
+                        : Number(avgStrongAlpha) >= 0
+                        ? 'text-emerald-400'
+                        : 'text-cyan-400'
+                    }`}
+                  >
+                    {avgStrongAlpha === null
+                      ? 'N/A'
+                      : `${Number(avgStrongAlpha) > 0 ? '+' : ''}${avgStrongAlpha}%`}
+                  </span>
+                </div>
+
+                {/* Live Refresh Button */}
+                <button
+                  onClick={handleRefreshWatchlistAlpha}
+                  disabled={refreshingAlpha || savedVerdictItems.length === 0}
+                  className="px-3 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-slate-950 font-mono font-bold text-xs flex items-center gap-1.5 transition-colors whitespace-nowrap shadow-sm shadow-cyan-900/30"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${refreshingAlpha ? 'animate-spin' : ''}`} />
+                  <span>Opdatér Live Kurser / Alpha</span>
+                </button>
+              </div>
+            </div>
+
             {savedVerdictItems.length === 0 ? (
               <div className="border border-dashed border-slate-800 rounded p-12 text-center text-slate-500 font-mono text-xs">
                 <Bookmark className="w-8 h-8 mx-auto mb-2 text-slate-600" />
@@ -794,9 +911,37 @@ export default function Dashboard() {
                         </div>
                       </div>
 
-                      <div className="mt-2 text-xs text-slate-300 font-sans font-medium">
-                        {tx.insiderName} ({tx.insiderTitle}) • ${Math.round(tx.totalValueUsd).toLocaleString()} (+{tx.holdingsIncreasePct}%)
+                      <div className="mt-2 text-xs text-slate-300 font-sans font-medium flex flex-wrap items-center justify-between gap-2">
+                        <span>
+                          {tx.insiderName} ({tx.insiderTitle}) • ${Math.round(tx.totalValueUsd).toLocaleString()} (+{tx.holdingsIncreasePct}%)
+                        </span>
+                        {tx.currentMarketPrice !== undefined && (
+                          <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                            <span className="text-slate-400">
+                              Købt @ ${tx.pricePerShare} → Nu: <span className="text-slate-200 font-medium">${tx.currentMarketPrice}</span>
+                            </span>
+                            {tx.returnSinceBuyPct !== undefined && (
+                              <span
+                                className={`px-1.5 py-0.2 rounded font-semibold ${
+                                  tx.returnSinceBuyPct < 0
+                                    ? 'text-cyan-300 bg-cyan-950/60 border border-cyan-800'
+                                    : 'text-emerald-300 bg-emerald-950/60 border border-emerald-800'
+                                }`}
+                              >
+                                {tx.returnSinceBuyPct > 0 ? '+' : ''}{tx.returnSinceBuyPct}%
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
+
+                      {tx.isTradingBelowInsiderPrice && (
+                        <div className="mt-1.5">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-600 text-cyan-300 inline-flex items-center gap-1 shadow-sm shadow-cyan-950">
+                            <span>💎 HANDLER MED RABAT IFT. INSIDER ({tx.returnSinceBuyPct}%)</span>
+                          </span>
+                        </div>
+                      )}
 
                       <h4 className="mt-2 text-xs font-bold text-slate-100 font-sans leading-snug line-clamp-2">
                         {verdict.headline}

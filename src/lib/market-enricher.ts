@@ -197,6 +197,24 @@ export async function enrichTransactionWithMarketData(
     // Hvis vi fandt live kursdata
     if (prices) {
       tx.recentPriceChange30dPct = prices.recentPriceChange30dPct;
+      tx.currentMarketPrice = prices.currentPrice;
+
+      if (tx.pricePerShare > 0 && tx.transactionCode === 'P') {
+        const diffPct = Number(
+          (((prices.currentPrice - tx.pricePerShare) / tx.pricePerShare) * 100).toFixed(2)
+        );
+        tx.returnSinceBuyPct = diffPct;
+        tx.isTradingBelowInsiderPrice = prices.currentPrice < tx.pricePerShare;
+
+        const discountText = tx.isTradingBelowInsiderPrice
+          ? `(RABAT: Handler ${Math.abs(diffPct)}% under insiderens købspris!)`
+          : `(Insider afkast siden køb: +${diffPct}%)`;
+
+        notesParts.push(
+          `Insider Alpha: Købskurs $${tx.pricePerShare} vs. Aktuel kurs $${prices.currentPrice} ${discountText}`
+        );
+      }
+
       notesParts.push(
         `Kurs-kontekst: Seneste lukkekurs $${prices.currentPrice} (${
           prices.recentPriceChange30dPct >= 0 ? '+' : ''

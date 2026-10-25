@@ -25,9 +25,12 @@ export function getNordicMockTransactions(): InsiderTransaction[] {
       isClusterBuy: true,
       clusterCount: 2,
       recentPriceChange30dPct: -26.4,
+      currentMarketPrice: 53.2,
+      returnSinceBuyPct: -4.66,
+      isTradingBelowInsiderPrice: true,
       secFilingUrl: 'https://view.news.eu.nasdaq.com/view?id=dk-orsted-cfo-mar19',
       contextNotes:
-        'MAR art. 19 indberetning (Nasdaq Copenhagen). CFO Rasmus Errboe køber 15.000 aktier for DKK 5.775.000 ($837.375 USD a DKK 385,00) efter et 26,4% kursfald i Ørsted A/S forårsaget af forsinket havvindmøllepark. Forøger personlig beholdning med 48,5%.',
+        'MAR art. 19 indberetning (Nasdaq Copenhagen). CFO Rasmus Errboe køber 15.000 aktier for DKK 5.775.000 ($837.375 USD a DKK 385,00) efter et 26,4% kursfald i Ørsted A/S forårsaget af forsinket havvindmøllepark. Forøger personlig beholdning med 48,5%.\n\nInsider Alpha: Købskurs $55.80 (DKK 385) vs. Aktuel kurs $53.20 (DKK 367) (RABAT: Handler 4.66% under CFOens købspris!)',
     },
     {
       id: 'dk-mock-rockwool-cluster',
@@ -45,9 +48,12 @@ export function getNordicMockTransactions(): InsiderTransaction[] {
       isClusterBuy: true,
       clusterCount: 3,
       recentPriceChange30dPct: 4.1,
+      currentMarketPrice: 405.0,
+      returnSinceBuyPct: 5.8,
+      isTradingBelowInsiderPrice: false,
       secFilingUrl: 'https://view.news.eu.nasdaq.com/view?id=dk-rockwool-cluster-mar19',
       contextNotes:
-        'MAR art. 19 indberetning (Nasdaq Copenhagen). Cluster buy: Bestyrelsesformand og to bestyrelsesmedlemmer har samlet købt for DKK 18,2 mio. ($2.64 mio. USD) to uger forud for Q3 regnskabsaflæggelse i den danske industrikoncern.',
+        'MAR art. 19 indberetning (Nasdaq Copenhagen). Cluster buy: Bestyrelsesformand og to bestyrelsesmedlemmer har samlet købt for DKK 18,2 mio. ($2.64 mio. USD) to uger forud for Q3 regnskabsaflæggelse i den danske industrikoncern.\n\nInsider Alpha: Købskurs $382.80 vs. Aktuel kurs $405.00 (Insider afkast siden køb: +5.80%)',
     },
     {
       id: 'dk-mock-dsv-rsu-grant',
@@ -63,6 +69,7 @@ export function getNordicMockTransactions(): InsiderTransaction[] {
       sharesOwnedFollowing: 112000,
       holdingsIncreasePct: 12.0,
       isClusterBuy: false,
+      currentMarketPrice: 210.25,
       secFilingUrl: 'https://view.news.eu.nasdaq.com/view?id=dk-dsv-rsu-mar19',
       contextNotes:
         'MAR art. 19 indberetning (Nasdaq Copenhagen). Vederlagsfri tildeling af betingede aktier (RSU / incitamentsprogram) uden egenbetaling (kode A). Afvises af Hard Filter, da der ikke er tale om et åbent markedskøb med egne beskattede midler.',
