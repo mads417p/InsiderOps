@@ -29,6 +29,8 @@ export interface InsiderTransaction {
   tradabilityReason?: string; // Begrundelse for handelbarhed eller afvisningsårsag
   avgDailyDollarVolume?: number; // Gennemsnitlig daglig handelsvolumen i USD
   marketCapUsd?: number;
+  is10b51Plan?: boolean; // True hvis handlen er udført under en forudbestemt Rule 10b5-1 automatisk handelsplan
+  footnotesSummary?: string; // Ekstraherede fodnoter fra indberetningen
 }
 
 export type AsymmetrySignal = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';

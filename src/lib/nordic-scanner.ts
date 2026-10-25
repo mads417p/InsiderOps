@@ -221,7 +221,31 @@ export function mapNordicCompanyToTicker(
   if (c.includes('BIOINVENT')) return 'BINV.ST';
   if (c.includes('HANSA BIOPHARMA')) return 'HNSA.ST';
 
-  // Heuristisk suffix-bestemmelse: Stockholm (.ST) vs. København (.CO)
+  // Finske top-aktier (Nasdaq Helsinki)
+  if (c.includes('NOKIA')) return 'NOKIA.HE';
+  if (c.includes('SAMPO')) return 'SAMPO.HE';
+  if (c.includes('KONE') && !c.includes('CRANES')) return 'KNEBV.HE';
+  if (c.includes('KONECRANES')) return 'KCR.HE';
+  if (c.includes('NESTE')) return 'NESTE.HE';
+  if (c.includes('UPM')) return 'UPM.HE';
+  if (c.includes('STORA ENSO')) return 'STERV.HE';
+  if (c.includes('WARTSILA') || c.includes('WÄRTSILÄ')) return 'WRT1V.HE';
+  if (c.includes('FORTUM')) return 'FORTUM.HE';
+  if (c.includes('ORION')) return 'ORNBV.HE';
+  if (c.includes('NORDEA')) {
+    if (m.includes('HELSINKI') || curr === 'EUR') return 'NDA-FI.HE';
+    if (m.includes('STOCKHOLM') || curr === 'SEK') return 'NDA-SE.ST';
+    return 'NDA-DK.CO';
+  }
+
+  // Heuristisk suffix-bestemmelse: Helsinki (.HE), Stockholm (.ST) vs. København (.CO)
+  const isFinnish =
+    m.includes('HELSINKI') ||
+    m.includes('FINLAND') ||
+    curr === 'EUR' ||
+    c.endsWith(' OYJ') ||
+    c.includes(' OYJ');
+
   const isSwedish =
     m.includes('STOCKHOLM') ||
     m.includes('SWEDEN') ||
@@ -236,6 +260,7 @@ export function mapNordicCompanyToTicker(
     .toUpperCase();
 
   const baseTicker = cleanFirstWord || 'NORDIC';
+  if (isFinnish) return `${baseTicker}.HE`;
   return isSwedish ? `${baseTicker}.ST` : `${baseTicker}.CO`;
 }
 
@@ -414,9 +439,13 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
     // Main Market Stockholm
     'https://api.news.eu.nasdaq.com/news/query.action?type=json&showAttachments=true&showCnsSpecific=true&showCompany=true&start=0&count=35&market=Main%20Market,%20Stockholm',
     'https://api.news.eu.nasdaq.com/news/query.action?type=json&showAttachments=true&showCnsSpecific=true&showCompany=true&start=35&count=35&market=Main%20Market,%20Stockholm',
-    // First North Denmark & Sweden
+    // Main Market Helsinki
+    'https://api.news.eu.nasdaq.com/news/query.action?type=json&showAttachments=true&showCnsSpecific=true&showCompany=true&start=0&count=35&market=Main%20Market,%20Helsinki',
+    'https://api.news.eu.nasdaq.com/news/query.action?type=json&showAttachments=true&showCnsSpecific=true&showCompany=true&start=35&count=35&market=Main%20Market,%20Helsinki',
+    // First North Denmark, Sweden & Finland
     'https://api.news.eu.nasdaq.com/news/query.action?type=json&showAttachments=true&showCnsSpecific=true&showCompany=true&start=0&count=25&market=First%20North%20Denmark',
     'https://api.news.eu.nasdaq.com/news/query.action?type=json&showAttachments=true&showCnsSpecific=true&showCompany=true&start=0&count=25&market=First%20North%20Sweden',
+    'https://api.news.eu.nasdaq.com/news/query.action?type=json&showAttachments=true&showCnsSpecific=true&showCompany=true&start=0&count=25&market=First%20North%20Finland',
   ];
 
   try {
@@ -459,8 +488,8 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
     });
 
     if (marAnnouncements.length === 0) {
-      console.log('Ingen live MAR art. 19 meddelelser i seneste feed. Bruger nordiske mock-transaktioner.');
-      return getNordicMockTransactions();
+      console.log('Ingen live MAR art. 19 meddelelser i seneste feed.');
+      return [];
     }
 
     // Hent brødtekster for op til 12 meddelelser parallelt med 3s timeout
@@ -537,7 +566,18 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
         : new Date().toISOString().split('T')[0];
 
       const currSymbol = parsed.currency;
-      const exchangeLabel = isSwedish ? 'Nasdaq Nordic' : 'CPH (Nasdaq Copenhagen)';
+      let exchangeLabel = 'CPH (Nasdaq Copenhagen)';
+      if (item.market.includes('Stockholm')) exchangeLabel = 'STO (Nasdaq Stockholm)';
+      else if (item.market.includes('Helsinki')) exchangeLabel = 'HEL (Nasdaq Helsinki)';
+      else if (item.market.includes('Sweden')) exchangeLabel = 'First North Sweden';
+      else if (item.market.includes('Denmark')) exchangeLabel = 'First North Denmark';
+      else if (item.market.includes('Finland')) exchangeLabel = 'First North Finland';
+      else if (isSwedish) exchangeLabel = 'STO (Nasdaq Stockholm)';
+      else if (item.market.toLowerCase().includes('finland') || parsed.currency === 'EUR') exchangeLabel = 'HEL (Nasdaq Helsinki)';
+
+      const is10b51Plan = /10b5-?1|automatisk|handelsplan|trading\s*plan|pre-arranged/i.test(
+        `${item.ann.headline || ''} ${item.text || ''} ${parsed.notes || ''}`
+      );
 
       const tx: InsiderTransaction = {
         id: `nordic-${item.ann.disclosureId || Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -556,6 +596,7 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
         clusterCount: 1,
         ownershipNature: 'D',
         isExecutiveOfficer: isExecutive,
+        is10b51Plan,
         exchange: exchangeLabel,
         isTradableInDK: true,
         secFilingUrl: item.ann.messageUrl || 'https://view.news.eu.nasdaq.com',
@@ -584,20 +625,17 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
       }
     }
 
-    // Kombiner med mock transactions så brugeren altid har et rigt udvalg af både DK og SE cases
-    const finalTransactions =
-      parsedTransactions.length < 3
-        ? [...parsedTransactions, ...getNordicMockTransactions()]
-        : parsedTransactions;
+    // live transaktioner - streng separation: ingen mock-transaktioner i live-feedet!
+    const finalTransactions = parsedTransactions;
 
-    // Berig med live markedskurser fra Yahoo Finance (.CO og .ST)
+    // Berig med live markedskurser fra Yahoo Finance (.CO, .ST og .HE)
     await Promise.allSettled(
       finalTransactions.map((tx) => enrichTransactionWithMarketData(tx))
     );
 
     return finalTransactions;
   } catch (err) {
-    console.warn('Uventet fejl i fetchNordicInsiderTransactions, falder tilbage til mock-transaktioner:', err);
-    return getNordicMockTransactions();
+    console.warn('Uventet fejl i fetchNordicInsiderTransactions:', err);
+    return [];
   }
 }

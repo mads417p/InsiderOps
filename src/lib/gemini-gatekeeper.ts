@@ -57,6 +57,17 @@ function evaluateHeuristicGatekeeper(tx: InsiderTransaction): GatekeeperResult {
   const isLargeValue = tx.totalValueUsd >= 250000;
   const hadPriceDrop = (tx.recentPriceChange30dPct ?? 0) <= -15.0;
 
+  // Håndter Rule 10b5-1 automatiske handelsplaner (0% aktuel asymmetri)
+  if (tx.is10b51Plan) {
+    return {
+      passedHardFilter: true,
+      geminiPreScore: 16,
+      asymmetrySignal: 'NOISE',
+      quickReasoning:
+        'Rule 10b5-1 automatisk handelsplan: Handlen er forudbestemt måneder i forvejen via en fast algoritme og reflekterer ingen aktuel informationsasymmetri.',
+    };
+  }
+
   // Håndter kosmetiske PR-køb
   if (isCosmetic) {
     return {
@@ -139,7 +150,8 @@ Regler for scoring:
 2. Stor forøgelse af beholdning (holdingsIncreasePct > 15%) viser reel "skin-in-the-game" overbevisning: Vægt højt.
 3. Cluster-køb (isClusterBuy = true, flere insidere køber inden for 10 dage): Vægt meget højt.
 4. Straffe "Cosmetic / PR buys" hårdt med en lav score (<35): Hvis en direktør (f.eks. CEO) køber for et pænt beløb over $50k, men det kun øger deres beholdning med < 2%, er det et PR-stunt designet til at narre detailinvestorer.
-5. quickReasoning SKAL være 1-2 knivskarpe sætninger på præcist dansk.`;
+5. Rule 10b5-1 automatisk handelsplan (is10b51Plan = true): Hvis handlen er udført under en forudbestemt automatisk handelsplan eller nævner 10b5-1, har den 0% aktuel informationsasymmetri. Straffes NÅDESLØST med score < 20 og asymmetrySignal = 'NOISE'.
+6. quickReasoning SKAL være 1-2 knivskarpe sætninger på præcist dansk.`;
 
     const prompt = `Evaluer følgende insider-transaktion for informationsasymmetri:
 Ticker: ${tx.ticker} (${tx.companyName})
@@ -150,6 +162,7 @@ Samlet værdi: $${Math.round(tx.totalValueUsd).toLocaleString()} USD
 Holdings efter køb: ${tx.sharesOwnedFollowing.toLocaleString()} aktier
 Forøgelse af egen beholdning: +${tx.holdingsIncreasePct}%
 Cluster-køb: ${tx.isClusterBuy ? `Ja (${tx.clusterCount ?? 2} insidere)` : 'Nej'}
+Rule 10b5-1 Plan: ${tx.is10b51Plan ? 'JA (Forudbestemt automatisk algoritme/plan)' : 'NEJ (Frivilligt, skønsmæssigt køb)'}
 Kursændring seneste 30 dage: ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'Ukendt'}
 Kontekst / Noter: ${tx.contextNotes || 'Ingen yderligere noter'}`;
 

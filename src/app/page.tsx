@@ -120,7 +120,8 @@ export default function Dashboard() {
 - **Insider:** ${tx.insiderName}
 - **Titel / Rolle:** ${tx.insiderTitle} ${tx.isExecutiveOfficer ? '(C-Suite / Direktion)' : ''}
 - **Ejerskabets natur:** ${tx.ownershipNature === 'D' ? 'Direkte (D - Egne personlige aktier)' : 'Indirekte (I - Fond / Trust / Holdingselskab)'}
-- **Børs & Handelbarhed (DK / Nordnet / Saxo):** ${tx.isTradableInDK !== false ? '✅ Verificeret handelbar' : '🚫 Ikke godkendt'} (${tx.exchange || 'N/A'}${tx.avgDailyDollarVolume ? `, Gns. omsætning: $${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')}/dag` : ''})
+- **Rule 10b5-1 Handelsplan:** ${tx.is10b51Plan ? '⚠️ JA (Automatisk forudbestemt plan - 0% aktuel asymmetri)' : '✅ NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
+${tx.footnotesSummary ? `- **SEC Fodnoter (Det med småt):**\n${tx.footnotesSummary}\n` : ''}- **Børs & Handelbarhed (DK / Nordnet / Saxo):** ${tx.isTradableInDK !== false ? '✅ Verificeret handelbar' : '🚫 Ikke godkendt'} (${tx.exchange || 'N/A'}${tx.avgDailyDollarVolume ? `, Gns. omsætning: $${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')}/dag` : ''})
 - **Handelbarheds-status:** ${tx.tradabilityReason || (tx.isTradableInDK !== false ? 'Handelbar på standard DK mæglere' : 'Ikke verificeret')}
 - **Transaktionstype:** Kode ${tx.transactionCode} (Åbent markedskøb)
 - **Handelsbeløb:** $${Math.round(tx.totalValueUsd).toLocaleString()} USD (${tx.shares.toLocaleString()} aktier á $${tx.pricePerShare} USD)
@@ -202,7 +203,7 @@ ${verdict.judgeThinking}
     URL.revokeObjectURL(url);
   };
 
-  // Indlæs gemte domme fra localStorage ved opstart
+  // Indlæs gemte domme fra localStorage og synkroniser med serverens persistente database
   useEffect(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -213,6 +214,24 @@ ${verdict.judgeThinking}
     } catch (e) {
       console.warn('Kunne ikke hente gemt historik fra localStorage:', e);
     }
+
+    // Synkroniser med den persistente server-side database (/api/council)
+    fetch('/api/council')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.verdicts) {
+          setVerdictHistory((prev) => {
+            const merged = { ...data.verdicts, ...prev };
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+            } catch {
+              // ignore
+            }
+            return merged;
+          });
+        }
+      })
+      .catch((err) => console.warn('Kunne ikke synkronisere med server-database:', err));
   }, []);
 
   const fetchScan = useCallback(
@@ -324,7 +343,7 @@ ${verdict.judgeThinking}
     }
   };
 
-  const handleRemoveFromWatchlist = (txId: string) => {
+  const handleRemoveFromWatchlist = async (txId: string) => {
     const updated = { ...verdictHistory };
     delete updated[txId];
     setVerdictHistory(updated);
@@ -332,6 +351,11 @@ ${verdict.judgeThinking}
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
     } catch (err) {
       console.warn(err);
+    }
+    try {
+      await fetch(`/api/council?id=${encodeURIComponent(txId)}`, { method: 'DELETE' });
+    } catch (err) {
+      console.warn('Kunne ikke slette dom på serveren:', err);
     }
     if (selectedTx?.id === txId) {
       setActiveVerdict(null);
@@ -1061,6 +1085,14 @@ ${verdict.judgeThinking}
                                   Cluster ({tx.clusterCount ?? 2})
                                 </span>
                               )}
+                              {tx.is10b51Plan && (
+                                <span
+                                  className="text-[10px] px-1.5 py-0.2 rounded bg-red-950/80 border border-red-700 text-red-300 font-semibold flex items-center gap-0.5"
+                                  title="Handel gennemført via forudbestemt Rule 10b5-1 automatisk handelsplan (Lav asymmetri)"
+                                >
+                                  🤖 10b5-1 Auto-Plan
+                                </span>
+                              )}
                             </div>
                           </td>
 
@@ -1355,6 +1387,11 @@ ${verdict.judgeThinking}
                               🏢 Fond / Indirect
                             </span>
                           )}
+                          {tx.is10b51Plan && (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-red-950/80 border border-red-700 text-red-300 font-mono">
+                              🤖 10b5-1 Plan
+                            </span>
+                          )}
                         </div>
                         {tx.currentMarketPrice !== undefined && (
                           <div className="flex items-center gap-1.5 font-mono text-[11px]">
@@ -1606,6 +1643,14 @@ ${verdict.judgeThinking}
                             /dag
                           </span>
                         ) : null}
+                      </div>
+                    )}
+
+                    {selectedTx.is10b51Plan && (
+                      <div className="mt-1.5 flex items-center gap-2 font-mono text-[11px]">
+                        <span className="px-2 py-0.5 rounded border text-[10px] font-semibold bg-red-950/80 border-red-700 text-red-300 flex items-center gap-1">
+                          🤖 10b5-1 AUTO-PLAN: Form 4 indberetter handlen som forudbestemt automatisk program (0% aktuel asymmetri)
+                        </span>
                       </div>
                     )}
 

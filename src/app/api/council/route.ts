@@ -2,7 +2,51 @@ import { NextResponse } from 'next/server';
 import { conveneCouncil } from '@/lib/claude-council';
 import { fetchSecForm4Footnotes } from '@/lib/sec-scanner';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
+import { getSavedVerdicts, saveVerdict, deleteVerdict } from '@/lib/db';
 import { InsiderTransaction } from '@/types/insider';
+
+export async function GET() {
+  try {
+    const verdicts = await getSavedVerdicts();
+    const count = Object.keys(verdicts).length;
+    return NextResponse.json({
+      success: true,
+      count,
+      verdicts,
+    });
+  } catch (error) {
+    console.error('Fejl i GET /api/council:', error);
+    return NextResponse.json(
+      { success: false, error: 'Kunne ikke hente gemte domme fra server-databasen' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    if (!id) {
+      return NextResponse.json(
+        { success: false, error: 'Mangler id parameter' },
+        { status: 400 }
+      );
+    }
+    const deleted = await deleteVerdict(id);
+    return NextResponse.json({
+      success: true,
+      deleted,
+      id,
+    });
+  } catch (error) {
+    console.error('Fejl i DELETE /api/council:', error);
+    return NextResponse.json(
+      { success: false, error: 'Kunne ikke slette dom fra databasen' },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(request: Request) {
   try {
@@ -31,14 +75,31 @@ export async function POST(request: Request) {
     ) {
       const footnotes = await fetchSecForm4Footnotes(tx.secFilingUrl);
       if (footnotes.length > 0) {
-        const footnoteSection = `SEC Form 4 Fodnoter (Det med småt):\n${footnotes.join('\n\n')}`;
+        tx.footnotesSummary = footnotes.join('\n\n');
+        const footnoteSection = `SEC Form 4 Fodnoter (Det med småt):\n${tx.footnotesSummary}`;
         tx.contextNotes = tx.contextNotes
           ? `${tx.contextNotes}\n\n${footnoteSection}`
           : footnoteSection;
+
+        // Tjek om fodnoterne nævner Rule 10b5-1 automatisk handelsplan
+        if (/10b5-1|rule 10b5-1|pre-arranged|automatic purchase|trading plan/i.test(tx.footnotesSummary)) {
+          tx.is10b51Plan = true;
+        }
       }
     }
 
     const verdict = await conveneCouncil(tx, judgeTier);
+
+    // Gem automatisk dommen i server-databasen data/insiderops-db.json
+    try {
+      await saveVerdict({
+        transaction: tx,
+        verdict,
+        savedAt: new Date().toISOString(),
+      });
+    } catch (dbErr) {
+      console.warn('Kunne ikke gemme dom i server-databasen:', dbErr);
+    }
 
     return NextResponse.json({
       success: true,

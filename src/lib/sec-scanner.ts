@@ -368,6 +368,38 @@ export function getMockTransactions(): InsiderTransaction[] {
       contextNotes:
         'Insider Salg (S) på $900.000 under 10b5-1 plan. Bliver filtreret fra, da vi udelukkende screener for købsasymmetri.',
     },
+    {
+      id: 'mock-10b51-plan-buy',
+      filingDate: '2026-10-24',
+      ticker: 'PLAN',
+      companyName: 'Planar Automated Systems Inc.',
+      insiderName: 'Robert Sterling',
+      insiderTitle: 'Chief Operating Officer',
+      transactionCode: 'P',
+      shares: 10000,
+      pricePerShare: 25.0,
+      totalValueUsd: 250000,
+      sharesOwnedFollowing: 55000,
+      holdingsIncreasePct: 22.2,
+      isClusterBuy: false,
+      clusterCount: 1,
+      ownershipNature: 'D',
+      isExecutiveOfficer: true,
+      is10b51Plan: true,
+      footnotesSummary:
+        '[F1] The purchases reported in this Form 4 were effected pursuant to a Rule 10b5-1 trading plan adopted by the Reporting Person on March 15, 2026.',
+      recentPriceChange30dPct: -12.0,
+      currentMarketPrice: 24.5,
+      returnSinceBuyPct: -2.0,
+      isTradingBelowInsiderPrice: true,
+      exchange: 'NASDAQ',
+      isTradableInDK: true,
+      tradabilityReason: 'Verificeret: NASDAQ • Likviditet $9.2M/dag • Handelbar på Nordnet / Saxo',
+      avgDailyDollarVolume: 9200000,
+      secFilingUrl: 'https://www.sec.gov/edgar/data/1999999/000199999926000001/form4.xml',
+      contextNotes:
+        'SEC Form 4 Fodnoter (Det med småt):\n[F1] The purchases reported in this Form 4 were effected pursuant to a Rule 10b5-1 trading plan adopted by the Reporting Person on March 15, 2026.\n\nAutomatisk eksekveret køb under Rule 10b5-1 handelsplan indgået for 7 måneder siden. 0% aktuel informationsasymmetri.',
+    },
   ];
 }
 
@@ -584,6 +616,20 @@ async function parseForm4Entry(
     const ownershipNature: 'D' | 'I' = ownershipVal === 'I' ? 'I' : 'D';
     const isExecutiveOfficer = isExecutiveTitle(insiderTitle);
 
+    // Tjek om handlen er eksekveret under en Rule 10b5-1 automatisk handelsplan
+    const aff10b5One = /<aff10b5One>\s*(1|true)\s*<\/aff10b5One>/i.test(xml);
+
+    // Udtræk alle fodnoter fra <footnotes> sektionen
+    const footnoteMatches = [...xml.matchAll(/<footnote\s+id=["']?([^"'>]+)["']?>([\s\S]*?)<\/footnote>/gi)];
+    const footnotesSummary = footnoteMatches
+      .map((m) => `[${m[1]}] ${m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()}`)
+      .join('\n');
+
+    const has10b51InFootnotes = /10b5-?1|rule\s*10b5|pre-arranged|automatic\s*(?:purchase|trading)/i.test(
+      `${footnotesSummary} ${xml}`
+    );
+    const is10b51Plan = aff10b5One || has10b51InFootnotes;
+
     const transaction: InsiderTransaction = {
       id: `sec-${ticker}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       filingDate,
@@ -601,7 +647,12 @@ async function parseForm4Entry(
       clusterCount: 1,
       ownershipNature,
       isExecutiveOfficer,
+      is10b51Plan,
+      footnotesSummary: footnotesSummary || undefined,
       secFilingUrl: rawXmlUrl,
+      contextNotes: footnotesSummary
+        ? `SEC Form 4 Fodnoter (Det med småt):\n${footnotesSummary}`
+        : undefined,
     };
 
     return transaction;
@@ -747,6 +798,7 @@ export async function fetchHighConvictionOpenMarketBuys(limit: number = 20): Pro
         ? 'D'
         : detectOwnershipNature(undefined, insiderName, rowHtml);
       const isExecutiveOfficer = isExecutiveTitle(insiderTitle);
+      const is10b51Plan = /10b5-?1/i.test(rowHtml);
 
       transactions.push({
         id: `live-buy-${ticker}-${filingDate}-${shares}-${Math.round(totalValueUsd)}`,
@@ -764,6 +816,7 @@ export async function fetchHighConvictionOpenMarketBuys(limit: number = 20): Pro
         isClusterBuy: false,
         ownershipNature,
         isExecutiveOfficer,
+        is10b51Plan,
         secFilingUrl,
       });
     }
@@ -920,6 +973,7 @@ async function fetchRawExecutiveOfficerBuys(limit: number = 25): Promise<Insider
         : isDirect
         ? 'D'
         : detectOwnershipNature(undefined, insiderName, rowHtml);
+      const is10b51Plan = /10b5-?1/i.test(rowHtml);
 
       transactions.push({
         id: `exec-buy-${ticker}-${filingDate}-${shares}-${Math.round(totalValueUsd)}`,
@@ -937,6 +991,7 @@ async function fetchRawExecutiveOfficerBuys(limit: number = 25): Promise<Insider
         isClusterBuy: false,
         ownershipNature,
         isExecutiveOfficer: true,
+        is10b51Plan,
         secFilingUrl,
       });
     }
@@ -1022,7 +1077,7 @@ export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTra
     }
 
     if (combined.length === 0) {
-      return getMockTransactions();
+      return [];
     }
 
     // Genberegn sande cluster buys på tværs af de kombinerede feeds
@@ -1037,8 +1092,8 @@ export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTra
 
     return finalSelection;
   } catch (error) {
-    console.warn('Uventet fejl i fetchLiveSecForm4s, falder tilbage til mock-transaktioner:', error);
-    return getMockTransactions();
+    console.warn('Uventet fejl i fetchLiveSecForm4s:', error);
+    return [];
   }
 }
 

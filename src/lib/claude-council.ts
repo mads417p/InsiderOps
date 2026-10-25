@@ -213,7 +213,24 @@ function generateSimulatedCouncil(
   let synthesis = '';
   let judgeThinking = '';
 
-  if (isCosmetic) {
+  if (tx.is10b51Plan) {
+    asymmetryScore = 15;
+    verdict = 'PR STUNT / STØJ (IGNORER)';
+    headline = `[SIMULERET RÅD] Forudbestemt Rule 10b5-1 automatisk køb i ${tx.ticker} (Ingen aktuel asymmetri)`;
+    profilerReport = `Transaktionen er udført i henhold til en Rule 10b5-1 handelsplan fastlagt måneder i forvejen. Insideren har ingen aktuel skønsmæssig beslutning truffet; det er en mekanisk eksekvering uden nyt overbevisningssignal.`;
+    catalystReport = `Da handlen er forudbestemt automatisk, er timingen rent kalendermæssig og afspejler ingen viden om nært forestående kurskatalysatorer.`;
+    skepticReport = `Rule 10b5-1 planer fratager handlen enhver form for informationsværdi. Algoritmisk eksekveret køb der ikke indeholder insider-alpha. Bør fuldstændigt ignoreres.`;
+    synthesis = `The Council forkaster transaktionen som støj (score 15/100). En Rule 10b5-1 handelsplan eliminerer den informationsmæssige asymmetri.`;
+
+    judgeThinking = `[Trin 1: Transaktionsstruktur]
+- Selskab: ${tx.ticker} (${tx.companyName}).
+- Rule 10b5-1 forudbestemt handelsplan detekteret.
+[Trin 2: Specialisternes vurdering]
+- Både Profiler og Skeptic bekræfter, at mekaniske 10b5-1 eksekveringer har nul signalværdi for en institutionel investor.
+[Trin 3: Afgørelse]
+- Asymmetry Score: 15/100.
+- Dom: PR STUNT / STØJ (IGNORER).`;
+  } else if (isCosmetic) {
     asymmetryScore = 24;
     verdict = 'PR STUNT / STØJ (IGNORER)';
     headline = `[SIMULERET RÅD - Mangler API-nøgle] Kosmetisk PR-køb i ${tx.ticker}: CEO køber for $${Math.round(
@@ -346,7 +363,8 @@ INSIDER: ${tx.insiderName}
 ROLLE / TITEL: ${tx.insiderTitle}
 C-SUITE DIREKTØR: ${tx.isExecutiveOfficer ? 'JA (C-Suite / Executive Officer)' : 'NEJ (Menig Bestyrelse eller 10% Fond)'}
 EJERSKABETS NATUR: ${tx.ownershipNature === 'I' ? 'INDIREKTE (I - Via Fond / LLC / Trust / Holding)' : 'DIREKTE (D - Egne personlige aktier)'}
-TRANSAKTIONSTYPE: Kode ${tx.transactionCode} (Åbent markedskøb)
+RULE 10b5-1 HANDELSPLAN: ${tx.is10b51Plan ? 'JA (Forudbestemt automatisk handelsplan - 0% aktuel asymmetri/skøn)' : 'NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
+${tx.footnotesSummary ? `SEC FORM 4 FODNOTER / DET MED SMÅT:\n${tx.footnotesSummary}\n` : ''}TRANSAKTIONSTYPE: Kode ${tx.transactionCode} (Åbent markedskøb)
 ANTAL AKTIER: ${tx.shares.toLocaleString()} stk a $${tx.pricePerShare} USD
 TOTAL HANDELSVÆRDI: $${Math.round(tx.totalValueUsd).toLocaleString()} USD
 BEHOLDNING EFTER KØB: ${tx.sharesOwnedFollowing.toLocaleString()} aktier
@@ -385,6 +403,7 @@ SKRIV PÅ DANSK. Maksimalt 140 ord. Skarp, analytisk tone.`;
   // Specialist 3: The Forensic Skeptic (Sonnet)
   const skepticSystem = `Du er "The Forensic Skeptic" (Djævelens Advokat) i investeringsrådet The Council.
 Dit eneste mål er at DRÆBE købs-tesen og beskytte fondens kapital. Find alle svagheder: Er det et PR-stunt, en "faldende kniv" / value trap, likviditetsproblemer, eller forsøg på at skabe falsk tryghed før dårlige nyheder?
+Tjek altid om handlen er gennemført under en Rule 10b5-1 forudbestemt automatisk handelsplan eller ifølge SEC-fodnoter er skemalagt lang tid forvejen. Hvis det er en 10b5-1 plan, skal du NÅDESLØST afvise den som 0% overbevisning og automatisk maskin-eksekvering uden aktuel informationsasymmetri!
 Tjek altid SEC Form 4 fodnoter og prisforskellen mellem insiderens købskurs og aktuel kurs. Hvis en 10% ejer køber til en kurs markant OVER markedsprisen (f.eks. +30% over børskurs), eller aktien er kollapset >30% lige efter købet, skal du straks advare om, at det kan være en nødlidende rekapitalisering, gældskonvertering eller 'falling knife' fremfor et normalt åbent markedskøb!
 Undersøg altid aktiens likviditet og børs: Hvis aktien handler på OTC, eller den daglige omsætning er under $2.000.000 USD/dag, skal du advare om spread-slippage og likviditetsrisiko for en institutionel/dansk investor på Nordnet/Saxo.
 SKRIV PÅ DANSK. Maksimalt 140 ord. Nådesløs og kritisk.`;
@@ -419,6 +438,7 @@ Du SKAL returnere et JSON-objekt med præcis denne struktur:
 }
 
 Regler for dommen:
+- Hvis handlen er udført under en Rule 10b5-1 automatisk forudbestemt handelsplan: Sæt altid Asymmetry Score under 25 og dommen til "PR STUNT / STØJ (IGNORER)", da der er 0% aktuel informationsasymmetri eller skønsmæssigt engagement fra insideren.
 - Hvis CFO/General Counsel/CEO køber markant (+15% beholdning) og/eller indgår i et verificeret cluster-køb med andre uafhængige med-købere: Typisk score 80-98 og STRONG ASYMMETRY (KØB).
 - Hvis CEO/insider køber for småpenge i forhold til formue (<2% stigning i beholdning): Typisk score <35 og PR STUNT / STØJ.
 - Vurder altid om der er med-købere i clusteret. Hvis både en CFO og et bestyrelsesmedlem køber for egne midler i samme tidsvindue, validerer de hinandens conviction.

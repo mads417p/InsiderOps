@@ -8,6 +8,7 @@ import {
 import { fetchNordicInsiderTransactions } from '@/lib/nordic-scanner';
 import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
+import { saveScan, getLatestScan } from '@/lib/db';
 import { InsiderTransaction } from '@/types/insider';
 
 export async function POST(request: Request) {
@@ -41,28 +42,53 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const source = searchParams.get('source') || 'mock';
     const ticker = searchParams.get('ticker')?.trim().toUpperCase();
+    const sourceKey = ticker ? `ticker:${ticker}` : source;
 
-    let transactions;
-    if (ticker && ticker.length > 0) {
-      transactions = await scanTickerSecForm4s(ticker);
-    } else if (source === 'nordic') {
-      transactions = await fetchNordicInsiderTransactions();
-    } else if (source === 'csuite') {
-      transactions = await fetchExecutiveAndClusterBuys(25);
-    } else if (source === 'live') {
-      transactions = await fetchLiveSecForm4s(20);
-    } else {
-      transactions = getMockTransactions();
+    let transactions: InsiderTransaction[] = [];
+    try {
+      if (ticker && ticker.length > 0) {
+        transactions = await scanTickerSecForm4s(ticker);
+      } else if (source === 'nordic') {
+        transactions = await fetchNordicInsiderTransactions();
+      } else if (source === 'csuite') {
+        transactions = await fetchExecutiveAndClusterBuys(25);
+      } else if (source === 'live') {
+        transactions = await fetchLiveSecForm4s(20);
+      } else {
+        transactions = getMockTransactions();
+      }
+    } catch (fetchErr) {
+      console.warn(`Fejl ved hentning af transaktioner for ${sourceKey}:`, fetchErr);
     }
 
-    const evaluations = await evaluateBatchWithGatekeeper(transactions);
+    let sortedEvaluations: Array<{
+      transaction: InsiderTransaction;
+      result: import('@/types/insider').GatekeeperResult;
+    }> = [];
 
-    // Sorter: Handler med bestået hard filter og højest geminiPreScore øverst, afviste nederst
-    const sortedEvaluations = [...evaluations].sort((a, b) => {
-      if (a.result.passedHardFilter && !b.result.passedHardFilter) return -1;
-      if (!a.result.passedHardFilter && b.result.passedHardFilter) return 1;
-      return b.result.geminiPreScore - a.result.geminiPreScore;
-    });
+    if (transactions.length > 0) {
+      const evaluations = await evaluateBatchWithGatekeeper(transactions);
+
+      // Sorter: Handler med bestået hard filter og højest geminiPreScore øverst, afviste nederst
+      sortedEvaluations = [...evaluations].sort((a, b) => {
+        if (a.result.passedHardFilter && !b.result.passedHardFilter) return -1;
+        if (!a.result.passedHardFilter && b.result.passedHardFilter) return 1;
+        return b.result.geminiPreScore - a.result.geminiPreScore;
+      });
+
+      // Gem scanningen i den server-side database
+      try {
+        await saveScan(sourceKey, sortedEvaluations);
+      } catch (dbErr) {
+        console.warn('Kunne ikke gemme scanning i database:', dbErr);
+      }
+    } else {
+      // Hvis live scan er tom eller fejlede, tjek seneste gemte scanning i databasen
+      const cached = await getLatestScan(sourceKey);
+      if (cached && cached.length > 0) {
+        sortedEvaluations = cached;
+      }
+    }
 
     const geminiKey = process.env.GEMINI_API_KEY;
     const anthropicKey = process.env.ANTHROPIC_API_KEY;
