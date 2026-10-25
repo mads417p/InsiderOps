@@ -24,6 +24,11 @@ export interface InsiderTransaction {
   ownershipNature?: 'D' | 'I'; // 'D' = Direct (personlige aktier), 'I' = Indirect (fond/LLC/trust)
   isExecutiveOfficer?: boolean; // true hvis CEO/CFO/COO/Pres/VP/GC/Chief/Counsel
   clusterPeers?: string[]; // Med-købere i samme selskab inden for samme tidsvindue
+  exchange?: string; // f.eks. 'NASDAQ', 'NYSE', 'CPH (Nasdaq Copenhagen)', 'OTC'
+  isTradableInDK?: boolean; // Om aktien er verificeret købbar på standard danske mæglerplatforme (Nordnet/Saxo)
+  tradabilityReason?: string; // Begrundelse for handelbarhed eller afvisningsårsag
+  avgDailyDollarVolume?: number; // Gennemsnitlig daglig handelsvolumen i USD
+  marketCapUsd?: number;
 }
 
 export type AsymmetrySignal = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';

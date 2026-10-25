@@ -364,6 +364,8 @@ AFKAST / DISKONT SIDEN KØB: ${
       ? `${tx.returnSinceBuyPct}% (${tx.isTradingBelowInsiderPrice ? 'HANDLER UNDER INSIDERENS KØBSKURS - RABAT/TAB' : 'HANDLER OVER INSIDERENS KØBSKURS - GEVINST'})`
       : 'Ukendt'
   }
+BØRS & HANDELBARHED (DK): ${tx.exchange || 'N/A'} - ${tx.isTradableInDK ? 'Verificeret handelbar på Nordnet / Saxo' : 'Advarsel: Begrænset / Ikke handelbar'} (${tx.tradabilityReason || ''})
+DAGLIG LIKVIDITET: ${tx.avgDailyDollarVolume ? `$${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')} USD/dag` : 'Ukendt'}
 SEC FILING URL: ${tx.secFilingUrl}
 KONTEKST / NOTER: ${tx.contextNotes || 'Ingen yderligere noter'}
   `.trim();
@@ -384,6 +386,7 @@ SKRIV PÅ DANSK. Maksimalt 140 ord. Skarp, analytisk tone.`;
   const skepticSystem = `Du er "The Forensic Skeptic" (Djævelens Advokat) i investeringsrådet The Council.
 Dit eneste mål er at DRÆBE købs-tesen og beskytte fondens kapital. Find alle svagheder: Er det et PR-stunt, en "faldende kniv" / value trap, likviditetsproblemer, eller forsøg på at skabe falsk tryghed før dårlige nyheder?
 Tjek altid SEC Form 4 fodnoter og prisforskellen mellem insiderens købskurs og aktuel kurs. Hvis en 10% ejer køber til en kurs markant OVER markedsprisen (f.eks. +30% over børskurs), eller aktien er kollapset >30% lige efter købet, skal du straks advare om, at det kan være en nødlidende rekapitalisering, gældskonvertering eller 'falling knife' fremfor et normalt åbent markedskøb!
+Undersøg altid aktiens likviditet og børs: Hvis aktien handler på OTC, eller den daglige omsætning er under $2.000.000 USD/dag, skal du advare om spread-slippage og likviditetsrisiko for en institutionel/dansk investor på Nordnet/Saxo.
 SKRIV PÅ DANSK. Maksimalt 140 ord. Nådesløs og kritisk.`;
 
   try {

@@ -31,6 +31,16 @@ export function applyHardFilter(tx: InsiderTransaction): { passed: boolean; reas
     };
   }
 
+  // 3. Tjek DK Handelbarhed & Likviditet (afvis illikvide penny stocks, US OTC og US closed-end fonde / PRIIPs)
+  if (tx.isTradableInDK === false) {
+    return {
+      passed: false,
+      reason:
+        tx.tradabilityReason ||
+        'Afvist: Ikke handelbar i Danmark (PRIIPs/KID blokering, OTC eller penny stock).',
+    };
+  }
+
   return { passed: true };
 }
 
@@ -229,6 +239,10 @@ export function getMockTransactions(): InsiderTransaction[] {
       currentMarketPrice: 22.8,
       returnSinceBuyPct: -5.0,
       isTradingBelowInsiderPrice: true,
+      exchange: 'NASDAQ',
+      isTradableInDK: true,
+      tradabilityReason: 'Verificeret: NASDAQ • Likviditet $18.4M/dag • Handelbar på Nordnet / Saxo',
+      avgDailyDollarVolume: 18400000,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1029384/000102938426000042/form4.xml',
       contextNotes:
         'Massivt CFO + General Counsel cluster-køb efter 28% kursfald grundet forsinket FDA-møde. Forøger CFOs beholdning med 42% ($480k).\n\nInsider Alpha: Købskurs $24.00 vs. Aktuel kurs $22.80 (RABAT: Handler 5.0% under insiderens købspris!)\n\nKurs-kontekst: Seneste lukkekurs $22.80 (-28.0% seneste 30d, -37.7% fra 3-mdr top $36.60).\n\nSeneste nyheder & katalysatorer:\n• [21 Oct] NovoCure clarifies timeline for FDA review meeting\n• [18 Oct] Analyst downgrade citing regulatory uncertainty',
@@ -254,6 +268,10 @@ export function getMockTransactions(): InsiderTransaction[] {
       currentMarketPrice: 11.7,
       returnSinceBuyPct: -10.0,
       isTradingBelowInsiderPrice: true,
+      exchange: 'NASDAQ',
+      isTradableInDK: true,
+      tradabilityReason: 'Verificeret: NASDAQ • Likviditet $4.2M/dag • Handelbar på Nordnet / Saxo',
+      avgDailyDollarVolume: 4200000,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1482910/000148291026000115/form4.xml',
       contextNotes:
         'CEO "Cosmetic / PR Buy" i presset selskab. Køb for $65k er mikroskopisk mod en eksisterende beholdning på $18 mio. (kun +0.36% forøgelse).\n\nInsider Alpha: Købskurs $13.00 vs. Aktuel kurs $11.70 (RABAT: Handler 10.0% under insiderens købspris!)\n\nKurs-kontekst: Seneste lukkekurs $11.70 (-45.0% seneste 30d, -62.3% fra 3-mdr top $31.00).\n\nSeneste nyheder & katalysatorer:\n• [20 Oct] Plexus Cloud lowers ARR guidance for Q4\n• [15 Oct] Major enterprise customer churn reported',
@@ -279,6 +297,10 @@ export function getMockTransactions(): InsiderTransaction[] {
       currentMarketPrice: 34.1,
       returnSinceBuyPct: 10.0,
       isTradingBelowInsiderPrice: false,
+      exchange: 'NYSE',
+      isTradableInDK: true,
+      tradabilityReason: 'Verificeret: NYSE • Likviditet $12.1M/dag • Handelbar på Nordnet / Saxo',
+      avgDailyDollarVolume: 12100000,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1129381/000112938126000089/form4.xml',
       contextNotes:
         'Stille Bestyrelsesformand + CFO køb ($310.000, +28% beholdning) i overset industriaktie to uger før kvartalsregnskab.\n\nInsider Alpha: Købskurs $31.00 vs. Aktuel kurs $34.10 (Insider afkast siden køb: +10.0%)\n\nKurs-kontekst: Seneste lukkekurs $34.10 (+3.5% seneste 30d, +7.7% fra 3-mdr top $31.65).\n\nSeneste nyheder & katalysatorer:\n• [19 Oct] Vanguard wins $85M infrastructure supply contract\n• [10 Oct] Q3 earnings scheduled for release November 6',
@@ -955,14 +977,17 @@ export async function fetchExecutiveAndClusterBuys(limit: number = 25): Promise<
     // Beregn sande cluster-køb på tværs af hele puljen med person-deduplikering og med-købere
     applyTrueClusterDeduplication(pool);
 
-    // Berig med Yahoo Finance markedskurs og alpha
+    // Filtrer transaktioner hvor personen er en Executive Officer (eller del af et verificeret cluster buy)
+    const result = pool
+      .filter((tx) => tx.isExecutiveOfficer || tx.isClusterBuy)
+      .slice(0, Math.max(limit, 25));
+
+    // Berig alle udvalgte kandidater med Yahoo Finance markedskurs, likviditet og DK handelbarhed
     await Promise.allSettled(
-      pool.slice(0, 15).map((tx) => enrichTransactionWithMarketData(tx))
+      result.map((tx) => enrichTransactionWithMarketData(tx))
     );
 
-    // Returner transaktioner hvor personen er en Executive Officer (eller del af et verificeret cluster buy)
-    const result = pool.filter((tx) => tx.isExecutiveOfficer || tx.isClusterBuy);
-    return result.slice(0, Math.max(limit, 20));
+    return result;
   } catch (err) {
     console.warn('Kunne ikke hente C-Suite Officer Purchases:', err);
     return [];
@@ -1003,7 +1028,14 @@ export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTra
     // Genberegn sande cluster buys på tværs af de kombinerede feeds
     applyTrueClusterDeduplication(combined);
 
-    return combined.slice(0, Math.max(limit, 20));
+    const finalSelection = combined.slice(0, Math.max(limit, 20));
+    await Promise.allSettled(
+      finalSelection
+        .filter((tx) => tx.isTradableInDK === undefined)
+        .map((tx) => enrichTransactionWithMarketData(tx))
+    );
+
+    return finalSelection;
   } catch (error) {
     console.warn('Uventet fejl i fetchLiveSecForm4s, falder tilbage til mock-transaktioner:', error);
     return getMockTransactions();

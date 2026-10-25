@@ -8,6 +8,13 @@ interface MarketDataSummary {
   recentPriceChange30dPct: number;
   pctFrom3moHigh: number;
   threeMonthHigh: number;
+  exchangeName?: string;
+  fullExchangeName?: string;
+  instrumentType?: string;
+  currency?: string;
+  avgDailyDollarVolume?: number;
+  shortName?: string;
+  longName?: string;
 }
 
 interface NewsHeadline {
@@ -31,7 +38,7 @@ function cleanHtmlEntities(text: string): string {
 }
 
 /**
- * Henter historiske lukkekurser for en ticker via Yahoo Finance chart API.
+ * Henter historiske lukkekurser, metadata og volumen for en ticker via Yahoo Finance chart API.
  */
 async function fetchMarketPrices(
   ticker: string,
@@ -52,7 +59,10 @@ async function fetchMarketPrices(
   if (!res.ok) return null;
 
   const data = await res.json();
-  const rawCloses = data.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+  const res0 = data.chart?.result?.[0];
+  const meta = res0?.meta;
+  const rawCloses = res0?.indicators?.quote?.[0]?.close;
+  const rawVolumes = res0?.indicators?.quote?.[0]?.volume;
 
   if (!Array.isArray(rawCloses)) return null;
 
@@ -75,11 +85,181 @@ async function fetchMarketPrices(
     (((currentPrice - price30dAgo) / price30dAgo) * 100).toFixed(1)
   );
 
+  // Beregn 20-dages gennemsnitlig daglig handelsvolumen i USD/valuta (volume * close)
+  let avgDailyDollarVolume = 0;
+  if (Array.isArray(rawVolumes)) {
+    const len = Math.min(rawCloses.length, rawVolumes.length);
+    const startIdx = Math.max(0, len - 20);
+    let sum = 0;
+    let count = 0;
+    for (let i = startIdx; i < len; i++) {
+      const c = rawCloses[i];
+      const v = rawVolumes[i];
+      if (typeof c === 'number' && typeof v === 'number' && c > 0 && v > 0) {
+        sum += c * v;
+        count++;
+      }
+    }
+    if (count > 0) {
+      avgDailyDollarVolume = Math.round(sum / count);
+    }
+  }
+
   return {
     currentPrice: Number(currentPrice.toFixed(2)),
     recentPriceChange30dPct,
     pctFrom3moHigh,
     threeMonthHigh: Number(threeMonthHigh.toFixed(2)),
+    exchangeName: meta?.exchangeName,
+    fullExchangeName: meta?.fullExchangeName,
+    instrumentType: meta?.instrumentType,
+    currency: meta?.currency,
+    avgDailyDollarVolume,
+    shortName: meta?.shortName,
+    longName: meta?.longName,
+  };
+}
+
+/**
+ * Verificerer om en aktie er handelbar for danske detailinvestorer via platforme som Nordnet og Saxo Bank.
+ * Tjekker:
+ * 1. Børs-whitelist: Kun NASDAQ, NYSE og Nasdaq Nordic (Copenhagen, Stockholm, Oslo). Afviser OTC / Pink Sheets.
+ * 2. Instrument-type & EU PRIIPs/KID: Afviser lukkede amerikanske fonde (CEF), trusts og ETF'er, der mangler KID.
+ * 3. Minimumskurs & Likviditet: Kurs >= $2.00 (eller >= 10 DKK) og gennemsnitlig daglig omsætning >= $500.000 USD.
+ */
+export function verifyDkTradability(
+  tx: InsiderTransaction,
+  meta?: {
+    exchangeName?: string;
+    fullExchangeName?: string;
+    instrumentType?: string;
+    currency?: string;
+    currentPrice?: number;
+    avgDailyDollarVolume?: number;
+    shortName?: string;
+    longName?: string;
+  }
+): {
+  isTradableInDK: boolean;
+  tradabilityReason: string;
+  exchange: string;
+  avgDailyDollarVolume: number;
+} {
+  const currentPrice = meta?.currentPrice || tx.currentMarketPrice || tx.pricePerShare || 0;
+  const avgDailyDollarVolume = meta?.avgDailyDollarVolume || tx.avgDailyDollarVolume || 0;
+  const exchangeRaw = (meta?.exchangeName || tx.exchange || '').toUpperCase();
+  const fullExchange = (meta?.fullExchangeName || '').toUpperCase();
+  const instrument = (meta?.instrumentType || 'EQUITY').toUpperCase();
+  const currency = (meta?.currency || (tx.ticker.includes('.CO') ? 'DKK' : 'USD')).toUpperCase();
+  const compName = (tx.companyName || '').toLowerCase();
+
+  // 1. Børs-tjek (Godkendte hovedbørser vs. OTC / Pink Sheets)
+  let exchangeFormatted = 'NASDAQ';
+  if (
+    exchangeRaw === 'NMS' ||
+    exchangeRaw === 'NGM' ||
+    exchangeRaw === 'NCM' ||
+    fullExchange.includes('NASDAQ') ||
+    exchangeRaw.includes('NASDAQ')
+  ) {
+    exchangeFormatted = 'NASDAQ';
+  } else if (
+    exchangeRaw === 'NYQ' ||
+    exchangeRaw === 'ASE' ||
+    fullExchange.includes('NYSE') ||
+    exchangeRaw.includes('NYSE')
+  ) {
+    exchangeFormatted = 'NYSE';
+  } else if (
+    exchangeRaw === 'CPH' ||
+    fullExchange.includes('COPENHAGEN') ||
+    tx.ticker.includes('.CO')
+  ) {
+    exchangeFormatted = 'CPH (Nasdaq Copenhagen)';
+  } else if (
+    exchangeRaw === 'STO' ||
+    exchangeRaw === 'OSL' ||
+    exchangeRaw === 'HEX' ||
+    fullExchange.includes('STOCKHOLM') ||
+    fullExchange.includes('OSLO')
+  ) {
+    exchangeFormatted = 'Nasdaq Nordic';
+  } else if (
+    ['PNK', 'OTC', 'OBB', 'GREY', 'PINX'].includes(exchangeRaw) ||
+    fullExchange.includes('OTC') ||
+    fullExchange.includes('PINK')
+  ) {
+    return {
+      isTradableInDK: false,
+      tradabilityReason: 'AFVIST: US OTC / Pink Sheets (Ikke godkendt fondsbørs for danske detailinvestorer)',
+      exchange: 'OTC',
+      avgDailyDollarVolume,
+    };
+  } else {
+    exchangeFormatted = exchangeRaw || 'US Main Market';
+  }
+
+  // 2. Instrument-tjek & EU PRIIPs / KID blokering (US Closed-End Funds & Trusts)
+  if (instrument !== 'EQUITY') {
+    return {
+      isTradableInDK: false,
+      tradabilityReason: `AFVIST: US Fond / ${instrument} (Blokeret i EU/DK pga. PRIIPs/KID reglerne)`,
+      exchange: exchangeFormatted,
+      avgDailyDollarVolume,
+    };
+  }
+
+  const isClosedEndFundOrTrust =
+    compName.includes('fund') ||
+    compName.includes('trust') ||
+    compName.includes('income shares') ||
+    compName.includes('closed-end');
+
+  if (isClosedEndFundOrTrust && currency === 'USD') {
+    return {
+      isTradableInDK: false,
+      tradabilityReason: 'AFVIST: US Closed-End Fund / Trust (Blokeret i EU/DK pga. PRIIPs/KID reglerne)',
+      exchange: exchangeFormatted,
+      avgDailyDollarVolume,
+    };
+  }
+
+  // 3. Minimumskurs & Likviditet
+  const minPrice = currency === 'DKK' ? 10.0 : 2.0;
+  if (currentPrice > 0 && currentPrice < minPrice) {
+    const formattedPrice = currency === 'DKK' ? `${currentPrice} DKK` : `$${currentPrice}`;
+    const formattedMin = currency === 'DKK' ? '10 DKK' : '$2.00';
+    return {
+      isTradableInDK: false,
+      tradabilityReason: `AFVIST: Penny Stock (Kurs ${formattedPrice} er under minimumskravet på ${formattedMin})`,
+      exchange: exchangeFormatted,
+      avgDailyDollarVolume,
+    };
+  }
+
+  if (avgDailyDollarVolume > 0 && avgDailyDollarVolume < 500000) {
+    return {
+      isTradableInDK: false,
+      tradabilityReason: `AFVIST: Illikvid aktie (Gns. daglig omsætning $${Math.round(
+        avgDailyDollarVolume
+      ).toLocaleString()} er under $500.000/dag)`,
+      exchange: exchangeFormatted,
+      avgDailyDollarVolume,
+    };
+  }
+
+  const volFormatted =
+    avgDailyDollarVolume >= 1000000
+      ? `$${(avgDailyDollarVolume / 1000000).toFixed(1)}M/dag`
+      : avgDailyDollarVolume > 0
+      ? `$${Math.round(avgDailyDollarVolume / 1000)}k/dag`
+      : 'Ukendt';
+
+  return {
+    isTradableInDK: true,
+    tradabilityReason: `Verificeret: ${exchangeFormatted} • Likviditet ${volFormatted} • Handelbar på Nordnet / Saxo`,
+    exchange: exchangeFormatted,
+    avgDailyDollarVolume,
   };
 }
 
@@ -193,6 +373,29 @@ export async function enrichTransactionWithMarketData(
     const news = newsResult.status === 'fulfilled' ? newsResult.value : [];
 
     const notesParts: string[] = [];
+
+    // 1. Tjek DK Handelbarhed & Likviditet (Nordnet / Saxo Gate)
+    const tradability = verifyDkTradability(tx, {
+      exchangeName: prices?.exchangeName,
+      fullExchangeName: prices?.fullExchangeName,
+      instrumentType: prices?.instrumentType,
+      currency: prices?.currency,
+      currentPrice: prices?.currentPrice,
+      avgDailyDollarVolume: prices?.avgDailyDollarVolume,
+      shortName: prices?.shortName,
+      longName: prices?.longName,
+    });
+
+    tx.exchange = tradability.exchange;
+    tx.isTradableInDK = tradability.isTradableInDK;
+    tx.tradabilityReason = tradability.tradabilityReason;
+    tx.avgDailyDollarVolume = tradability.avgDailyDollarVolume;
+
+    if (!tradability.isTradableInDK) {
+      notesParts.push(`⚠️ HANDELBARHED ADVARSEL (DK): ${tradability.tradabilityReason}`);
+    } else {
+      notesParts.push(`DK Mægler-Status: ${tradability.tradabilityReason}`);
+    }
 
     // Hvis vi fandt live kursdata
     if (prices) {

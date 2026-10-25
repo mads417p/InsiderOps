@@ -113,6 +113,8 @@ export default function Dashboard() {
 - **Insider:** ${tx.insiderName}
 - **Titel / Rolle:** ${tx.insiderTitle} ${tx.isExecutiveOfficer ? '(C-Suite / Direktion)' : ''}
 - **Ejerskabets natur:** ${tx.ownershipNature === 'D' ? 'Direkte (D - Egne personlige aktier)' : 'Indirekte (I - Fond / Trust / Holdingselskab)'}
+- **Børs & Handelbarhed (DK / Nordnet / Saxo):** ${tx.isTradableInDK !== false ? '✅ Verificeret handelbar' : '🚫 Ikke godkendt'} (${tx.exchange || 'N/A'}${tx.avgDailyDollarVolume ? `, Gns. omsætning: $${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')}/dag` : ''})
+- **Handelbarheds-status:** ${tx.tradabilityReason || (tx.isTradableInDK !== false ? 'Handelbar på standard DK mæglere' : 'Ikke verificeret')}
 - **Transaktionstype:** Kode ${tx.transactionCode} (Åbent markedskøb)
 - **Handelsbeløb:** $${Math.round(tx.totalValueUsd).toLocaleString()} USD (${tx.shares.toLocaleString()} aktier á $${tx.pricePerShare} USD)
 - **Beholdning efter køb:** ${tx.sharesOwnedFollowing.toLocaleString()} aktier (+${tx.holdingsIncreasePct}% stigning)
@@ -804,6 +806,33 @@ ${verdict.judgeThinking}
                             <div className="text-[11px] text-slate-400 truncate max-w-[160px] font-sans">
                               {tx.companyName}
                             </div>
+                            {/* Exchange & Tradability Badge */}
+                            <div className="mt-1 flex items-center gap-1">
+                              {tx.isTradableInDK === false ? (
+                                <span
+                                  className="text-[9px] px-1.5 py-0.5 rounded bg-rose-950/70 border border-rose-700 text-rose-300 font-semibold"
+                                  title={tx.tradabilityReason || 'Ikke handelbar på danske børser / mæglere'}
+                                >
+                                  🚫 IKKE HANDELBAR I DK
+                                </span>
+                              ) : tx.exchange ? (
+                                <span
+                                  className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800/90 border border-slate-700 text-slate-300 font-mono flex items-center gap-1"
+                                  title={tx.tradabilityReason || 'Handelbar på Nordnet / Saxo'}
+                                >
+                                  <span className="text-emerald-400 font-bold">✓</span>
+                                  <span>{tx.exchange}</span>
+                                  {tx.avgDailyDollarVolume ? (
+                                    <span className="text-slate-400">
+                                      • Vol:{' '}
+                                      {tx.avgDailyDollarVolume >= 1000000
+                                        ? `$${(tx.avgDailyDollarVolume / 1000000).toFixed(1)}M/d`
+                                        : `$${Math.round(tx.avgDailyDollarVolume / 1000)}k/d`}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              ) : null}
+                            </div>
                           </td>
 
                           {/* Insider & Role */}
@@ -1372,6 +1401,28 @@ ${verdict.judgeThinking}
                     <h3 className="text-lg font-bold text-slate-100 mt-1 font-sans">
                       {activeVerdict.headline}
                     </h3>
+                    {selectedTx.exchange && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2 font-mono text-[11px]">
+                        <span
+                          className={`px-2 py-0.5 rounded border text-[10px] font-semibold flex items-center gap-1 ${
+                            selectedTx.isTradableInDK !== false
+                              ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
+                              : 'bg-rose-950/70 border-rose-700 text-rose-300'
+                          }`}
+                        >
+                          {selectedTx.isTradableInDK !== false ? '✅ Handelbar i DK' : '🚫 Ikke godkendt i DK'}: {selectedTx.exchange}
+                        </span>
+                        {selectedTx.avgDailyDollarVolume ? (
+                          <span className="text-slate-400">
+                            Gns. daglig omsætning: $
+                            {selectedTx.avgDailyDollarVolume >= 1000000
+                              ? `${(selectedTx.avgDailyDollarVolume / 1000000).toFixed(1)}M`
+                              : `${Math.round(selectedTx.avgDailyDollarVolume / 1000)}k`}
+                            /dag
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
 
                   {/* Verdict Badge & Score */}
