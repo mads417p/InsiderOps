@@ -21,6 +21,8 @@ export interface InsiderTransaction {
   currentMarketPrice?: number; // aktuel markedspris fra Yahoo Finance
   returnSinceBuyPct?: number; // % ændring fra insiderens købspris til aktuel markedspris
   isTradingBelowInsiderPrice?: boolean; // true hvis aktuel kurs < insiderens købspris (kode P)
+  ownershipNature?: 'D' | 'I'; // 'D' = Direct (personlige aktier), 'I' = Indirect (fond/LLC/trust)
+  isExecutiveOfficer?: boolean; // true hvis CEO/CFO/COO/Pres/VP/GC/Chief/Counsel
 }
 
 export type AsymmetrySignal = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';

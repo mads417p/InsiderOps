@@ -35,6 +35,143 @@ export function applyHardFilter(tx: InsiderTransaction): { passed: boolean; reas
 }
 
 /**
+ * Bestemmer om en titel tilhører direktionen / C-Suite (Officer).
+ * Matcher CFO, CEO, COO, President, General Counsel, VP, Chief osv.,
+ * og udelukker rene 'Director' og '10% Owner'.
+ */
+export function isExecutiveTitle(title?: string): boolean {
+  if (!title) return false;
+  const t = title.toLowerCase();
+
+  // Hvis det er en ren 10% ejer uden officer rolle
+  if (t === '10%' || t === '10% owner' || t === 'ten percent owner') {
+    return false;
+  }
+  // Hvis det kun er en menig bestyrelsespost uden ledelsesfunktion
+  if (t === 'dir' || t === 'director' || t === 'board member') {
+    return false;
+  }
+
+  // Tjek for typiske C-suite og officer titler
+  return Boolean(
+    t.includes('cfo') ||
+      t.includes('chief financial') ||
+      t.includes('ceo') ||
+      t.includes('chief executive') ||
+      t.includes('coo') ||
+      t.includes('chief operating') ||
+      t.includes('cto') ||
+      t.includes('chief technology') ||
+      t.includes('cmo') ||
+      t.includes('cso') ||
+      t.includes('chief scientific') ||
+      t.includes('chief') ||
+      t.includes('president') ||
+      t.includes('pres') ||
+      t.includes('general counsel') ||
+      t.includes('chief legal') ||
+      t.includes('counsel') ||
+      t.includes('evp') ||
+      t.includes('svp') ||
+      t.includes('vice president') ||
+      t.includes('vp') ||
+      t.includes('treasurer') ||
+      t.includes('controller') ||
+      t.includes('officer')
+  );
+}
+
+/**
+ * Bestemmer om ejerskabet er direkte ('D') eller indirekte ('I' via fond/trust/holding).
+ */
+export function detectOwnershipNature(
+  rawNature?: string,
+  insiderName?: string,
+  rawHtml?: string
+): 'D' | 'I' {
+  if (rawNature === 'D' || rawNature === 'I') return rawNature;
+
+  if (rawHtml) {
+    if (rawHtml.toLowerCase().includes('direct shares')) return 'D';
+    if (rawHtml.toLowerCase().includes('indirect shares')) return 'I';
+  }
+
+  if (insiderName) {
+    const n = insiderName.toLowerCase();
+    if (
+      n.includes(' llc') ||
+      n.includes(' lp') ||
+      n.includes(' l.p.') ||
+      n.includes(' fund') ||
+      n.includes(' trust') ||
+      n.includes(' capital') ||
+      n.includes(' partners') ||
+      n.includes(' holdings') ||
+      n.includes(' investments') ||
+      n.includes(' group') ||
+      n.includes(' management') ||
+      n.includes(' corp') ||
+      n.includes(' inc') ||
+      n.includes(' bank')
+    ) {
+      return 'I';
+    }
+  }
+
+  return 'D';
+}
+
+/**
+ * Beregner sande cluster-buys for en liste af transaktioner med person-deduplikering.
+ * To indberetninger tæller kun som et cluster-køb, hvis mindst to FORSKELLIGE fysiske personer
+ * eller uafhængige parter har købt aktier (eliminerer at 3 partnere rapporterer samme fondskøb som i RENT).
+ */
+export function applyTrueClusterDeduplication(transactions: InsiderTransaction[]): void {
+  const byTicker = new Map<string, InsiderTransaction[]>();
+  for (const tx of transactions) {
+    if (!byTicker.has(tx.ticker)) {
+      byTicker.set(tx.ticker, []);
+    }
+    byTicker.get(tx.ticker)!.push(tx);
+  }
+
+  for (const [, list] of byTicker.entries()) {
+    if (list.length <= 1) {
+      for (const tx of list) {
+        tx.isClusterBuy = false;
+        tx.clusterCount = 1;
+      }
+      continue;
+    }
+
+    const distinctParticipants: string[] = [];
+    const seenSignatures = new Set<string>();
+
+    for (const tx of list) {
+      const cleanName = tx.insiderName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const tradeSig = `${tx.filingDate}_${tx.shares}`;
+
+      // Hvis vi allerede har registreret denne præcise handelssignatur (samme dato og samme aktieantal),
+      // er det typisk et delt fondskøb rapporteret af flere partnere
+      if (seenSignatures.has(tradeSig)) {
+        continue;
+      }
+      seenSignatures.add(tradeSig);
+
+      if (!distinctParticipants.includes(cleanName)) {
+        distinctParticipants.push(cleanName);
+      }
+    }
+
+    const isTrueCluster = distinctParticipants.length >= 2;
+    for (const tx of list) {
+      tx.isClusterBuy = isTrueCluster;
+      tx.clusterCount = isTrueCluster ? distinctParticipants.length : 1;
+    }
+  }
+}
+
+/**
  * Returnerer 6 hyper-realistiske mock-transaktioner til test af hele asymmetri-pipelinen.
  */
 export function getMockTransactions(): InsiderTransaction[] {
@@ -54,6 +191,8 @@ export function getMockTransactions(): InsiderTransaction[] {
       holdingsIncreasePct: 42.0,
       isClusterBuy: true,
       clusterCount: 2,
+      ownershipNature: 'D',
+      isExecutiveOfficer: true,
       recentPriceChange30dPct: -28.0,
       currentMarketPrice: 22.8,
       returnSinceBuyPct: -5.0,
@@ -77,6 +216,8 @@ export function getMockTransactions(): InsiderTransaction[] {
       holdingsIncreasePct: 0.36,
       isClusterBuy: false,
       clusterCount: 1,
+      ownershipNature: 'D',
+      isExecutiveOfficer: true,
       recentPriceChange30dPct: -45.0,
       currentMarketPrice: 11.7,
       returnSinceBuyPct: -10.0,
@@ -100,6 +241,8 @@ export function getMockTransactions(): InsiderTransaction[] {
       holdingsIncreasePct: 28.0,
       isClusterBuy: true,
       clusterCount: 2,
+      ownershipNature: 'D',
+      isExecutiveOfficer: true,
       recentPriceChange30dPct: 3.5,
       currentMarketPrice: 34.1,
       returnSinceBuyPct: 10.0,
@@ -122,6 +265,8 @@ export function getMockTransactions(): InsiderTransaction[] {
       sharesOwnedFollowing: 120000,
       holdingsIncreasePct: 50.0,
       isClusterBuy: false,
+      ownershipNature: 'D',
+      isExecutiveOfficer: true,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1589302/000158930226000012/form4.xml',
       contextNotes:
         'Option exercise (M) på $1.200.000. Tildelt incitamentsprogram, ikke køb med egne opsparede midler på det åbne marked.',
@@ -140,6 +285,8 @@ export function getMockTransactions(): InsiderTransaction[] {
       sharesOwnedFollowing: 15000,
       holdingsIncreasePct: 7.1,
       isClusterBuy: false,
+      ownershipNature: 'D',
+      isExecutiveOfficer: false,
       currentMarketPrice: 17.9,
       returnSinceBuyPct: -3.24,
       isTradingBelowInsiderPrice: true,
@@ -161,6 +308,8 @@ export function getMockTransactions(): InsiderTransaction[] {
       sharesOwnedFollowing: 85000,
       holdingsIncreasePct: -15.0,
       isClusterBuy: false,
+      ownershipNature: 'D',
+      isExecutiveOfficer: true,
       secFilingUrl: 'https://www.sec.gov/edgar/data/1209384/000120938426000201/form4.xml',
       contextNotes:
         'Insider Salg (S) på $900.000 under 10b5-1 plan. Bliver filtreret fra, da vi udelukkende screener for købsasymmetri.',
@@ -375,6 +524,12 @@ async function parseForm4Entry(
       xml.match(/<periodOfReport>\s*(.*?)\s*<\/periodOfReport>/i)?.[1]?.trim() ||
       new Date().toISOString().split('T')[0];
 
+    const ownershipVal = xml
+      .match(/<directOrIndirectOwnership>\s*<value>\s*([DI])\s*<\/value>/i)?.[1]
+      ?.toUpperCase();
+    const ownershipNature: 'D' | 'I' = ownershipVal === 'I' ? 'I' : 'D';
+    const isExecutiveOfficer = isExecutiveTitle(insiderTitle);
+
     const transaction: InsiderTransaction = {
       id: `sec-${ticker}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       filingDate,
@@ -390,6 +545,8 @@ async function parseForm4Entry(
       holdingsIncreasePct: aggregated.holdingsIncreasePct,
       isClusterBuy: false,
       clusterCount: 1,
+      ownershipNature,
+      isExecutiveOfficer,
       secFilingUrl: rawXmlUrl,
     };
 
@@ -528,6 +685,15 @@ export async function fetchHighConvictionOpenMarketBuys(limit: number = 20): Pro
       const valStr = tdMatches[12].replace(/<[^>]+>/g, '').replace(/[+$,\s]/g, '').trim();
       const totalValueUsd = parseFloat(valStr) || shares * pricePerShare;
 
+      const isDirect = rowHtml.includes('direct shares');
+      const isIndirect = rowHtml.includes('indirect shares');
+      const ownershipNature: 'D' | 'I' = isIndirect
+        ? 'I'
+        : isDirect
+        ? 'D'
+        : detectOwnershipNature(undefined, insiderName, rowHtml);
+      const isExecutiveOfficer = isExecutiveTitle(insiderTitle);
+
       transactions.push({
         id: `live-buy-${ticker}-${filingDate}-${shares}-${Math.round(totalValueUsd)}`,
         filingDate,
@@ -542,22 +708,14 @@ export async function fetchHighConvictionOpenMarketBuys(limit: number = 20): Pro
         sharesOwnedFollowing,
         holdingsIncreasePct,
         isClusterBuy: false,
+        ownershipNature,
+        isExecutiveOfficer,
         secFilingUrl,
       });
     }
 
-    // Detekter cluster buys inden for batchet
-    const tickerCounts = new Map<string, number>();
-    for (const t of transactions) {
-      tickerCounts.set(t.ticker, (tickerCounts.get(t.ticker) || 0) + 1);
-    }
-    for (const t of transactions) {
-      const count = tickerCounts.get(t.ticker) || 1;
-      if (count > 1) {
-        t.isClusterBuy = true;
-        t.clusterCount = count;
-      }
-    }
+    // Detekter sande cluster buys med person-deduplikering
+    applyTrueClusterDeduplication(transactions);
 
     // Berig med Yahoo Finance kurs- og nyhedsdata
     await Promise.allSettled(
@@ -623,24 +781,148 @@ async function fetchRawSecEdgarAtomFeed(limit: number = 8): Promise<InsiderTrans
 }
 
 /**
- * Kombinerer den målrettede "Pure Kode P" Open-Market Purchase Hunter med det rå SEC EDGAR Atom feed.
- * Giver brugeren 10-15 ægte amerikanske åbne markedskøb over $50k og viser samtidig at Hard Filteret afviser støj.
+ * Dedikeret "C-Suite Executive Hunter" (Kun CEO, CFO, COO, GC, Pres, EVP > $50.000).
+ * Filtrerer målrettet efter rigtige direktører, der køber for egne midler (direkte ejerskab).
+ */
+export async function fetchExecutiveAndClusterBuys(limit: number = 25): Promise<InsiderTransaction[]> {
+  const url = `http://openinsider.com/screener?s=&o=&pl=&ph=&ll=&lh=&fd=30&fdr=&td=0&tdr=&fdlyl=&fdlyh=&daysago=&xp=1&isofficer=1&vl=50&vh=&sortcol=0&cnt=${encodeURIComponent(
+    limit
+  )}&page=1`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 7000);
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      console.warn(`OpenInsider Officer Hunter returnerede status ${res.status}`);
+      return [];
+    }
+
+    const html = await res.text();
+    const tableMatch = html.match(/<table[^>]*class=["']tinytable["'][\s\S]*?<\/table>/i);
+    if (!tableMatch) return [];
+
+    const trMatches = [...tableMatch[0].matchAll(/<tr[\s\S]*?<\/tr>/gi)];
+    const transactions: InsiderTransaction[] = [];
+
+    for (let i = 1; i < trMatches.length; i++) {
+      const rowHtml = trMatches[i][0];
+      const tdMatches = [...rowHtml.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => m[1]);
+      if (tdMatches.length < 13) continue;
+
+      const filingDate = tdMatches[1].replace(/<[^>]+>/g, '').trim().split(' ')[0];
+      const secLinkMatch = rowHtml.match(
+        /href="(https?:\/\/(?:www\.)?sec\.gov\/Archives\/edgar\/data\/[^\s"'>]+)"/i
+      );
+      const secFilingUrl = secLinkMatch
+        ? secLinkMatch[1].replace(/^http:/, 'https:')
+        : 'https://www.sec.gov';
+
+      const tickerMatch =
+        tdMatches[3].match(/href="\/([A-Za-z0-9.\-]+)"/i) ||
+        tdMatches[3].match(/>([A-Z0-9.\-]+)<\/a>/i);
+      const ticker = tickerMatch ? tickerMatch[1].toUpperCase() : 'UNKNOWN';
+      if (!ticker || ticker === 'UNKNOWN') continue;
+
+      const companyName = tdMatches[4].replace(/<[^>]+>/g, '').trim();
+      const insiderName = tdMatches[5].replace(/<[^>]+>/g, '').trim();
+      const insiderTitle = tdMatches[6].replace(/<[^>]+>/g, '').trim() || 'Executive Officer';
+
+      const priceStr = tdMatches[8].replace(/<[^>]+>/g, '').replace(/[$,]/g, '').trim();
+      const pricePerShare = parseFloat(priceStr) || 0;
+
+      const qtyStr = tdMatches[9].replace(/<[^>]+>/g, '').replace(/[+,\s]/g, '').trim();
+      const shares = parseInt(qtyStr, 10) || 0;
+
+      const ownedStr = tdMatches[10].replace(/<[^>]+>/g, '').replace(/[,]/g, '').trim();
+      const sharesOwnedFollowing = parseInt(ownedStr, 10) || 0;
+
+      const deltaOwnStr = tdMatches[11].replace(/<[^>]+>/g, '').trim();
+      let holdingsIncreasePct = 0;
+      if (deltaOwnStr.toLowerCase().includes('new')) {
+        holdingsIncreasePct = 100.0;
+      } else {
+        const clean = deltaOwnStr.replace(/[%,\s]/g, '').replace(/^\+/, '');
+        holdingsIncreasePct = parseFloat(clean) || 0;
+      }
+
+      const valStr = tdMatches[12].replace(/<[^>]+>/g, '').replace(/[+$,\s]/g, '').trim();
+      const totalValueUsd = parseFloat(valStr) || shares * pricePerShare;
+
+      const isDirect = rowHtml.includes('direct shares');
+      const isIndirect = rowHtml.includes('indirect shares');
+      const ownershipNature: 'D' | 'I' = isIndirect
+        ? 'I'
+        : isDirect
+        ? 'D'
+        : detectOwnershipNature(undefined, insiderName, rowHtml);
+
+      transactions.push({
+        id: `exec-buy-${ticker}-${filingDate}-${shares}-${Math.round(totalValueUsd)}`,
+        filingDate,
+        ticker,
+        companyName,
+        insiderName,
+        insiderTitle,
+        transactionCode: 'P',
+        shares,
+        pricePerShare,
+        totalValueUsd,
+        sharesOwnedFollowing,
+        holdingsIncreasePct,
+        isClusterBuy: false,
+        ownershipNature,
+        isExecutiveOfficer: true,
+        secFilingUrl,
+      });
+    }
+
+    applyTrueClusterDeduplication(transactions);
+
+    // Berig med Yahoo Finance markedskurs og alpha
+    await Promise.allSettled(
+      transactions.slice(0, 15).map((tx) => enrichTransactionWithMarketData(tx))
+    );
+
+    return transactions;
+  } catch (err) {
+    console.warn('Kunne ikke hente C-Suite Officer Purchases:', err);
+    return [];
+  }
+}
+
+/**
+ * Kombinerer C-Suite Executive Hunter, den generelle Open-Market Hunter og det rå SEC EDGAR Atom feed.
+ * Giver brugeren et rigt feed af bekræftede amerikanske åbne markedskøb over $50k med sand cluster-deduplikering.
  */
 export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTransaction[]> {
   try {
-    const [hunterResult, rawSecResult] = await Promise.allSettled([
+    const [execResult, hunterResult, rawSecResult] = await Promise.allSettled([
+      fetchExecutiveAndClusterBuys(15),
       fetchHighConvictionOpenMarketBuys(15),
       fetchRawSecEdgarAtomFeed(8),
     ]);
 
+    const execBuys = execResult.status === 'fulfilled' ? execResult.value : [];
     const hunterBuys = hunterResult.status === 'fulfilled' ? hunterResult.value : [];
     const rawFilings = rawSecResult.status === 'fulfilled' ? rawSecResult.value : [];
 
     const combined: InsiderTransaction[] = [];
     const seen = new Set<string>();
 
-    for (const tx of [...hunterBuys, ...rawFilings]) {
-      const key = `${tx.ticker}_${tx.filingDate}_${tx.shares}`;
+    for (const tx of [...execBuys, ...hunterBuys, ...rawFilings]) {
+      const key = `${tx.ticker}_${tx.filingDate}_${tx.shares}_${tx.insiderName.slice(0, 10)}`;
       if (!seen.has(key)) {
         seen.add(key);
         combined.push(tx);
@@ -651,20 +933,10 @@ export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTra
       return getMockTransactions();
     }
 
-    // Genberegn cluster counts
-    const tickerCounts = new Map<string, number>();
-    for (const tx of combined) {
-      tickerCounts.set(tx.ticker, (tickerCounts.get(tx.ticker) || 0) + 1);
-    }
-    for (const tx of combined) {
-      const count = tickerCounts.get(tx.ticker) || 1;
-      if (count > 1) {
-        tx.isClusterBuy = true;
-        tx.clusterCount = count;
-      }
-    }
+    // Genberegn sande cluster buys på tværs af de kombinerede feeds
+    applyTrueClusterDeduplication(combined);
 
-    return combined;
+    return combined.slice(0, Math.max(limit, 20));
   } catch (error) {
     console.warn('Uventet fejl i fetchLiveSecForm4s, falder tilbage til mock-transaktioner:', error);
     return getMockTransactions();
@@ -724,13 +996,8 @@ export async function scanTickerSecForm4s(ticker: string): Promise<InsiderTransa
       }
     }
 
-    // Hvis der er flere transaktioner for denne ticker, marker som cluster
-    if (transactions.length > 1) {
-      for (const tx of transactions) {
-        tx.isClusterBuy = true;
-        tx.clusterCount = transactions.length;
-      }
-    }
+    // Beregn sande cluster-køb med person-deduplikering
+    applyTrueClusterDeduplication(transactions);
 
     // Berig transaktionerne med markedsdata og nyheder
     const passing = transactions.filter((tx) => applyHardFilter(tx).passed);

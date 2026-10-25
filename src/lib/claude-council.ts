@@ -344,12 +344,14 @@ export async function conveneCouncil(
 TICKER: ${tx.ticker} (${tx.companyName})
 INSIDER: ${tx.insiderName}
 ROLLE / TITEL: ${tx.insiderTitle}
+C-SUITE DIREKTØR: ${tx.isExecutiveOfficer ? 'JA (C-Suite / Executive Officer)' : 'NEJ (Menig Bestyrelse eller 10% Fond)'}
+EJERSKABETS NATUR: ${tx.ownershipNature === 'I' ? 'INDIREKTE (I - Via Fond / LLC / Trust / Holding)' : 'DIREKTE (D - Egne personlige aktier)'}
 TRANSAKTIONSTYPE: Kode ${tx.transactionCode} (Åbent markedskøb)
 ANTAL AKTIER: ${tx.shares.toLocaleString()} stk a $${tx.pricePerShare} USD
 TOTAL HANDELSVÆRDI: $${Math.round(tx.totalValueUsd).toLocaleString()} USD
 BEHOLDNING EFTER KØB: ${tx.sharesOwnedFollowing.toLocaleString()} aktier
 FORØGELSE AF EGEN BEHOLDNING: +${tx.holdingsIncreasePct}%
-CLUSTER-KØB: ${tx.isClusterBuy ? `JA (${tx.clusterCount ?? 2} ledelsespersoner)` : 'NEJ'}
+CLUSTER-KØB: ${tx.isClusterBuy ? `JA (${tx.clusterCount ?? 2} uafhængige personer)` : 'NEJ'}
 KURSUDVIKLING SENESTE 30 DAGE: ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'Ukendt'}
 AKTUEL MARKEDSKURS: ${tx.currentMarketPrice !== undefined ? `$${tx.currentMarketPrice} USD` : 'Ukendt'}
 AFKAST / DISKONT SIDEN KØB: ${

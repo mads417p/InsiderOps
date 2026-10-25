@@ -58,7 +58,8 @@ interface ScanResponse {
 const STORAGE_KEY = 'insiderops_verdicts_v1';
 
 export default function Dashboard() {
-  const [source, setSource] = useState<'mock' | 'live' | 'nordic'>('mock');
+  const [source, setSource] = useState<'mock' | 'live' | 'nordic' | 'csuite'>('mock');
+  const [quickFilter, setQuickFilter] = useState<'all' | 'csuite' | 'cluster_discount'>('all');
   const [searchTicker, setSearchTicker] = useState<string>('');
   const [activeTickerQuery, setActiveTickerQuery] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'radar' | 'watchlist'>('radar');
@@ -95,7 +96,7 @@ export default function Dashboard() {
   }, []);
 
   const fetchScan = useCallback(
-    async (selectedSource: 'mock' | 'live' | 'nordic', tickerQuery?: string | null) => {
+    async (selectedSource: 'mock' | 'live' | 'nordic' | 'csuite', tickerQuery?: string | null) => {
       setLoading(true);
       setError(null);
       try {
@@ -277,9 +278,26 @@ export default function Dashboard() {
         ).toFixed(2)
       : null;
 
-  const filteredItems = hideNoise
+  const baseFiltered = hideNoise
     ? items.filter((i) => i.result.passedHardFilter)
     : items;
+
+  const filteredItems = baseFiltered.filter((i) => {
+    if (quickFilter === 'csuite') {
+      return i.transaction.isExecutiveOfficer === true;
+    }
+    if (quickFilter === 'cluster_discount') {
+      return Boolean(
+        i.transaction.isClusterBuy || i.transaction.isTradingBelowInsiderPrice
+      );
+    }
+    return true;
+  });
+
+  const cSuiteCount = baseFiltered.filter((i) => i.transaction.isExecutiveOfficer === true).length;
+  const clusterDiscountCount = baseFiltered.filter((i) =>
+    Boolean(i.transaction.isClusterBuy || i.transaction.isTradingBelowInsiderPrice)
+  ).length;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-slate-950">
@@ -353,6 +371,19 @@ export default function Dashboard() {
                 }`}
               >
                 Live SEC Feed
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTickerQuery(null);
+                  setSource('csuite');
+                }}
+                className={`px-2.5 py-1 rounded transition-colors flex items-center gap-1 ${
+                  source === 'csuite' && !activeTickerQuery
+                    ? 'bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/30'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <span>👔 C-Suite Hunter</span>
               </button>
               <button
                 onClick={() => {
@@ -537,6 +568,57 @@ export default function Dashboard() {
         {/* TAB 1: RADAR TABLE */}
         {activeTab === 'radar' && (
           <div className="border border-slate-800 rounded bg-slate-900/40 overflow-hidden">
+            {/* Quick-Filter Chips Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 px-4 py-2.5 bg-slate-900/80 border-b border-slate-800 text-xs font-mono">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-slate-400 text-[11px] font-semibold mr-1 flex items-center gap-1">
+                  <Filter className="w-3.5 h-3.5 text-cyan-400" /> HURTIG-FILTER:
+                </span>
+                <button
+                  onClick={() => setQuickFilter('all')}
+                  className={`px-3 py-1 rounded transition-colors flex items-center gap-1.5 ${
+                    quickFilter === 'all'
+                      ? 'bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/40 shadow-sm shadow-cyan-950'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  <span>Alle Godkendte</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
+                    {baseFiltered.length}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setQuickFilter('csuite')}
+                  className={`px-3 py-1 rounded transition-colors flex items-center gap-1.5 ${
+                    quickFilter === 'csuite'
+                      ? 'bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/40 shadow-sm shadow-emerald-950'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  <span>👔 Kun C-Suite / Direktion (CEO/CFO/GC)</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-emerald-300">
+                    {cSuiteCount}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setQuickFilter('cluster_discount')}
+                  className={`px-3 py-1 rounded transition-colors flex items-center gap-1.5 ${
+                    quickFilter === 'cluster_discount'
+                      ? 'bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 shadow-sm shadow-amber-950'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  <span>🔥 Kun Cluster Buys & Rabat-Cases</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-amber-300">
+                    {clusterDiscountCount}
+                  </span>
+                </button>
+              </div>
+              <div className="text-[11px] text-slate-400">
+                Viser <span className="text-cyan-300 font-bold">{filteredItems.length}</span> handler
+              </div>
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs font-mono">
                 <thead>
@@ -616,7 +698,7 @@ export default function Dashboard() {
                           {/* Insider & Role */}
                           <td className="py-3 px-3">
                             <div className="text-slate-200 font-medium font-sans">{tx.insiderName}</div>
-                            <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                            <div className="flex flex-wrap items-center gap-1 mt-1">
                               <span
                                 className={`text-[10px] px-1.5 py-0.2 rounded border ${
                                   isCFOorGC
@@ -626,6 +708,28 @@ export default function Dashboard() {
                               >
                                 {tx.insiderTitle}
                               </span>
+                              {tx.isExecutiveOfficer ? (
+                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950/80 border border-cyan-600 text-cyan-300 font-bold flex items-center gap-0.5">
+                                  👔 C-Suite
+                                </span>
+                              ) : tx.ownershipNature === 'I' ||
+                                /10%|llc|fund|trust|capital|partners|investments/i.test(
+                                  tx.insiderTitle + ' ' + tx.insiderName
+                                ) ? (
+                                <span
+                                  className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950/70 border border-purple-800 text-purple-300 flex items-center gap-0.5"
+                                  title="Indirekte ejerskab via fond / trust / holdingselskab"
+                                >
+                                  🏢 10% Fond / Indirect
+                                </span>
+                              ) : (
+                                <span
+                                  className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 border border-slate-800 text-slate-400"
+                                  title="Direkte personligt ejerskab"
+                                >
+                                  Direct
+                                </span>
+                              )}
                               {tx.isClusterBuy && (
                                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950/60 border border-amber-800 text-amber-300 flex items-center gap-0.5">
                                   <Users className="w-2.5 h-2.5" />
@@ -912,9 +1016,21 @@ export default function Dashboard() {
                       </div>
 
                       <div className="mt-2 text-xs text-slate-300 font-sans font-medium flex flex-wrap items-center justify-between gap-2">
-                        <span>
-                          {tx.insiderName} ({tx.insiderTitle}) • ${Math.round(tx.totalValueUsd).toLocaleString()} (+{tx.holdingsIncreasePct}%)
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>
+                            {tx.insiderName} ({tx.insiderTitle}) • ${Math.round(tx.totalValueUsd).toLocaleString()} (+{tx.holdingsIncreasePct}%)
+                          </span>
+                          {tx.isExecutiveOfficer && (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950/80 border border-cyan-600 text-cyan-300 font-mono font-bold">
+                              👔 C-Suite
+                            </span>
+                          )}
+                          {tx.ownershipNature === 'I' && (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950/70 border border-purple-800 text-purple-300 font-mono">
+                              🏢 Fond / Indirect
+                            </span>
+                          )}
+                        </div>
                         {tx.currentMarketPrice !== undefined && (
                           <div className="flex items-center gap-1.5 font-mono text-[11px]">
                             <span className="text-slate-400">

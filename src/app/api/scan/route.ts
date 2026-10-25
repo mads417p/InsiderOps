@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
-import { getMockTransactions, fetchLiveSecForm4s, scanTickerSecForm4s } from '@/lib/sec-scanner';
+import {
+  getMockTransactions,
+  fetchLiveSecForm4s,
+  scanTickerSecForm4s,
+  fetchExecutiveAndClusterBuys,
+} from '@/lib/sec-scanner';
 import { fetchNordicInsiderTransactions } from '@/lib/nordic-scanner';
 import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
@@ -42,8 +47,10 @@ export async function GET(request: Request) {
       transactions = await scanTickerSecForm4s(ticker);
     } else if (source === 'nordic') {
       transactions = await fetchNordicInsiderTransactions();
+    } else if (source === 'csuite') {
+      transactions = await fetchExecutiveAndClusterBuys(25);
     } else if (source === 'live') {
-      transactions = await fetchLiveSecForm4s(16);
+      transactions = await fetchLiveSecForm4s(20);
     } else {
       transactions = getMockTransactions();
     }
