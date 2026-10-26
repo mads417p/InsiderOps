@@ -3,7 +3,7 @@ import { InsiderTransaction } from '@/types/insider';
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-interface MarketDataSummary {
+export interface MarketDataSummary {
   currentPrice: number;
   recentPriceChange30dPct: number;
   pctFrom3moHigh: number;
@@ -44,23 +44,28 @@ function cleanHtmlEntities(text: string): string {
 /**
  * Henter historiske lukkekurser, metadata og volumen for en ticker via Yahoo Finance chart API.
  */
-async function fetchMarketPrices(
+export async function fetchMarketPrices(
   ticker: string,
-  signal: AbortSignal
+  signal?: AbortSignal
 ): Promise<MarketDataSummary | null> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
-    ticker
-  )}?range=3mo&interval=1d`;
+  const controller = !signal ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 8000) : null;
+  const effectiveSignal = signal || controller!.signal;
 
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': BROWSER_USER_AGENT,
-      Accept: 'application/json',
-    },
-    signal,
-  });
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
+      ticker
+    )}?range=3mo&interval=1d`;
 
-  if (!res.ok) return null;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': BROWSER_USER_AGENT,
+        Accept: 'application/json',
+      },
+      signal: effectiveSignal,
+    });
+
+    if (!res.ok) return null;
 
   const data = await res.json();
   const res0 = data.chart?.result?.[0];
@@ -172,6 +177,11 @@ async function fetchMarketPrices(
     supportLow30d,
     resistanceHigh90d,
   };
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 /**

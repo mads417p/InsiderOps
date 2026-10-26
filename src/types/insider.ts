@@ -66,6 +66,38 @@ export interface TradeExecutionPlan {
   volatilityTag: string;
 }
 
+export type PaperTradeStatus = 'OPEN' | 'STOPPED_OUT' | 'TARGET_HIT' | 'CLOSED_MANUAL';
+
+export interface PaperTradePosition {
+  id: string;
+  ticker: string;
+  companyName: string;
+  exchange: string;
+  insiderName: string;
+  insiderTitle: string;
+  asymmetryScore: number;
+  openedAt: string;
+  entryPrice: number;
+  currentPrice: number;
+  shares: number;
+  investedDkk: number;
+  stopLossPrice: number;
+  targetPrice: number;
+  pnlPct: number;
+  pnlDkk: number;
+  status: PaperTradeStatus;
+}
+
+export interface PortfolioSummary {
+  totalInvestedDkk: number;
+  totalCurrentValueDkk: number;
+  totalPnlDkk: number;
+  totalPnlPct: number;
+  winRatePct: number;
+  openCount: number;
+  closedCount: number;
+}
+
 export type TrackRecordReputation =
   | 'SMART_MONEY_SNIPER'
   | 'CREDIBLE_BUYER'

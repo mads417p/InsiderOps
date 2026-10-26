@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Bookmark,
   Brain,
+  Briefcase,
   Calculator,
   CheckCircle2,
   ChevronDown,
@@ -33,6 +34,8 @@ import {
   CouncilVerdict,
   GatekeeperResult,
   InsiderTransaction,
+  PaperTradePosition,
+  PortfolioSummary,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
 
@@ -67,7 +70,7 @@ export default function Dashboard() {
   const [quickFilter, setQuickFilter] = useState<'all' | 'csuite' | 'cluster_discount'>('all');
   const [searchTicker, setSearchTicker] = useState<string>('');
   const [activeTickerQuery, setActiveTickerQuery] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'radar' | 'watchlist'>('radar');
+  const [activeTab, setActiveTab] = useState<'radar' | 'watchlist' | 'portfolio'>('radar');
 
   const [hideNoise, setHideNoise] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
@@ -77,6 +80,12 @@ export default function Dashboard() {
     gemini: false,
     anthropic: false,
   });
+
+  // Paper-Trading Portfolio State
+  const [paperPortfolio, setPaperPortfolio] = useState<Record<string, PaperTradePosition>>({});
+  const [portfolioSummary, setPortfolioSummary] = useState<PortfolioSummary | null>(null);
+  const [portfolioLoading, setPortfolioLoading] = useState<boolean>(false);
+  const [portfolioRefreshing, setPortfolioRefreshing] = useState<boolean>(false);
 
   // The Council & Persistent Watchlist State
   const [selectedTx, setSelectedTx] = useState<InsiderTransaction | null>(null);
@@ -296,6 +305,21 @@ ${verdict.judgeThinking}
         }
       })
       .catch((err) => console.warn('Kunne ikke synkronisere med server-database:', err));
+
+    // Indlæs paper-trading porteføljen fra server-databasen (/api/portfolio)
+    fetch('/api/portfolio')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.positions) {
+          const map: Record<string, PaperTradePosition> = {};
+          data.positions.forEach((p: PaperTradePosition) => {
+            map[p.id] = p;
+          });
+          setPaperPortfolio(map);
+          if (data.summary) setPortfolioSummary(data.summary);
+        }
+      })
+      .catch((err) => console.warn('Kunne ikke hente paper-trading portefølje:', err));
   }, []);
 
   const fetchScan = useCallback(
@@ -471,6 +495,86 @@ ${verdict.judgeThinking}
       console.error('Fejl ved opdatering af live alpha:', err);
     } finally {
       setRefreshingAlpha(false);
+    }
+  };
+
+  const handleOpenPaperTrade = async (
+    tx: InsiderTransaction,
+    plan: ReturnType<typeof generateTradeExecutionPlan>
+  ) => {
+    if (plan.status !== 'ACTIVE_PLAN' || plan.recommendedAllocationDkk <= 0) return;
+    setPortfolioLoading(true);
+    try {
+      const posPayload = {
+        id: tx.id,
+        ticker: tx.ticker,
+        companyName: tx.companyName,
+        exchange: tx.exchange || 'NASDAQ',
+        insiderName: tx.insiderName,
+        insiderTitle: tx.insiderTitle,
+        asymmetryScore: activeVerdict?.asymmetryScore || 85,
+        entryPrice: tx.currentMarketPrice || tx.pricePerShare || 1.0,
+        currentPrice: tx.currentMarketPrice || tx.pricePerShare || 1.0,
+        shares: plan.totalShares,
+        investedDkk: plan.recommendedAllocationDkk,
+        stopLossPrice: plan.stopLossPrice,
+        targetPrice: plan.targetPrice1,
+      };
+      const res = await fetch('/api/portfolio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(posPayload),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.position) {
+          setPaperPortfolio((prev) => ({ ...prev, [data.position.id]: data.position }));
+          if (data.summary) setPortfolioSummary(data.summary);
+        }
+      }
+    } catch (e) {
+      console.error('Fejl ved oprettelse af paper-trade:', e);
+    } finally {
+      setPortfolioLoading(false);
+    }
+  };
+
+  const handleRefreshPortfolioLivePnl = async () => {
+    setPortfolioRefreshing(true);
+    try {
+      const res = await fetch('/api/portfolio?refresh=true');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.positions) {
+          const map: Record<string, PaperTradePosition> = {};
+          data.positions.forEach((p: PaperTradePosition) => {
+            map[p.id] = p;
+          });
+          setPaperPortfolio(map);
+          if (data.summary) setPortfolioSummary(data.summary);
+        }
+      }
+    } catch (err) {
+      console.warn('Fejl ved opdatering af portefølje live P&L:', err);
+    } finally {
+      setPortfolioRefreshing(false);
+    }
+  };
+
+  const handleClosePaperTrade = async (id: string) => {
+    try {
+      const res = await fetch(`/api/portfolio?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (res.ok) {
+        const data = await res.json();
+        setPaperPortfolio((prev) => {
+          const copy = { ...prev };
+          delete copy[id];
+          return copy;
+        });
+        if (data.summary) setPortfolioSummary(data.summary);
+      }
+    } catch (e) {
+      console.error('Fejl ved lukning af paper-trade position:', e);
     }
   };
 
@@ -872,6 +976,21 @@ ${verdict.judgeThinking}
               <span>WATCHLIST / GEMTE DOMME</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-800 text-cyan-300">
                 {savedVerdictItems.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('portfolio')}
+              className={`px-4 py-2 font-mono text-xs font-bold tracking-wider border-b-2 transition-colors flex items-center gap-2 ${
+                activeTab === 'portfolio'
+                  ? 'border-emerald-400 text-emerald-300 bg-slate-900/40'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Briefcase className="w-3.5 h-3.5 text-emerald-400" />
+              <span>💼 PAPER PORTEFØLJE & LIVE P&L</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 border border-emerald-800 text-emerald-300 font-bold">
+                {Object.keys(paperPortfolio).length}
               </span>
             </button>
           </div>
@@ -1578,7 +1697,279 @@ ${verdict.judgeThinking}
           </div>
         )}
 
-        {/* Section: The Council Chamber */}
+        {/* TAB 3: PAPER PORTEFØLJE & LIVE P&L */}
+        {activeTab === 'portfolio' && (
+          <div className="space-y-6">
+            {/* Top Portfolio KPI-Bar */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {/* Card 1: Samlet Investeret */}
+              <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
+                  <span>SAMLET INVESTERET (FRIE MIDLER)</span>
+                  <Briefcase className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div className="text-2xl font-mono font-bold text-slate-100">
+                  {(portfolioSummary?.totalInvestedDkk || 0).toLocaleString('da-DK')} DKK
+                </div>
+                <div className="text-[11px] text-slate-500 font-mono">
+                  {portfolioSummary?.openCount || 0} aktive positioner
+                </div>
+              </div>
+
+              {/* Card 2: Aktuel Markedsværdi */}
+              <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
+                  <span>AKTUEL MARKEDSVÆRDI</span>
+                  <Zap className="w-4 h-4 text-cyan-400" />
+                </div>
+                <div className="text-2xl font-mono font-bold text-cyan-300">
+                  {(portfolioSummary?.totalCurrentValueDkk || 0).toLocaleString('da-DK')} DKK
+                </div>
+                <div className="text-[11px] text-slate-500 font-mono">
+                  Realtid Yahoo Finance kurser
+                </div>
+              </div>
+
+              {/* Card 3: Samlet P&L */}
+              <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
+                  <span>UREALISERET P&L (DKK)</span>
+                  {(portfolioSummary?.totalPnlDkk || 0) >= 0 ? (
+                    <TrendingUp className="w-4 h-4 text-emerald-400" />
+                  ) : (
+                    <TrendingDown className="w-4 h-4 text-rose-400" />
+                  )}
+                </div>
+                <div
+                  className={`text-2xl font-mono font-bold ${
+                    (portfolioSummary?.totalPnlDkk || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  {(portfolioSummary?.totalPnlDkk || 0) >= 0 ? '+' : ''}
+                  {(portfolioSummary?.totalPnlDkk || 0).toLocaleString('da-DK')} DKK
+                </div>
+                <div
+                  className={`text-[11px] font-mono font-bold ${
+                    (portfolioSummary?.totalPnlPct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  {(portfolioSummary?.totalPnlPct || 0) >= 0 ? '+' : ''}
+                  {portfolioSummary?.totalPnlPct || 0}% afkast
+                </div>
+              </div>
+
+              {/* Card 4: Win-Rate & Refresh Button */}
+              <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
+                    <span>WIN-RATE (% I PLUS)</span>
+                    <Target className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div className="text-2xl font-mono font-bold text-amber-300 mt-1">
+                    {portfolioSummary?.winRatePct || 0}%
+                  </div>
+                </div>
+                <button
+                  onClick={handleRefreshPortfolioLivePnl}
+                  disabled={portfolioRefreshing}
+                  className="mt-2 w-full py-1.5 px-3 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-700 text-xs font-mono text-cyan-300 flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${portfolioRefreshing ? 'animate-spin' : ''}`} />
+                  <span>{portfolioRefreshing ? 'Henter kurser...' : 'Opdatér Live P&L'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Position List / Cards */}
+            {Object.keys(paperPortfolio).length === 0 ? (
+              <div className="p-8 rounded-lg bg-slate-900/40 border border-slate-800 text-center space-y-3">
+                <div className="w-12 h-12 rounded-full bg-emerald-950/60 border border-emerald-800/80 flex items-center justify-center mx-auto text-emerald-400">
+                  <Briefcase className="w-6 h-6" />
+                </div>
+                <h4 className="font-mono text-sm font-bold text-slate-200">
+                  INGEN ÅBNE PAPER-TRADES ENDNU
+                </h4>
+                <p className="text-xs text-slate-400 max-w-lg mx-auto font-sans leading-relaxed">
+                  Start med at scanne Form 4 indberetninger i <span className="font-mono text-cyan-400">RADAR SCAN</span>, lad <span className="font-mono text-purple-400">The Council</span> afsige dom over en asymmetrisk case, og klik derefter på <span className="font-mono text-emerald-400">📌 Åbn Paper-Trade</span> i eksekveringsplanen for at tracke positionen her.
+                </p>
+                <button
+                  onClick={() => setActiveTab('radar')}
+                  className="px-4 py-2 rounded bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-mono text-xs font-bold transition-colors inline-flex items-center gap-2"
+                >
+                  <Activity className="w-3.5 h-3.5" />
+                  Gå til Radar Scan
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {Object.values(paperPortfolio).map((pos) => {
+                  const isDkk = pos.ticker.endsWith('.CO') || pos.exchange?.includes('Copenhagen');
+                  const isSek = pos.ticker.endsWith('.ST') || pos.exchange?.includes('Stockholm');
+                  const currSym = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';
+
+                  // Beregn Stop-Loss -> Entry -> Target visuel progress-bar
+                  const minP = pos.stopLossPrice > 0 ? pos.stopLossPrice : pos.entryPrice * 0.85;
+                  const maxP = pos.targetPrice > 0 ? pos.targetPrice : pos.entryPrice * 1.5;
+                  const span = Math.max(0.01, maxP - minP);
+                  const currPct = Math.min(100, Math.max(0, ((pos.currentPrice - minP) / span) * 100));
+                  const entryPct = Math.min(100, Math.max(0, ((pos.entryPrice - minP) / span) * 100));
+
+                  const isProfit = pos.pnlDkk >= 0;
+
+                  return (
+                    <div
+                      key={pos.id}
+                      className="p-4 rounded-lg bg-slate-900/80 border border-slate-800 shadow-xl space-y-4 hover:border-slate-700 transition-colors"
+                    >
+                      {/* Position Header */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-base font-bold text-white tracking-wider">
+                            ${pos.ticker}
+                          </span>
+                          <span className="text-xs text-slate-300 font-medium">
+                            {pos.companyName}
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300 border border-slate-700">
+                            {pos.exchange}
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950 border border-cyan-800 text-cyan-300">
+                            Score: {pos.asymmetryScore}/100
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                              pos.status === 'STOPPED_OUT'
+                                ? 'bg-rose-950/80 border-rose-700 text-rose-300'
+                                : pos.status === 'TARGET_HIT'
+                                ? 'bg-purple-950/80 border-purple-700 text-purple-300'
+                                : 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
+                            }`}
+                          >
+                            {pos.status === 'OPEN'
+                              ? 'AKTIV POSITION'
+                              : pos.status === 'STOPPED_OUT'
+                              ? '🛑 STOP-LOSS UDLØST'
+                              : pos.status === 'TARGET_HIT'
+                              ? '🎯 KURSMÅL NÅET'
+                              : 'LUKKET'}
+                          </span>
+
+                          <button
+                            onClick={() => handleClosePaperTrade(pos.id)}
+                            className="px-2.5 py-1 rounded bg-slate-800 hover:bg-rose-950 hover:text-rose-300 hover:border-rose-800 border border-slate-700 text-slate-400 text-xs font-mono transition-colors flex items-center gap-1"
+                            title="Luk og fjern position"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Luk Position</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 4 Metrics Grid */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
+                        {/* 1. Kurs & Entry */}
+                        <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80 space-y-1">
+                          <span className="text-[10px] text-slate-400">ENTRY VS. AKTUEL KURS</span>
+                          <div className="text-slate-200">
+                            Entry: <span className="font-bold">{currSym}{pos.entryPrice}</span>
+                          </div>
+                          <div className="text-slate-300">
+                            Nu: <span className="font-bold text-white">{currSym}{pos.currentPrice}</span>
+                          </div>
+                        </div>
+
+                        {/* 2. Aktier & Investeret */}
+                        <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80 space-y-1">
+                          <span className="text-[10px] text-slate-400">POSITION & INVESTERET</span>
+                          <div className="font-bold text-slate-200">
+                            {pos.shares} aktier
+                          </div>
+                          <div className="text-slate-300 font-semibold">
+                            {pos.investedDkk.toLocaleString('da-DK')} DKK
+                          </div>
+                        </div>
+
+                        {/* 3. Live P&L */}
+                        <div className={`p-2.5 rounded border space-y-1 ${
+                          isProfit
+                            ? 'bg-emerald-950/30 border-emerald-900/60'
+                            : 'bg-rose-950/30 border-rose-900/60'
+                        }`}>
+                          <span className="text-[10px] text-slate-400">UREALISERET LIVE P&L</span>
+                          <div className={`text-sm font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {isProfit ? '+' : ''}{pos.pnlDkk.toLocaleString('da-DK')} DKK
+                          </div>
+                          <div className={`text-[11px] font-semibold ${isProfit ? 'text-emerald-300' : 'text-rose-300'}`}>
+                            {isProfit ? '+' : ''}{pos.pnlPct}%
+                          </div>
+                        </div>
+
+                        {/* 4. Stop-Loss & Target */}
+                        <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80 space-y-1">
+                          <span className="text-[10px] text-slate-400">RISIKO & KURSMÅL</span>
+                          <div className="text-rose-400">
+                            Stop: <span className="font-bold">{currSym}{pos.stopLossPrice}</span>
+                          </div>
+                          <div className="text-emerald-400">
+                            Mål: <span className="font-bold">{currSym}{pos.targetPrice}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Visual Stop-Loss <-> Entry <-> Target Progress Bar */}
+                      <div className="space-y-1.5 pt-1">
+                        <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+                          <span className="text-rose-400 font-semibold">
+                            🛑 Stop-Loss: {currSym}{pos.stopLossPrice}
+                          </span>
+                          <span className="text-slate-400">
+                            📍 Entry: {currSym}{pos.entryPrice}
+                          </span>
+                          <span className="text-emerald-400 font-semibold">
+                            🎯 Mål: {currSym}{pos.targetPrice}
+                          </span>
+                        </div>
+
+                        <div className="relative h-2.5 bg-slate-950 rounded-full border border-slate-800 overflow-hidden">
+                          {/* Progress fill up to current price */}
+                          <div
+                            className={`h-full transition-all duration-500 ${
+                              isProfit ? 'bg-gradient-to-r from-teal-500 to-emerald-400' : 'bg-gradient-to-r from-rose-600 to-rose-400'
+                            }`}
+                            style={{ width: `${currPct}%` }}
+                          />
+
+                          {/* Marker for Entry Price */}
+                          <div
+                            className="absolute top-0 bottom-0 w-0.5 bg-cyan-400 z-10"
+                            style={{ left: `${entryPct}%` }}
+                            title={`Entry Kurs: ${currSym}${pos.entryPrice}`}
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 pt-0.5">
+                          <span>
+                            Insider: {pos.insiderName} ({pos.insiderTitle})
+                          </span>
+                          <span>
+                            Åbnet: {new Date(pos.openedAt).toLocaleDateString('da-DK', {
+                              day: 'numeric',
+                              month: 'short',
+                              year: 'numeric',
+                            })}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
         <div id="council-chamber" className="mt-8">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-3 mb-4 gap-3">
             <div className="flex items-center gap-2">
@@ -2028,25 +2419,57 @@ ${verdict.judgeThinking}
                         </div>
                       </div>
 
-                      {/* Capital Frame Selector */}
-                      <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded border border-slate-800 self-start md:self-auto">
-                        <span className="text-[10px] font-mono text-slate-400 px-2 font-medium">Allokeringsramme:</span>
-                        {[10000, 25000, 50000, 100000].map((amt) => {
-                          const isSelected = maxCapitalDkk === amt;
-                          return (
+                      {/* Capital Frame Selector & Paper Trade Action */}
+                      <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+                        <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded border border-slate-800">
+                          <span className="text-[10px] font-mono text-slate-400 px-2 font-medium">Allokeringsramme:</span>
+                          {[10000, 25000, 50000, 100000].map((amt) => {
+                            const isSelected = maxCapitalDkk === amt;
+                            return (
+                              <button
+                                key={amt}
+                                onClick={() => handleSelectCapitalFrame(amt)}
+                                className={`px-2 py-1 rounded text-[10px] font-mono font-bold transition-all ${
+                                  isSelected
+                                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/40'
+                                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                                }`}
+                              >
+                                {(amt / 1000).toFixed(0)}k kr.
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {plan.status === 'ACTIVE_PLAN' && (
+                          paperPortfolio[selectedTx.id] ? (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-950/80 border border-emerald-500/70 text-emerald-300 font-mono text-[11px] shadow-sm">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                              <span className="font-bold">AKTIV I PAPER-PORTEFØLJE</span>
+                              <span className="text-slate-500">•</span>
+                              <span
+                                className={
+                                  paperPortfolio[selectedTx.id].pnlDkk >= 0
+                                    ? 'text-emerald-400 font-bold'
+                                    : 'text-rose-400 font-bold'
+                                }
+                              >
+                                {paperPortfolio[selectedTx.id].pnlDkk >= 0 ? '+' : ''}
+                                {paperPortfolio[selectedTx.id].pnlDkk.toLocaleString('da-DK')} DKK (
+                                {paperPortfolio[selectedTx.id].pnlPct}%)
+                              </span>
+                            </div>
+                          ) : (
                             <button
-                              key={amt}
-                              onClick={() => handleSelectCapitalFrame(amt)}
-                              className={`px-2 py-1 rounded text-[10px] font-mono font-bold transition-all ${
-                                isSelected
-                                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/40'
-                                  : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                              }`}
+                              onClick={() => handleOpenPaperTrade(selectedTx, plan)}
+                              disabled={portfolioLoading}
+                              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-mono text-xs font-bold transition-all shadow-md shadow-emerald-950/40 hover:shadow-emerald-950/60 active:scale-95 disabled:opacity-50"
                             >
-                              {(amt / 1000).toFixed(0)}k kr.
+                              <Bookmark className="w-3.5 h-3.5" />
+                              <span>📌 Åbn Paper-Trade ({plan.recommendedAllocationDkk.toLocaleString('da-DK')} kr.)</span>
                             </button>
-                          );
-                        })}
+                          )
+                        )}
                       </div>
                     </div>
 

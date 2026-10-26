@@ -1,6 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { CouncilVerdict, GatekeeperResult, InsiderTransaction } from '@/types/insider';
+import {
+  CouncilVerdict,
+  GatekeeperResult,
+  InsiderTransaction,
+  PaperTradePosition,
+} from '@/types/insider';
 
 export interface SavedVerdictItem {
   transaction: InsiderTransaction;
@@ -20,6 +25,7 @@ export interface SavedScanItem {
 export interface DatabaseSchema {
   verdicts: Record<string, SavedVerdictItem>;
   scanHistory: Record<string, SavedScanItem>;
+  paperPortfolio: Record<string, PaperTradePosition>;
 }
 
 const DB_DIR = path.join(process.cwd(), 'data');
@@ -37,6 +43,7 @@ function ensureDbFile(): void {
       const initial: DatabaseSchema = {
         verdicts: {},
         scanHistory: {},
+        paperPortfolio: {},
       };
       fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), 'utf-8');
     }
@@ -56,12 +63,14 @@ export async function getDatabase(): Promise<DatabaseSchema> {
     return {
       verdicts: parsed.verdicts || {},
       scanHistory: parsed.scanHistory || {},
+      paperPortfolio: parsed.paperPortfolio || {},
     };
   } catch (err) {
     console.error('Fejl ved læsning af insiderops-db.json:', err);
     return {
       verdicts: {},
       scanHistory: {},
+      paperPortfolio: {},
     };
   }
 }
@@ -138,4 +147,37 @@ export async function saveScan(
     items,
   };
   await saveDatabase(db);
+}
+
+/**
+ * Henter alle paper-trade positioner fra server-databasen.
+ */
+export async function getPaperPortfolio(): Promise<Record<string, PaperTradePosition>> {
+  const db = await getDatabase();
+  return db.paperPortfolio || {};
+}
+
+/**
+ * Gemmer eller opdaterer en paper-trade position i server-databasen.
+ */
+export async function savePaperTrade(pos: PaperTradePosition): Promise<void> {
+  const db = await getDatabase();
+  if (!db.paperPortfolio) {
+    db.paperPortfolio = {};
+  }
+  db.paperPortfolio[pos.id] = pos;
+  await saveDatabase(db);
+}
+
+/**
+ * Sletter en paper-trade position fra server-databasen ud fra id.
+ */
+export async function deletePaperTrade(id: string): Promise<boolean> {
+  const db = await getDatabase();
+  if (db.paperPortfolio && db.paperPortfolio[id]) {
+    delete db.paperPortfolio[id];
+    await saveDatabase(db);
+    return true;
+  }
+  return false;
 }
