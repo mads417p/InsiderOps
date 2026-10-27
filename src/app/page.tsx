@@ -66,7 +66,7 @@ const STORAGE_KEY = 'insiderops_verdicts_v1';
 const CAPITAL_STORAGE_KEY = 'insiderops_capital_frame_dkk';
 
 export default function Dashboard() {
-  const [source, setSource] = useState<'mock' | 'live' | 'nordic' | 'csuite'>('mock');
+  const [source, setSource] = useState<'mock' | 'live' | 'nordic' | 'csuite'>('csuite');
   const [quickFilter, setQuickFilter] = useState<'all' | 'csuite' | 'cluster_discount'>('all');
   const [searchTicker, setSearchTicker] = useState<string>('');
   const [activeTickerQuery, setActiveTickerQuery] = useState<string | null>(null);
@@ -266,11 +266,21 @@ ${verdict.judgeThinking}
 
   // Indlæs gemte domme fra localStorage og synkroniser med serverens persistente database
   useEffect(() => {
+    const isMock = (id: string, ticker?: string) =>
+      id.startsWith('mock-') || (ticker ? ['MTLR', 'PLXR', 'PLAN'].includes(ticker) : false);
+
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
-        setVerdictHistory(parsed);
+        const cleaned: Record<string, SavedVerdictItem> = {};
+        for (const [k, v] of Object.entries(parsed as Record<string, SavedVerdictItem>)) {
+          if (!isMock(k, v?.transaction?.ticker)) {
+            cleaned[k] = v;
+          }
+        }
+        setVerdictHistory(cleaned);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
       }
     } catch (e) {
       console.warn('Kunne ikke hente gemt historik fra localStorage:', e);
@@ -295,12 +305,18 @@ ${verdict.judgeThinking}
         if (data?.verdicts) {
           setVerdictHistory((prev) => {
             const merged = { ...data.verdicts, ...prev };
+            const cleaned: Record<string, SavedVerdictItem> = {};
+            for (const [k, v] of Object.entries(merged as Record<string, SavedVerdictItem>)) {
+              if (!isMock(k, v?.transaction?.ticker)) {
+                cleaned[k] = v;
+              }
+            }
             try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
             } catch {
               // ignore
             }
-            return merged;
+            return cleaned;
           });
         }
       })
@@ -768,59 +784,46 @@ ${verdict.judgeThinking}
               </div>
             </div>
 
-            {/* Source Switcher */}
+            {/* Source Switcher (100% Live Børsdata) */}
             <div className="flex items-center rounded border border-slate-800 bg-slate-900 p-0.5 text-xs font-mono">
               <button
                 onClick={() => {
                   setActiveTickerQuery(null);
-                  setSource('mock');
+                  setSource('csuite');
                 }}
-                className={`px-2.5 py-1 rounded transition-colors ${
-                  source === 'mock' && !activeTickerQuery
-                    ? 'bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-500/30'
-                    : 'text-slate-400 hover:text-slate-200'
+                className={`px-3 py-1.5 rounded transition-all flex items-center gap-1.5 font-bold ${
+                  source === 'csuite' && !activeTickerQuery
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm shadow-amber-950/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
               >
-                Asymmetry Lab
+                <span>👔 C-Suite & Cluster Hunter (US Live)</span>
               </button>
               <button
                 onClick={() => {
                   setActiveTickerQuery(null);
                   setSource('live');
                 }}
-                className={`px-2.5 py-1 rounded transition-colors ${
+                className={`px-3 py-1.5 rounded transition-all flex items-center gap-1.5 font-bold ${
                   source === 'live' && !activeTickerQuery
-                    ? 'bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-500/30'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm shadow-cyan-950/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
               >
-                Live SEC Feed
-              </button>
-              <button
-                onClick={() => {
-                  setActiveTickerQuery(null);
-                  setSource('csuite');
-                }}
-                className={`px-2.5 py-1 rounded transition-colors flex items-center gap-1 ${
-                  source === 'csuite' && !activeTickerQuery
-                    ? 'bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/30'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <span>👔 C-Suite Hunter</span>
+                <span>📡 Live SEC EDGAR Feed (US Live)</span>
               </button>
               <button
                 onClick={() => {
                   setActiveTickerQuery(null);
                   setSource('nordic');
                 }}
-                className={`px-2.5 py-1 rounded transition-colors flex items-center gap-1 ${
+                className={`px-3 py-1.5 rounded transition-all flex items-center gap-1.5 font-bold ${
                   source === 'nordic' && !activeTickerQuery
-                    ? 'bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm shadow-emerald-950/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
               >
-                <span>Nordic / DK (MAR Art. 19)</span>
+                <span>🇩🇰 Nordic / DK (MAR Art. 19 Live)</span>
               </button>
             </div>
 
