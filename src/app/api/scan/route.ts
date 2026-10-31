@@ -5,6 +5,7 @@ import {
   scanTickerSecForm4s,
   fetchExecutiveAndClusterBuys,
   applyTrueClusterDeduplication,
+  isValidInsiderName,
 } from '@/lib/sec-scanner';
 import { fetchNordicInsiderTransactions } from '@/lib/nordic-scanner';
 import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
@@ -57,15 +58,54 @@ function getEnrichmentScore(tx: InsiderTransaction): number {
 }
 
 /**
- * Intelligent Deduplikering & Merge på tværs af US C-Suite, US SEC EDGAR og Nordic MAR 19.
- * Hvis den samme handel registreres i flere feeds, beholdes den mest berigede udgave.
+ * Rangerer to transaktioner inden for samme selskab efter signalværdi.
+ * Bruges til at udvælge den stærkeste "Lead Row" for en given ticker.
+ * Prioritet:
+ * 1. Executive Officer (CFO/CEO/COO/Pres/GC) over Director / 10% Owner
+ * 2. Direkte ejerskab ('D') over indirekte ('I')
+ * 3. Højeste samlede dollarværdi (totalValueUsd)
+ * 4. Højeste relative stigning i beholdning (holdingsIncreasePct)
+ */
+function compareSignalValue(a: InsiderTransaction, b: InsiderTransaction): number {
+  // 1. Executive Officer over menige bestyrelsesmedlemmer / passive ejere
+  const aExec = a.isExecutiveOfficer ? 1 : 0;
+  const bExec = b.isExecutiveOfficer ? 1 : 0;
+  if (aExec !== bExec) return bExec - aExec;
+
+  // 2. Direkte ejerskab ('D') over indirekte ('I')
+  const aDir = a.ownershipNature === 'D' ? 1 : 0;
+  const bDir = b.ownershipNature === 'D' ? 1 : 0;
+  if (aDir !== bDir) return bDir - aDir;
+
+  // 3. Største samlede transaktionsbeløb
+  const aVal = a.totalValueUsd || 0;
+  const bVal = b.totalValueUsd || 0;
+  if (aVal !== bVal) return bVal - aVal;
+
+  // 4. Største relative stigning i beholdning
+  return (b.holdingsIncreasePct || 0) - (a.holdingsIncreasePct || 0);
+}
+
+/**
+ * Intelligent Deduplikering, Multi-Market Merge & Cluster Roll-Up.
+ * 1. Filtrerer ugyldige insider-navne (f.eks. 'Dir', 'CEO', tomme).
+ * 2. Sammenlægger identiske del-handler/rapporteringer af samme person på samme dato.
+ * 3. Beregner sande cluster-køb på tværs af hele universet.
+ * 4. Konsoliderer til ÉN unik række pr. Ticker:
+ *    - Vælger den transaktion i selskabet med højest signalværdi som Lead Row.
+ *    - Samler alle øvrige købere i selskabet i leadTx.clusterPeers.
+ *    - Sætter leadTx.clusterCount til det samlede antal unikke købere.
  */
 function mergeAndDeduplicateTransactions(rawTransactions: InsiderTransaction[]): InsiderTransaction[] {
+  // 1. Filtrer eventuelle tomme, ugyldige eller 'Dir' / titel-only transaktioner
+  const validTransactions = rawTransactions.filter(
+    (tx) => tx && tx.ticker && isValidInsiderName(tx.insiderName)
+  );
+
   const merged: InsiderTransaction[] = [];
 
-  for (const tx of rawTransactions) {
-    if (!tx || !tx.ticker) continue;
-
+  // 2. Sammenlæg duplikerede registreringer af samme person i samme aktie
+  for (const tx of validTransactions) {
     const normTicker = tx.ticker.toUpperCase().trim();
     const normName = (tx.insiderName || '')
       .toLowerCase()
@@ -127,10 +167,109 @@ function mergeAndDeduplicateTransactions(rawTransactions: InsiderTransaction[]):
     }
   }
 
-  // Kør ægte cluster-deduplikering på tværs af hele det samlede multi-market datasæt
+  // 3. Kør ægte cluster-deduplikering på tværs af de individuelle handler
   applyTrueClusterDeduplication(merged);
 
-  return merged;
+  // 4. Konsolider til ÉN række pr. Ticker (Cluster Roll-up)
+  const byTicker = new Map<string, InsiderTransaction[]>();
+  for (const tx of merged) {
+    const key = tx.ticker.toUpperCase().trim();
+    if (!byTicker.has(key)) {
+      byTicker.set(key, []);
+    }
+    byTicker.get(key)!.push(tx);
+  }
+
+  const consolidated: InsiderTransaction[] = [];
+
+  for (const [, group] of byTicker.entries()) {
+    if (group.length === 1) {
+      consolidated.push(group[0]);
+      continue;
+    }
+
+    // Sortér kandidaterne i samme ticker efter signalværdi
+    const sorted = [...group].sort(compareSignalValue);
+    const leadTx: InsiderTransaction = { ...sorted[0] };
+
+    // Beregn unikke købere i dette selskab
+    const uniqueBuyers = new Map<string, InsiderTransaction>();
+    for (const tx of sorted) {
+      const norm = (tx.insiderName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (!uniqueBuyers.has(norm)) {
+        uniqueBuyers.set(norm, tx);
+      }
+    }
+
+    const totalUniqueBuyers = Math.max(uniqueBuyers.size, leadTx.clusterCount || 1);
+    if (totalUniqueBuyers >= 2 || sorted.length >= 2) {
+      leadTx.isClusterBuy = true;
+      leadTx.clusterCount = totalUniqueBuyers;
+    }
+
+    // Saml alle øvrige med-købere i leadTx.clusterPeers
+    const leadNorm = (leadTx.insiderName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const peers: string[] = [];
+    const seenPeerKeys = new Set<string>();
+
+    if (leadTx.clusterPeers && leadTx.clusterPeers.length > 0) {
+      for (const p of leadTx.clusterPeers) {
+        peers.push(p);
+      }
+    }
+
+    for (const tx of sorted) {
+      const txNorm = (tx.insiderName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (txNorm === leadNorm || seenPeerKeys.has(txNorm)) continue;
+      seenPeerKeys.add(txNorm);
+
+      const peerStr = `${tx.insiderName} (${tx.insiderTitle}): $${Math.round(
+        tx.totalValueUsd
+      ).toLocaleString()} (${tx.shares.toLocaleString()} aktier á $${tx.pricePerShare}) den ${tx.filingDate}`;
+
+      if (!peers.some((p) => p.includes(tx.insiderName))) {
+        peers.push(peerStr);
+      }
+    }
+
+    leadTx.clusterPeers = peers;
+
+    // Lån bedste selskabsnavn eller markedsdata hvis lead mangler det
+    const bestName = sorted.find((t) => t.companyName && t.companyName !== t.ticker)?.companyName;
+    if (bestName && (!leadTx.companyName || leadTx.companyName === leadTx.ticker)) {
+      leadTx.companyName = bestName;
+    }
+
+    for (const other of sorted) {
+      if (leadTx.currentMarketPrice === undefined && other.currentMarketPrice !== undefined) {
+        leadTx.currentMarketPrice = other.currentMarketPrice;
+      }
+      if (leadTx.marketCapUsd === undefined && other.marketCapUsd !== undefined) {
+        leadTx.marketCapUsd = other.marketCapUsd;
+      }
+      if (leadTx.recentPriceChange30dPct === undefined && other.recentPriceChange30dPct !== undefined) {
+        leadTx.recentPriceChange30dPct = other.recentPriceChange30dPct;
+      }
+      if (leadTx.isTradableInDK === undefined && other.isTradableInDK !== undefined) {
+        leadTx.isTradableInDK = other.isTradableInDK;
+        leadTx.tradabilityReason = other.tradabilityReason;
+      }
+    }
+
+    // Opdater kontekst-noter med cluster-overblik
+    if (leadTx.isClusterBuy && peers.length > 0 && !leadTx.contextNotes?.includes('BEKRÆFTET CLUSTER-KØB')) {
+      const totalClusterUsd = sorted.reduce((sum, item) => sum + (item.totalValueUsd || 0), 0);
+      const peerSummary = peers.map((p) => p.split(':')[0]).join(', ');
+      const clusterNote = `BEKRÆFTET CLUSTER-KØB (${totalUniqueBuyers} uafhængige insidere, samlet værdi $${Math.round(
+        totalClusterUsd
+      ).toLocaleString()} USD). Med-købere: ${peerSummary}.`;
+      leadTx.contextNotes = leadTx.contextNotes ? `${clusterNote}\n\n${leadTx.contextNotes}` : clusterNote;
+    }
+
+    consolidated.push(leadTx);
+  }
+
+  return consolidated;
 }
 
 export async function GET(request: Request) {

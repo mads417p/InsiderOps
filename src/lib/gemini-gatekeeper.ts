@@ -272,75 +272,90 @@ export async function evaluateBatchWithGatekeeper(
     }));
   }
 
-  // 2. Kør ÉT samlet batch-kald for alle godkendte transaktioner
+  // 2. Kør Gemini batch-kald opdelt i chunks af max 12 transaktioner med 4096 output tokens
   try {
     const ai = new GoogleGenAI({ apiKey });
     const model = await resolveGeminiFlashModel(ai);
 
-    const batchPayload = candidatesToScore.map(({ tx }) => ({
-      id: tx.id,
-      ticker: tx.ticker,
-      companyName: tx.companyName,
-      insiderName: tx.insiderName,
-      insiderTitle: tx.insiderTitle,
-      shares: tx.shares,
-      pricePerShare: tx.pricePerShare,
-      totalValueUsd: Math.round(tx.totalValueUsd),
-      holdingsIncreasePct: tx.holdingsIncreasePct,
-      isClusterBuy: tx.isClusterBuy,
-      clusterCount: tx.clusterCount ?? 1,
-      recentPriceChange30dPct: tx.recentPriceChange30dPct,
-      contextNotes: tx.contextNotes || '',
-    }));
+    const CHUNK_SIZE = 12;
+    const chunks: Array<typeof candidatesToScore> = [];
+    for (let i = 0; i < candidatesToScore.length; i += CHUNK_SIZE) {
+      chunks.push(candidatesToScore.slice(i, i + CHUNK_SIZE));
+    }
 
-    const response = await ai.models.generateContent({
-      model,
-      contents: `Du er InsiderOps Gatekeeper. Evaluer hver af følgende ${batchPayload.length} godkendte insider-transaktioner:
+    await Promise.allSettled(
+      chunks.map(async (chunk) => {
+        const batchPayload = chunk.map(({ tx }) => ({
+          id: tx.id,
+          ticker: tx.ticker,
+          companyName: tx.companyName,
+          insiderName: tx.insiderName,
+          insiderTitle: tx.insiderTitle,
+          shares: tx.shares,
+          pricePerShare: tx.pricePerShare,
+          totalValueUsd: Math.round(tx.totalValueUsd),
+          holdingsIncreasePct: tx.holdingsIncreasePct,
+          isClusterBuy: tx.isClusterBuy,
+          clusterCount: tx.clusterCount ?? 1,
+          recentPriceChange30dPct: tx.recentPriceChange30dPct,
+          contextNotes: tx.contextNotes || '',
+        }));
+
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents: `Du er InsiderOps Gatekeeper. Evaluer hver af følgende ${batchPayload.length} godkendte insider-transaktioner:
 ${JSON.stringify(batchPayload, null, 2)}`,
-      config: {
-        systemInstruction: `Du er Gatekeeper for en kvantitativ investeringsfond. Vurder graden af sandsynlig informationsasymmetri på en skala fra 0-100 for hver transaktion.
-Vægt CFO og General Counsel køb ekstremt højt.
-Vægt høj holdingsIncreasePct (>15%) og isClusterBuy højt.
+            config: {
+              maxOutputTokens: 4096,
+              systemInstruction: `Du er Gatekeeper for en kvantitativ investeringsfond. Vurder graden af sandsynlig informationsasymmetri på en skala fra 0-100 for hver transaktion.
+Vægt CFO og General Counsel køb ekstremt højt (+20-30 point).
+Vægt høj holdingsIncreasePct (>15%) og isClusterBuy højt (+15 point).
 Straffe "Cosmetic/PR buys" (hvor en direktør køber for et beløb der øger beholdningen med <2%).
 Kategoriser asymmetrySignal som 'HIGH' (score >= 75), 'MEDIUM' (50-74), 'LOW' (25-49), eller 'NOISE' (< 25).
 Returner en præcis JSON-array med et element for hver transaktion med id, geminiPreScore, asymmetrySignal og 1-2 knivskarpe sætninger på dansk i quickReasoning.`,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              id: { type: Type.STRING },
-              geminiPreScore: { type: Type.INTEGER },
-              asymmetrySignal: {
-                type: Type.STRING,
-                enum: ['HIGH', 'MEDIUM', 'LOW', 'NOISE'],
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    geminiPreScore: { type: Type.INTEGER },
+                    asymmetrySignal: {
+                      type: Type.STRING,
+                      enum: ['HIGH', 'MEDIUM', 'LOW', 'NOISE'],
+                    },
+                    quickReasoning: { type: Type.STRING },
+                  },
+                  required: ['id', 'geminiPreScore', 'asymmetrySignal', 'quickReasoning'],
+                },
               },
-              quickReasoning: { type: Type.STRING },
             },
-            required: ['id', 'geminiPreScore', 'asymmetrySignal', 'quickReasoning'],
-          },
-        },
-      },
-    });
+          });
 
-    const parsed = JSON.parse(response.text || '[]') as Array<{
-      id: string;
-      geminiPreScore: number;
-      asymmetrySignal: GatekeeperResult['asymmetrySignal'];
-      quickReasoning: string;
-    }>;
+          const parsed = JSON.parse(response.text || '[]') as Array<{
+            id: string;
+            geminiPreScore: number;
+            asymmetrySignal: GatekeeperResult['asymmetrySignal'];
+            quickReasoning: string;
+          }>;
 
-    for (const item of parsed) {
-      if (item.id) {
-        resultMap.set(item.id, {
-          passedHardFilter: true,
-          geminiPreScore: Math.round(item.geminiPreScore),
-          asymmetrySignal: item.asymmetrySignal,
-          quickReasoning: item.quickReasoning,
-        });
-      }
-    }
+          for (const item of parsed) {
+            if (item.id) {
+              resultMap.set(item.id, {
+                passedHardFilter: true,
+                geminiPreScore: Math.round(item.geminiPreScore),
+                asymmetrySignal: item.asymmetrySignal,
+                quickReasoning: item.quickReasoning,
+              });
+            }
+          }
+        } catch (chunkErr) {
+          console.warn('Chunk evaluering i Gemini Gatekeeper fejlede, falder tilbage til heuristik for denne chunk:', chunkErr);
+        }
+      })
+    );
 
     // Udfyld eventuelle manglende med heuristik som sikkerhedsnet
     for (const { tx } of candidatesToScore) {

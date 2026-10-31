@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { InsiderTransaction, TransactionCode } from '@/types/insider';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
-import { isExecutiveTitle } from '@/lib/sec-scanner';
+import { isExecutiveTitle, isValidInsiderName } from '@/lib/sec-scanner';
 import { resolveGeminiFlashModel } from '@/lib/gemini-gatekeeper';
 
 const DKK_TO_USD_RATE = 0.145; // 1 DKK ≈ $0.145 USD
@@ -312,7 +312,7 @@ Regler for udtræk:
 4. pricePerShare: Kurs pr. aktie i den rapporterede lokale valuta.
 5. currency: 'DKK' for danske meddelelser, 'SEK' for svenske meddelelser, 'EUR' for euro.
 6. totalValueLocal: shares * pricePerShare i lokal valuta.
-7. insiderName: Navn på personen (eller ledende medarbejder).
+7. insiderName: Det fulde, eksakte personnavn eller fondsnavn på den handlende (f.eks. 'Rasmus Errboe' eller 'Novo Holdings A/S'). Hvis meddelelsen kun indeholder en generisk titel som 'Ledende medarbejder' uden et reelt personnavn, må transaktionen udelades.
 8. insiderTitle: Titel/rolle på dansk/svensk/engelsk (f.eks. CEO, CFO, Bestyrelsesmedlem, Styrelseledamot).
 9. sharesOwnedFollowing: Beholdning efter transaktionen hvis nævnt.
 10. notes: Korte, præcise noter om transaktionen.`;
@@ -374,6 +374,21 @@ Regler for udtræk:
       if (response && response.text) {
         const parsedList: ParsedNordicMarItem[] = JSON.parse(response.text);
         for (const item of parsedList) {
+          if (!item || !item.id) continue;
+          if (item.transactionCode !== 'P') continue;
+          if (!isValidInsiderName(item.insiderName)) continue;
+          if (!item.shares || item.shares <= 0) continue;
+          if (!item.pricePerShare || item.pricePerShare <= 0) continue;
+
+          const rate =
+            item.currency === 'SEK'
+              ? SEK_TO_USD_RATE
+              : item.currency === 'EUR'
+              ? EUR_TO_USD_RATE
+              : DKK_TO_USD_RATE;
+          const totalUsd = (item.totalValueLocal || item.shares * item.pricePerShare) * rate;
+          if (totalUsd < 50000) continue;
+
           results.set(item.id, item);
         }
         return results;
@@ -390,36 +405,48 @@ Regler for udtræk:
     const isSale = /salg|sold|sell|afhænd|avyttr|minskar/i.test(fullText);
     const isGrant = /tildeling|grant|allotment|rsu|incentive|tilldel/i.test(fullText);
 
-    let code: TransactionCode = 'P';
-    if (isGrant) code = 'A';
-    else if (isSale) code = 'S';
-    else if (isPurchase) code = 'P';
+    // KUN reelle køb tillades (ikke salg eller incitamentstildelinger)
+    if (!isPurchase || isSale || isGrant) continue;
 
-    const isSwedish = ann.market.includes('Stockholm') || ann.market.includes('Sweden') || ann.company.includes(' AB');
-    const currency: 'DKK' | 'SEK' | 'EUR' = isSwedish ? 'SEK' : 'DKK';
+    const isSwedish =
+      ann.market.includes('Stockholm') || ann.market.includes('Sweden') || ann.company.includes(' AB');
+    const isFinnish = ann.market.includes('Helsinki') || ann.market.includes('Finland');
+    const currency: 'DKK' | 'SEK' | 'EUR' = isSwedish ? 'SEK' : isFinnish ? 'EUR' : 'DKK';
 
     const nameMatch =
       ann.text.match(/([A-ZÆØÅÖÄ][a-zæøåöä]+(?:\s+[A-ZÆØÅÖÄ][a-zæøåöä]+)+),\s*([^,\.]+)/) ||
       ann.headline.match(/([A-ZÆØÅÖÄ][a-zæøåöä]+(?:\s+[A-ZÆØÅÖÄ][a-zæøåöä]+)+)/);
 
+    const detectedName = nameMatch?.[1]?.trim();
+    if (!isValidInsiderName(detectedName)) continue;
+
     const sharesMatch = ann.text.match(/(?:antal|volume|shares|stk|aktier)[\s:]*([0-9\.\,]+)/i);
     const priceMatch = ann.text.match(/(?:kurs|pris|price|dkk|sek)[\s:]*([0-9\.\,]+)/i);
 
-    const rawShares = sharesMatch ? parseFloat(sharesMatch[1].replace(/\./g, '').replace(',', '.')) : 5000;
-    const rawPrice = priceMatch ? parseFloat(priceMatch[1].replace(/\./g, '').replace(',', '.')) : 100.0;
+    // Kræv eksplicitte tal - gæt ALDRIG fiktive tal (som 5000 stk á 100)
+    if (!sharesMatch || !priceMatch) continue;
 
-    const shares = isNaN(rawShares) || rawShares <= 0 ? 5000 : rawShares;
-    const pricePerShare = isNaN(rawPrice) || rawPrice <= 0 ? 100.0 : rawPrice;
+    const rawShares = parseFloat(sharesMatch[1].replace(/\./g, '').replace(',', '.'));
+    const rawPrice = parseFloat(priceMatch[1].replace(/\./g, '').replace(',', '.'));
+
+    if (isNaN(rawShares) || rawShares <= 0 || isNaN(rawPrice) || rawPrice <= 0) continue;
+
+    const totalValueLocal = rawShares * rawPrice;
+    const rate = currency === 'SEK' ? SEK_TO_USD_RATE : currency === 'EUR' ? EUR_TO_USD_RATE : DKK_TO_USD_RATE;
+    const totalValueUsd = totalValueLocal * rate;
+
+    // Afvis køb under $50.000 USD ækvivalent
+    if (totalValueUsd < 50000) continue;
 
     results.set(ann.id, {
       id: ann.id,
-      insiderName: nameMatch?.[1] || 'Ledende medarbejder',
-      insiderTitle: nameMatch?.[2]?.trim() || (isPurchase ? 'Direktør / Ledelse' : 'Bestyrelsesmedlem'),
-      transactionCode: code,
-      shares,
-      pricePerShare,
+      insiderName: detectedName!,
+      insiderTitle: nameMatch?.[2]?.trim() || 'Direktør / Ledelse',
+      transactionCode: 'P',
+      shares: rawShares,
+      pricePerShare: rawPrice,
       currency,
-      totalValueLocal: shares * pricePerShare,
+      totalValueLocal,
       notes: `MAR art. 19 indberetning på ${ann.market} for ${ann.company}.`,
     });
   }
@@ -548,6 +575,8 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
     for (const item of preparedItems) {
       const parsed = parsedMap.get(item.id);
       if (!parsed) continue;
+      if (parsed.transactionCode !== 'P') continue;
+      if (!isValidInsiderName(parsed.insiderName)) continue;
 
       const ticker = mapNordicCompanyToTicker(item.company, item.market, parsed.currency);
       const isSwedish = ticker.endsWith('.ST') || parsed.currency === 'SEK';
@@ -560,6 +589,7 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
         : DKK_TO_USD_RATE;
 
       const totalValueUsd = Math.round(parsed.totalValueLocal * rate);
+      if (totalValueUsd < 50000) continue;
       const pricePerShareUsd = Number((parsed.pricePerShare * rate).toFixed(2));
       const sharesOwnedFollowing = parsed.sharesOwnedFollowing || parsed.shares * 3;
       const priorShares = sharesOwnedFollowing - parsed.shares;

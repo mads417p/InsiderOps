@@ -92,6 +92,28 @@ export function isExecutiveTitle(title?: string): boolean {
 }
 
 /**
+ * Validerer at et insider-navn er et reelt person- eller fondsnavn
+ * og ikke blot en generisk stillingsbetegnelse som 'Dir', 'CEO', 'Vice President' osv.
+ */
+export function isValidInsiderName(name?: string | null): boolean {
+  if (!name) return false;
+  const clean = name.replace(/<[^>]+>/g, '').trim();
+  if (clean.length < 3) return false;
+  if (/^(unknown|n\/a|none|null|undefined)$/i.test(clean)) return false;
+
+  const titleBlacklist =
+    /^(dir|director|ceo|cfo|coo|cto|cro|cio|president|pres|vp|evp|svp|vice president|officer|executive officer|board member|ten percent owner|10% owner|owner|insider|ledende medarbejder|medarbejder|styrelseledamot|ledamot|direktør)$/i;
+  if (titleBlacklist.test(clean)) return false;
+
+  const parts = clean.split(/[\/,\-&]/).map((p) => p.trim());
+  if (parts.length > 1 && parts.every((p) => titleBlacklist.test(p) || p.length <= 2)) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * Bestemmer om ejerskabet er direkte ('D') eller indirekte ('I' via fond/trust/holding).
  */
 export function detectOwnershipNature(
@@ -693,7 +715,7 @@ async function parseForm4Entry(
     const companyName = companyFromXml || defaultCompanyName || ticker;
     const insiderName = xml.match(/<rptOwnerName>\s*(.*?)\s*<\/rptOwnerName>/i)?.[1]?.trim();
 
-    if (!ticker || !insiderName) return null;
+    if (!ticker || !insiderName || !isValidInsiderName(insiderName)) return null;
 
     // Udtræk og aggreger del-linjer (split-lots)
     const aggregated = parseAndAggregateTransactions(xml);
@@ -818,6 +840,144 @@ export async function getCikForTicker(
 }
 
 /**
+ * Dynamisk parser for OpenInsider tinytable tabeller.
+ * Udleder automatisk kolonne-indekser fra <th> overskrifterne,
+ * så parsing er 100% robust uanset om OpenInsider viser 16 eller 17 kolonner.
+ */
+function parseOpenInsiderTable(html: string, idPrefix: string): InsiderTransaction[] {
+  const tableMatch = html.match(/<table[^>]*class=["']tinytable["'][\s\S]*?<\/table>/i);
+  if (!tableMatch) return [];
+
+  const trMatches = [...tableMatch[0].matchAll(/<tr[\s\S]*?<\/tr>/gi)];
+  if (trMatches.length < 2) return [];
+
+  // Parse headers dynamisk
+  const thHeaders = [...trMatches[0][0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map(
+    (m) => m[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').toLowerCase().trim()
+  );
+
+  const colFiling = thHeaders.findIndex((h) => h.includes('filing'));
+  const colTicker = thHeaders.findIndex((h) => h.includes('ticker'));
+  const colCompany = thHeaders.findIndex((h) => h.includes('company'));
+  const colInsider = thHeaders.findIndex((h) => h.includes('insider'));
+  const colTitle = thHeaders.findIndex((h) => h.includes('title'));
+  const colPrice = thHeaders.findIndex((h) => h.includes('price'));
+  const colQty = thHeaders.findIndex((h) => h.includes('qty'));
+  const colOwned = thHeaders.findIndex((h) => h.includes('owned'));
+  const colDeltaOwn = thHeaders.findIndex(
+    (h) => h.includes('own') && (h.includes('δ') || h.includes('delta') || h.includes('&delta;') || h.includes('Δ'))
+  );
+  const colValue = thHeaders.findIndex((h) => h.includes('value'));
+
+  if (colTicker === -1 || colInsider === -1 || colPrice === -1 || colQty === -1) {
+    return [];
+  }
+
+  const transactions: InsiderTransaction[] = [];
+
+  for (let i = 1; i < trMatches.length; i++) {
+    const rowHtml = trMatches[i][0];
+    const tdMatches = [...rowHtml.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => m[1]);
+    const maxRequired = Math.max(colTicker, colInsider, colPrice, colQty, colValue !== -1 ? colValue : 0);
+    if (tdMatches.length <= maxRequired) continue;
+
+    const filingDate =
+      colFiling !== -1 && tdMatches[colFiling]
+        ? tdMatches[colFiling].replace(/<[^>]+>/g, '').trim().split(' ')[0]
+        : new Date().toISOString().split('T')[0];
+
+    const secLinkMatch = rowHtml.match(
+      /href="(https?:\/\/(?:www\.)?sec\.gov\/Archives\/edgar\/data\/[^\s"'>]+)"/i
+    );
+    const secFilingUrl = secLinkMatch
+      ? secLinkMatch[1].replace(/^http:/, 'https:')
+      : 'https://www.sec.gov';
+
+    const tickerMatch =
+      tdMatches[colTicker]?.match(/href="\/([A-Za-z0-9.\-]+)"/i) ||
+      tdMatches[colTicker]?.match(/>([A-Z0-9.\-]+)<\/a>/i);
+    const ticker = tickerMatch ? tickerMatch[1].toUpperCase() : 'UNKNOWN';
+    if (!ticker || ticker === 'UNKNOWN') continue;
+
+    const companyName =
+      colCompany !== -1 && tdMatches[colCompany]
+        ? tdMatches[colCompany].replace(/<[^>]+>/g, '').trim()
+        : ticker;
+
+    const insiderName = tdMatches[colInsider]?.replace(/<[^>]+>/g, '').trim();
+    if (!isValidInsiderName(insiderName)) continue;
+
+    const insiderTitle =
+      colTitle !== -1 && tdMatches[colTitle]
+        ? tdMatches[colTitle].replace(/<[^>]+>/g, '').trim() || 'Insider'
+        : 'Insider';
+
+    const priceStr = tdMatches[colPrice]?.replace(/<[^>]+>/g, '').replace(/[$,]/g, '').trim();
+    const pricePerShare = parseFloat(priceStr) || 0;
+
+    const qtyStr = tdMatches[colQty]?.replace(/<[^>]+>/g, '').replace(/[+,\s]/g, '').trim();
+    const shares = parseInt(qtyStr, 10) || 0;
+
+    const ownedStr =
+      colOwned !== -1 && tdMatches[colOwned]
+        ? tdMatches[colOwned].replace(/<[^>]+>/g, '').replace(/[,]/g, '').trim()
+        : '0';
+    const sharesOwnedFollowing = parseInt(ownedStr, 10) || 0;
+
+    const deltaOwnStr =
+      colDeltaOwn !== -1 && tdMatches[colDeltaOwn]
+        ? tdMatches[colDeltaOwn].replace(/<[^>]+>/g, '').trim()
+        : '';
+    let holdingsIncreasePct = 0;
+    if (deltaOwnStr.toLowerCase().includes('new')) {
+      holdingsIncreasePct = 100.0;
+    } else {
+      const clean = deltaOwnStr.replace(/[%,\s]/g, '').replace(/^\+/, '');
+      holdingsIncreasePct = parseFloat(clean) || 0;
+    }
+
+    const valStr =
+      colValue !== -1 && tdMatches[colValue]
+        ? tdMatches[colValue].replace(/<[^>]+>/g, '').replace(/[+$,\s]/g, '').trim()
+        : '';
+    const totalValueUsd = parseFloat(valStr) || shares * pricePerShare;
+
+    const isDirect = rowHtml.includes('direct shares');
+    const isIndirect = rowHtml.includes('indirect shares');
+    const ownershipNature: 'D' | 'I' = isIndirect
+      ? 'I'
+      : isDirect
+      ? 'D'
+      : detectOwnershipNature(undefined, insiderName, rowHtml);
+    const isExecutiveOfficer = isExecutiveTitle(insiderTitle);
+    const is10b51Plan = /10b5-?1/i.test(rowHtml);
+
+    transactions.push({
+      id: `${idPrefix}-${ticker}-${filingDate}-${shares}-${Math.round(totalValueUsd)}`,
+      filingDate,
+      ticker,
+      companyName,
+      insiderName,
+      insiderTitle,
+      transactionCode: 'P',
+      shares,
+      pricePerShare,
+      totalValueUsd,
+      sharesOwnedFollowing,
+      holdingsIncreasePct,
+      isClusterBuy: false,
+      clusterCount: 1,
+      ownershipNature,
+      isExecutiveOfficer,
+      is10b51Plan,
+      secFilingUrl,
+    });
+  }
+
+  return transactions;
+}
+
+/**
  * Dedikeret "Pure Kode P" Open-Market Purchase Hunter.
  * Henter bekræftede amerikanske åbne markedskøb (Kode P) > $50.000 fra de seneste handelsdage.
  * Detekterer cluster-buys og beriger transaktionerne med live markedskurser og alpha.
@@ -847,86 +1007,7 @@ export async function fetchHighConvictionOpenMarketBuys(limit: number = 20): Pro
     }
 
     const html = await res.text();
-    const tableMatch = html.match(/<table[^>]*class=["']tinytable["'][\s\S]*?<\/table>/i);
-    if (!tableMatch) return [];
-
-    const trMatches = [...tableMatch[0].matchAll(/<tr[\s\S]*?<\/tr>/gi)];
-    const transactions: InsiderTransaction[] = [];
-
-    for (let i = 1; i < trMatches.length; i++) {
-      const rowHtml = trMatches[i][0];
-      const tdMatches = [...rowHtml.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => m[1]);
-      if (tdMatches.length < 13) continue;
-
-      const filingDate = tdMatches[1].replace(/<[^>]+>/g, '').trim().split(' ')[0];
-      const secLinkMatch = rowHtml.match(
-        /href="(https?:\/\/(?:www\.)?sec\.gov\/Archives\/edgar\/data\/[^\s"'>]+)"/i
-      );
-      const secFilingUrl = secLinkMatch
-        ? secLinkMatch[1].replace(/^http:/, 'https:')
-        : 'https://www.sec.gov';
-
-      const tickerMatch =
-        tdMatches[3].match(/href="\/([A-Za-z0-9.\-]+)"/i) ||
-        tdMatches[3].match(/>([A-Z0-9.\-]+)<\/a>/i);
-      const ticker = tickerMatch ? tickerMatch[1].toUpperCase() : 'UNKNOWN';
-      if (!ticker || ticker === 'UNKNOWN') continue;
-
-      const companyName = tdMatches[4].replace(/<[^>]+>/g, '').trim();
-      const insiderName = tdMatches[5].replace(/<[^>]+>/g, '').trim();
-      const insiderTitle = tdMatches[6].replace(/<[^>]+>/g, '').trim() || 'Insider';
-
-      const priceStr = tdMatches[8].replace(/<[^>]+>/g, '').replace(/[$,]/g, '').trim();
-      const pricePerShare = parseFloat(priceStr) || 0;
-
-      const qtyStr = tdMatches[9].replace(/<[^>]+>/g, '').replace(/[+,\s]/g, '').trim();
-      const shares = parseInt(qtyStr, 10) || 0;
-
-      const ownedStr = tdMatches[10].replace(/<[^>]+>/g, '').replace(/[,]/g, '').trim();
-      const sharesOwnedFollowing = parseInt(ownedStr, 10) || 0;
-
-      const deltaOwnStr = tdMatches[11].replace(/<[^>]+>/g, '').trim();
-      let holdingsIncreasePct = 0;
-      if (deltaOwnStr.toLowerCase().includes('new')) {
-        holdingsIncreasePct = 100.0;
-      } else {
-        const clean = deltaOwnStr.replace(/[%,\s]/g, '').replace(/^\+/, '');
-        holdingsIncreasePct = parseFloat(clean) || 0;
-      }
-
-      const valStr = tdMatches[12].replace(/<[^>]+>/g, '').replace(/[+$,\s]/g, '').trim();
-      const totalValueUsd = parseFloat(valStr) || shares * pricePerShare;
-
-      const isDirect = rowHtml.includes('direct shares');
-      const isIndirect = rowHtml.includes('indirect shares');
-      const ownershipNature: 'D' | 'I' = isIndirect
-        ? 'I'
-        : isDirect
-        ? 'D'
-        : detectOwnershipNature(undefined, insiderName, rowHtml);
-      const isExecutiveOfficer = isExecutiveTitle(insiderTitle);
-      const is10b51Plan = /10b5-?1/i.test(rowHtml);
-
-      transactions.push({
-        id: `live-buy-${ticker}-${filingDate}-${shares}-${Math.round(totalValueUsd)}`,
-        filingDate,
-        ticker,
-        companyName,
-        insiderName,
-        insiderTitle,
-        transactionCode: 'P',
-        shares,
-        pricePerShare,
-        totalValueUsd,
-        sharesOwnedFollowing,
-        holdingsIncreasePct,
-        isClusterBuy: false,
-        ownershipNature,
-        isExecutiveOfficer,
-        is10b51Plan,
-        secFilingUrl,
-      });
-    }
+    const transactions = parseOpenInsiderTable(html, 'live-buy');
 
     // Detekter sande cluster buys med person-deduplikering
     applyTrueClusterDeduplication(transactions);
@@ -1023,84 +1104,9 @@ async function fetchRawExecutiveOfficerBuys(limit: number = 25): Promise<Insider
     }
 
     const html = await res.text();
-    const tableMatch = html.match(/<table[^>]*class=["']tinytable["'][\s\S]*?<\/table>/i);
-    if (!tableMatch) return [];
-
-    const trMatches = [...tableMatch[0].matchAll(/<tr[\s\S]*?<\/tr>/gi)];
-    const transactions: InsiderTransaction[] = [];
-
-    for (let i = 1; i < trMatches.length; i++) {
-      const rowHtml = trMatches[i][0];
-      const tdMatches = [...rowHtml.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => m[1]);
-      if (tdMatches.length < 13) continue;
-
-      const filingDate = tdMatches[1].replace(/<[^>]+>/g, '').trim().split(' ')[0];
-      const secLinkMatch = rowHtml.match(
-        /href="(https?:\/\/(?:www\.)?sec\.gov\/Archives\/edgar\/data\/[^\s"'>]+)"/i
-      );
-      const secFilingUrl = secLinkMatch
-        ? secLinkMatch[1].replace(/^http:/, 'https:')
-        : 'https://www.sec.gov';
-
-      const tickerMatch =
-        tdMatches[3].match(/href="\/([A-Za-z0-9.\-]+)"/i) ||
-        tdMatches[3].match(/>([A-Z0-9.\-]+)<\/a>/i);
-      const ticker = tickerMatch ? tickerMatch[1].toUpperCase() : 'UNKNOWN';
-      if (!ticker || ticker === 'UNKNOWN') continue;
-
-      const companyName = tdMatches[4].replace(/<[^>]+>/g, '').trim();
-      const insiderName = tdMatches[5].replace(/<[^>]+>/g, '').trim();
-      const insiderTitle = tdMatches[6].replace(/<[^>]+>/g, '').trim() || 'Executive Officer';
-
-      const priceStr = tdMatches[8].replace(/<[^>]+>/g, '').replace(/[$,]/g, '').trim();
-      const pricePerShare = parseFloat(priceStr) || 0;
-
-      const qtyStr = tdMatches[9].replace(/<[^>]+>/g, '').replace(/[+,\s]/g, '').trim();
-      const shares = parseInt(qtyStr, 10) || 0;
-
-      const ownedStr = tdMatches[10].replace(/<[^>]+>/g, '').replace(/[,]/g, '').trim();
-      const sharesOwnedFollowing = parseInt(ownedStr, 10) || 0;
-
-      const deltaOwnStr = tdMatches[11].replace(/<[^>]+>/g, '').trim();
-      let holdingsIncreasePct = 0;
-      if (deltaOwnStr.toLowerCase().includes('new')) {
-        holdingsIncreasePct = 100.0;
-      } else {
-        const clean = deltaOwnStr.replace(/[%,\s]/g, '').replace(/^\+/, '');
-        holdingsIncreasePct = parseFloat(clean) || 0;
-      }
-
-      const valStr = tdMatches[12].replace(/<[^>]+>/g, '').replace(/[+$,\s]/g, '').trim();
-      const totalValueUsd = parseFloat(valStr) || shares * pricePerShare;
-
-      const isDirect = rowHtml.includes('direct shares');
-      const isIndirect = rowHtml.includes('indirect shares');
-      const ownershipNature: 'D' | 'I' = isIndirect
-        ? 'I'
-        : isDirect
-        ? 'D'
-        : detectOwnershipNature(undefined, insiderName, rowHtml);
-      const is10b51Plan = /10b5-?1/i.test(rowHtml);
-
-      transactions.push({
-        id: `exec-buy-${ticker}-${filingDate}-${shares}-${Math.round(totalValueUsd)}`,
-        filingDate,
-        ticker,
-        companyName,
-        insiderName,
-        insiderTitle,
-        transactionCode: 'P',
-        shares,
-        pricePerShare,
-        totalValueUsd,
-        sharesOwnedFollowing,
-        holdingsIncreasePct,
-        isClusterBuy: false,
-        ownershipNature,
-        isExecutiveOfficer: true,
-        is10b51Plan,
-        secFilingUrl,
-      });
+    const transactions = parseOpenInsiderTable(html, 'exec-buy');
+    for (const tx of transactions) {
+      tx.isExecutiveOfficer = true;
     }
 
     return transactions;
@@ -1141,6 +1147,7 @@ export async function fetchExecutiveAndClusterBuys(limit: number = 25): Promise<
 
     // Filtrer transaktioner hvor personen er en Executive Officer (eller del af et verificeret cluster buy)
     const result = pool
+      .filter((tx) => isValidInsiderName(tx.insiderName))
       .filter((tx) => tx.isExecutiveOfficer || tx.isClusterBuy)
       .slice(0, Math.max(limit, 25));
 
@@ -1183,14 +1190,15 @@ export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTra
       }
     }
 
-    if (combined.length === 0) {
+    const valid = combined.filter((tx) => isValidInsiderName(tx.insiderName));
+    if (valid.length === 0) {
       return [];
     }
 
     // Genberegn sande cluster buys på tværs af de kombinerede feeds
-    applyTrueClusterDeduplication(combined);
+    applyTrueClusterDeduplication(valid);
 
-    const finalSelection = combined.slice(0, Math.max(limit, 20));
+    const finalSelection = valid.slice(0, Math.max(limit, 20));
     await Promise.allSettled(
       finalSelection
         .filter((tx) => tx.isTradableInDK === undefined)
