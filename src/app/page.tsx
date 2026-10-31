@@ -83,8 +83,27 @@ function formatQuoteTime(isoOrStr?: string): string {
   return isoOrStr;
 }
 
+function getRegionBadge(
+  ticker: string,
+  exchange?: string
+): { flag: string; code: string; label: string } {
+  const t = (ticker || '').toUpperCase();
+  const ex = (exchange || '').toUpperCase();
+  if (t.endsWith('.CO') || ex.includes('COPENHAGEN') || ex.includes('CPH')) {
+    return { flag: '🇩🇰', code: 'DK', label: 'Danmark (Nasdaq Copenhagen)' };
+  }
+  if (t.endsWith('.ST') || ex.includes('STOCKHOLM') || ex.includes('STO')) {
+    return { flag: '🇸🇪', code: 'SE', label: 'Sverige (Nasdaq Stockholm)' };
+  }
+  if (t.endsWith('.HE') || ex.includes('HELSINKI') || ex.includes('HEL')) {
+    return { flag: '🇫🇮', code: 'FI', label: 'Finland (Nasdaq Helsinki)' };
+  }
+  return { flag: '🇺🇸', code: 'US', label: 'USA (NYSE / NASDAQ)' };
+}
+
 export default function Dashboard() {
-  const [source, setSource] = useState<'mock' | 'live' | 'nordic' | 'csuite'>('csuite');
+  const [source, setSource] = useState<'unified' | 'csuite' | 'live' | 'nordic' | 'mock'>('unified');
+  const [regionFilter, setRegionFilter] = useState<'all' | 'us' | 'nordic'>('all');
   const [quickFilter, setQuickFilter] = useState<'all' | 'csuite' | 'cluster_discount'>('all');
   const [searchTicker, setSearchTicker] = useState<string>('');
   const [activeTickerQuery, setActiveTickerQuery] = useState<string | null>(null);
@@ -361,7 +380,10 @@ ${verdict.judgeThinking}
   }, []);
 
   const fetchScan = useCallback(
-    async (selectedSource: 'mock' | 'live' | 'nordic' | 'csuite', tickerQuery?: string | null) => {
+    async (
+      selectedSource: 'unified' | 'csuite' | 'live' | 'nordic' | 'mock',
+      tickerQuery?: string | null
+    ) => {
       setLoading(true);
       setError(null);
       try {
@@ -741,11 +763,34 @@ ${verdict.judgeThinking}
         ).toFixed(2)
       : null;
 
+  const isNordicTx = (tx: InsiderTransaction) => {
+    const t = (tx.ticker || '').toUpperCase();
+    const ex = (tx.exchange || '').toUpperCase();
+    return (
+      t.endsWith('.CO') ||
+      t.endsWith('.ST') ||
+      t.endsWith('.HE') ||
+      t.endsWith('.OL') ||
+      ex.includes('COPENHAGEN') ||
+      ex.includes('STOCKHOLM') ||
+      ex.includes('HELSINKI') ||
+      ex.includes('FIRST NORTH') ||
+      ex.includes('CPH') ||
+      ex.includes('STO') ||
+      ex.includes('HEL')
+    );
+  };
+
   const baseFiltered = hideNoise
     ? items.filter((i) => i.result.passedHardFilter)
     : items;
 
   const filteredItems = baseFiltered.filter((i) => {
+    // 1. Regions-filter (Client-side)
+    if (regionFilter === 'us' && isNordicTx(i.transaction)) return false;
+    if (regionFilter === 'nordic' && !isNordicTx(i.transaction)) return false;
+
+    // 2. Hurtig-filter
     if (quickFilter === 'csuite') {
       return i.transaction.isExecutiveOfficer === true;
     }
@@ -761,6 +806,9 @@ ${verdict.judgeThinking}
   const clusterDiscountCount = baseFiltered.filter((i) =>
     Boolean(i.transaction.isClusterBuy || i.transaction.isTradingBelowInsiderPrice)
   ).length;
+
+  const usCount = baseFiltered.filter((i) => !isNordicTx(i.transaction)).length;
+  const nordicCount = baseFiltered.filter((i) => isNordicTx(i.transaction)).length;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-slate-950">
@@ -807,57 +855,31 @@ ${verdict.judgeThinking}
               </div>
             </div>
 
-            {/* Source Switcher (100% Live Børsdata) */}
-            <div className="flex items-center rounded border border-slate-800 bg-slate-900 p-0.5 text-xs font-mono">
-              <button
-                onClick={() => {
-                  setActiveTickerQuery(null);
-                  setSource('csuite');
-                }}
-                className={`px-3 py-1.5 rounded transition-all flex items-center gap-1.5 font-bold ${
-                  source === 'csuite' && !activeTickerQuery
-                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm shadow-amber-950/40'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                }`}
-              >
-                <span>👔 C-Suite & Cluster Hunter (US Live)</span>
-              </button>
-              <button
-                onClick={() => {
-                  setActiveTickerQuery(null);
-                  setSource('live');
-                }}
-                className={`px-3 py-1.5 rounded transition-all flex items-center gap-1.5 font-bold ${
-                  source === 'live' && !activeTickerQuery
-                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm shadow-cyan-950/40'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                }`}
-              >
-                <span>📡 Live SEC EDGAR Feed (US Live)</span>
-              </button>
-              <button
-                onClick={() => {
-                  setActiveTickerQuery(null);
-                  setSource('nordic');
-                }}
-                className={`px-3 py-1.5 rounded transition-all flex items-center gap-1.5 font-bold ${
-                  source === 'nordic' && !activeTickerQuery
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm shadow-emerald-950/40'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                }`}
-              >
-                <span>🇩🇰 Nordic / DK (MAR Art. 19 Live)</span>
-              </button>
+            {/* 🌍 GLOBAL OMNI-SCANNER STATUS BADGE */}
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-cyan-800/80 bg-slate-900 shadow-sm text-xs font-mono">
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+              </span>
+              <span className="font-bold tracking-wider text-cyan-300">
+                🌍 GLOBAL OMNI-SCANNER
+              </span>
+              <span className="text-[10px] text-slate-400 border-l border-slate-800 pl-2 hidden md:inline">
+                US SEC + C-Suite + Nordic MAR 19
+              </span>
             </div>
 
             {/* Scan Refresh Button */}
             <button
-              onClick={() => fetchScan(source, activeTickerQuery)}
+              onClick={() => {
+                setActiveTickerQuery(null);
+                fetchScan('unified', null);
+              }}
               disabled={loading || autoPilotRunning}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-mono text-slate-200 transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-cyan-400' : ''}`} />
-              Scan
+              Scan Nu
             </button>
 
             {/* Auto-Pilot Top 3 Button */}
@@ -1118,6 +1140,50 @@ ${verdict.judgeThinking}
                     {clusterDiscountCount}
                   </span>
                 </button>
+
+                {/* Regions-filter (Client-side) */}
+                <div className="flex flex-wrap items-center gap-1.5 border-l border-slate-800 pl-2.5 ml-1">
+                  <span className="text-slate-500 text-[10px] font-semibold uppercase">REGION:</span>
+                  <button
+                    onClick={() => setRegionFilter('all')}
+                    className={`px-2.5 py-1 rounded transition-colors flex items-center gap-1 text-[11px] ${
+                      regionFilter === 'all'
+                        ? 'bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/40 shadow-sm'
+                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    <span>🌍 Alle Markeder</span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
+                      {baseFiltered.length}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => setRegionFilter('us')}
+                    className={`px-2.5 py-1 rounded transition-colors flex items-center gap-1 text-[11px] ${
+                      regionFilter === 'us'
+                        ? 'bg-blue-500/20 text-blue-300 font-bold border border-blue-500/40 shadow-sm'
+                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    <span>🇺🇸 USA (NYSE/NASDAQ)</span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-blue-300">
+                      {usCount}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => setRegionFilter('nordic')}
+                    className={`px-2.5 py-1 rounded transition-colors flex items-center gap-1 text-[11px] ${
+                      regionFilter === 'nordic'
+                        ? 'bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/40 shadow-sm'
+                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    <span>🇩🇰🇸🇪 Norden (CPH/STO/HEL)</span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-emerald-300">
+                      {nordicCount}
+                    </span>
+                  </button>
+                </div>
               </div>
               <div className="text-[11px] text-slate-400">
                 Viser <span className="text-cyan-300 font-bold">{filteredItems.length}</span> handler
@@ -1180,7 +1246,14 @@ ${verdict.judgeThinking}
                         >
                           {/* Ticker & Company */}
                           <td className="py-3 px-3 font-semibold">
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800/90 border border-slate-700 text-slate-300 font-mono inline-flex items-center gap-1 shrink-0"
+                                title={getRegionBadge(tx.ticker, tx.exchange).label}
+                              >
+                                <span>{getRegionBadge(tx.ticker, tx.exchange).flag}</span>
+                                <span className="font-bold text-[9px]">{getRegionBadge(tx.ticker, tx.exchange).code}</span>
+                              </span>
                               <span className="text-cyan-400 font-bold tracking-wider">{tx.ticker}</span>
                               {tx.recentPriceChange30dPct !== undefined && (
                                 <span
