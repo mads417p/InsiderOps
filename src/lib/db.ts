@@ -103,12 +103,23 @@ export async function getDatabase(): Promise<DatabaseSchema> {
       if (isMockEntity(k, p?.ticker, p?.entryPrice)) {
         changed = true;
       } else {
-        // Sikrer at alle felter fra Trin 22 altid er udfyldt
+        // Sikrer at alle felter fra Trin 22 altid er udfyldt og investedDkk er synkroniseret
+        const entryFx = typeof p.entryFxRateDkk === 'number' && p.entryFxRateDkk > 0
+          ? p.entryFxRateDkk
+          : (p.ticker?.endsWith('.CO') ? 1.0 : 6.70);
+        const shares = p.shares || 1;
+        const entryPrice = p.entryPrice || 1.0;
+        const syncInvested = Math.round(shares * entryPrice * entryFx);
+        if (p.investedDkk !== syncInvested) {
+          changed = true;
+        }
+
         paperPortfolio[k] = {
           ...p,
+          investedDkk: syncInvested,
           insiderBuyPrice: typeof p.insiderBuyPrice === 'number' ? p.insiderBuyPrice : p.entryPrice,
-          entryFxRateDkk: typeof p.entryFxRateDkk === 'number' ? p.entryFxRateDkk : (p.ticker?.endsWith('.CO') ? 1.0 : 6.70),
-          currentFxRateDkk: typeof p.currentFxRateDkk === 'number' ? p.currentFxRateDkk : (p.ticker?.endsWith('.CO') ? 1.0 : 6.70),
+          entryFxRateDkk: entryFx,
+          currentFxRateDkk: typeof p.currentFxRateDkk === 'number' ? p.currentFxRateDkk : entryFx,
           lastQuoteTime: p.lastQuoteTime || new Date().toISOString(),
           quoteSource: p.quoteSource || 'CNBC + Yahoo Real-Time Verified',
           insiderPnlPct: typeof p.insiderPnlPct === 'number' ? p.insiderPnlPct : 0,

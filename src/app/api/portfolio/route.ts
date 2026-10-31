@@ -5,15 +5,8 @@ import { PaperTradePosition, PortfolioSummary } from '@/types/insider';
 
 function computeSummary(positions: PaperTradePosition[]): PortfolioSummary {
   const totalInvestedDkk = positions.reduce((sum, p) => sum + (p.investedDkk || 0), 0);
-  const totalCurrentValueDkk = positions.reduce(
-    (sum, p) =>
-      sum +
-      Math.round(
-        p.shares * p.currentPrice * (p.currentFxRateDkk || p.entryFxRateDkk || 1.0)
-      ),
-    0
-  );
-  const totalPnlDkk = totalCurrentValueDkk - totalInvestedDkk;
+  const totalPnlDkk = positions.reduce((sum, p) => sum + (p.pnlDkk || 0), 0);
+  const totalCurrentValueDkk = totalInvestedDkk + totalPnlDkk;
   const totalPnlPct =
     totalInvestedDkk > 0 ? Number(((totalPnlDkk / totalInvestedDkk) * 100).toFixed(2)) : 0;
   const profitable = positions.filter((p) => (p.pnlDkk || 0) > 0).length;
@@ -62,6 +55,9 @@ export async function GET(request: Request) {
               if (typeof pos.insiderBuyPrice !== 'number' || pos.insiderBuyPrice <= 0) {
                 pos.insiderBuyPrice = pos.entryPrice;
               }
+
+              // Synkroniser investedDkk til den eksakte formel (shares * entryPrice * entryFxRateDkk)
+              pos.investedDkk = Math.round(pos.shares * pos.entryPrice * pos.entryFxRateDkk);
 
               pos.lastQuoteTime = liveQuote.lastQuoteTime;
               pos.quoteSource = liveQuote.quoteSource;
