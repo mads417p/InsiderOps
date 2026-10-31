@@ -5,6 +5,7 @@ import {
   CouncilVerdictType,
   InsiderTransaction,
 } from '@/types/insider';
+import { formatCompactUsd } from '@/lib/fundamentals';
 
 let cachedSpecialistModel: string | null = null;
 let cachedJudgeOpusModel: string | null = null;
@@ -230,6 +231,36 @@ function generateSimulatedCouncil(
 [Trin 3: Afgørelse]
 - Asymmetry Score: 15/100.
 - Dom: PR STUNT / STØJ (IGNORER).`;
+  } else if (tx.fundamentals?.fundamentalHealthBadge === 'DILUTION_RISK') {
+    asymmetryScore = 34;
+    verdict = 'PR STUNT / STØJ (IGNORER)';
+    headline = `[SIMULERET RÅD] Akut udvandings- & emissionsrisiko i ${tx.ticker} (Runway: ~${tx.fundamentals.estimatedRunwayMonths} mdr.)`;
+    profilerReport = `Selvom ${tx.insiderName} (${tx.insiderTitle}) køber aktier for $${Math.round(
+      tx.totalValueUsd
+    ).toLocaleString()}, trues selskabet af akut pengemangel. Kassen rækker kun ~${tx.fundamentals.estimatedRunwayMonths} måneder ved det nuværende kvartalsvise cash burn på ${formatCompactUsd(
+      tx.fundamentals.quarterlyCashBurnUsd
+    )}.`;
+    catalystReport = `Ingen kortsigtet positiv katalysator kan opveje det overhængende likviditetsdræn. Ledelsen tvinges inden for få kvartaler til en stærkt udvandende fortegningsemission.`;
+    skepticReport = `ALARM: SEC XBRL-balancen afslører en kritisk kort runway under 9 måneder (~${tx.fundamentals.estimatedRunwayMonths} mdr.). Insiderkøbet kan være et defensivt forsøg på at holde kursen oppe før en udvandende kapitaludvidelse. Bør undgås!`;
+    synthesis = `The Council afviser transaktionen (score 34/100). Trods insiderens køb er den fundamentale balance dybt kompromitteret med under 9 måneders cash runway. Udvandingsrisikoen er overhængende.`;
+    judgeThinking = `[Dommer-vurdering: Likviditetskrise trumfer insiderkøb]
+- Kontanter: ${formatCompactUsd(tx.fundamentals.cashAndEquivalentsUsd)}, Kvartalsvis burn: -${formatCompactUsd(tx.fundamentals.quarterlyCashBurnUsd)}.
+- Estimeret Runway: ${tx.fundamentals.estimatedRunwayMonths} måneder.
+- Dom: DILUTION_RISK. Fondens kapital beskyttes mod udvanding.`;
+  } else if (tx.fundamentals?.fundamentalHealthBadge === 'SHORT_SQUEEZE_SETUP') {
+    asymmetryScore = 95;
+    verdict = 'STRONG ASYMMETRY (KØB)';
+    headline = `[SIMULERET RÅD] Eksplosivt Short-Squeeze Setup i ${tx.ticker}: ${tx.insiderTitle} køber i aktie med ${tx.fundamentals.shortPercentOfFloat}% Short Float`;
+    profilerReport = `${tx.insiderName} (${tx.insiderTitle}) forøger sin beholdning med +${tx.holdingsIncreasePct}% for $${Math.round(
+      tx.totalValueUsd
+    ).toLocaleString()} USD. En overbevisende allokering af egne beskattede midler.`;
+    catalystReport = `KLASSISK SHORT SQUEEZE SETUP: Med ${tx.fundamentals.shortPercentOfFloat}% af floaten shortet og ${tx.fundamentals.daysToCover ?? 3} dage til at dække shorts, fungerer dette insiderkøb som en tændstik til et potentielt voldsomt squeeze! Selskabets balance er solid (${tx.fundamentals.isCashFlowPositive ? 'Cash-Flow Positiv' : `Runway: >${tx.fundamentals.estimatedRunwayMonths} mdr.`}), så der er nul risiko for udvanding.`;
+    skepticReport = `Short-sælgere har taget fejl af selskabets likviditet. Med en solid kasse og aggressivt insiderkøb er bjørne-casen punkteret. Det fundamentale fundament er stærkt.`;
+    synthesis = `The Council udsteder enstemmigt en STRONG ASYMMETRY (KØB) dom med score 95/100. Kombinationen af høj short-interesse, stærk balance uden udvandingsrisiko og insiderkøb udgør et ideelt asymmetrisk setup.`;
+    judgeThinking = `[Dommer-vurdering: Short Squeeze & Fundamental Styrke]
+- Short Float: ${tx.fundamentals.shortPercentOfFloat}%, Days to Cover: ${tx.fundamentals.daysToCover}.
+- Kassebeholdning: ${formatCompactUsd(tx.fundamentals.cashAndEquivalentsUsd)}, ingen udvandingsrisiko.
+- Dom: STRONG ASYMMETRY (KØB) med score 95/100.`;
   } else if (isCosmetic) {
     asymmetryScore = 24;
     verdict = 'PR STUNT / STØJ (IGNORER)';
@@ -403,7 +434,41 @@ ${
 }`
     : ''
 }
-BØRS & HANDELBARHED (DK): ${tx.exchange || 'N/A'} - ${tx.isTradableInDK ? 'Verificeret handelbar på Nordnet / Saxo' : 'Advarsel: Begrænset / Ikke handelbar'} (${tx.tradabilityReason || ''})
+${
+  tx.fundamentals
+    ? `FUNDAMENTALE NØGLETAL & SEC XBRL BALANCE:
+• Sundhedsbadge: [${tx.fundamentals.fundamentalHealthBadge}]
+• Opsummering: ${tx.fundamentals.fundamentalSummary}
+• Kontanter & Kortfristede Værdipapirer (SEC XBRL): ${formatCompactUsd(tx.fundamentals.cashAndEquivalentsUsd)} USD
+• Samlet Gæld (Kort- & Langfristet): ${formatCompactUsd(tx.fundamentals.totalDebtUsd)} USD
+• Netto Kassebeholdning (Net Cash): ${tx.fundamentals.netCashUsd !== undefined ? `${tx.fundamentals.netCashUsd >= 0 ? '+' : ''}${formatCompactUsd(tx.fundamentals.netCashUsd)} USD` : 'Ukendt'}
+• Drifts Cash Flow & Kvartalsvis Burn: ${
+        tx.fundamentals.isCashFlowPositive
+          ? 'POSITIV DRIFT (Selskabet er Cash-Flow Positivt)'
+          : tx.fundamentals.quarterlyCashBurnUsd
+          ? `NEGATIV DRIFT (-${formatCompactUsd(tx.fundamentals.quarterlyCashBurnUsd)}/kvartal i burn)`
+          : 'Ukendt'
+      }
+• Estimeret Kontant Runway: ${
+        tx.fundamentals.isCashFlowPositive
+          ? 'Uendelig / Selvfinansierende (Cash-Flow Positiv)'
+          : tx.fundamentals.estimatedRunwayMonths !== null && tx.fundamentals.estimatedRunwayMonths !== undefined
+          ? `${tx.fundamentals.estimatedRunwayMonths} måneder`
+          : 'Ukendt'
+      }
+• Short Interest (% af Free Float): ${tx.fundamentals.shortPercentOfFloat !== undefined ? `${tx.fundamentals.shortPercentOfFloat}%` : 'N/A'}${
+        (tx.fundamentals.shortPercentOfFloat ?? 0) >= 10 ? ' (HØJ SHORT-INTERESSE - SQUEEZE KANDIDAT)' : ''
+      }
+• Dage til at dække shorts (Days to Cover / Short Ratio): ${tx.fundamentals.daysToCover ?? 'N/A'} dage
+• Regnskabskalender (Earnings): ${tx.fundamentals.nextEarningsDate || 'N/A'}${
+        tx.fundamentals.daysUntilEarnings !== undefined
+          ? ` (${tx.fundamentals.daysUntilEarnings === 0 ? 'I dag!' : tx.fundamentals.daysUntilEarnings > 0 ? `om ${tx.fundamentals.daysUntilEarnings} dage` : `${Math.abs(tx.fundamentals.daysUntilEarnings)} dage siden`})`
+          : ''
+      }
+• Værdiansættelse: P/E: ${tx.fundamentals.peRatio ?? 'N/A (Negativ indtjening)'} | P/B: ${tx.fundamentals.priceToBook ?? 'N/A'}
+`
+    : ''
+}BØRS & HANDELBARHED (DK): ${tx.exchange || 'N/A'} - ${tx.isTradableInDK ? 'Verificeret handelbar på Nordnet / Saxo' : 'Advarsel: Begrænset / Ikke handelbar'} (${tx.tradabilityReason || ''})
 DAGLIG LIKVIDITET: ${tx.avgDailyDollarVolume ? `$${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')} USD/dag` : 'Ukendt'}
 SEC FILING URL: ${tx.secFilingUrl}
 KONTEKST / NOTER: ${tx.contextNotes || 'Ingen yderligere noter'}
@@ -420,6 +485,8 @@ SKRIV PÅ DANSK. Maksimalt 140 ord. Skarp, direkte tone uden høflighedsfraser.`
   const catalystSystem = `Du er "The Catalyst & Asymmetry Hunter" i investeringsrådet The Council.
 Din rolle er at analysere det grå felt mellem lovlig insider-akkumulering og endnu ikke-offentliggjort positiv information.
 Hvorfor køber de NETOP NU? Er det overreaktion på et kursfald, accelererende ordrebog forud for regnskab, opkøbsrygter eller koordineret cluster-timing?
+Vurder aktivt selskabets Short Interest (shortPercentOfFloat & daysToCover): Hvis 10-15%+ af floaten er shortet, og en insider køber massivt i et selskab med sund kasse/runway, er der et potentielt eksplosivt Short-Squeeze setup! Short-sælgere kan blive fanget og tvunget til panik-dækning.
+Tjek regnskabskalenderen (nextEarningsDate & daysUntilEarnings): Køber insideren lige efter et regnskabs-dip (hvor risikoen er de-risked og usikkerhed ryddet af vejen), eller køber de med timing lige op til en rapport?
 SKRIV PÅ DANSK. Maksimalt 140 ord. Skarp, analytisk tone.`;
 
   // Specialist 3: The Forensic Skeptic (Sonnet)
@@ -428,6 +495,9 @@ Dit eneste mål er at DRÆBE købs-tesen og beskytte fondens kapital. Find alle 
 Tjek insiderens historiske track record: Hvis status er 'EARLY_OR_BAGHOLDER', eller tidligere køb viser negative afkast (-20% til -50%), skal du straks advare mod, at ledelsen lider af confirmation bias, har elendig timing og gentagne gange griber faldende knive uden kontakt med markedsrealiteterne!
 Tjek altid om handlen er gennemført under en Rule 10b5-1 forudbestemt automatisk handelsplan eller ifølge SEC-fodnoter er skemalagt lang tid forvejen. Hvis det er en 10b5-1 plan, skal du NÅDESLØST afvise den som 0% overbevisning og automatisk maskin-eksekvering uden aktuel informationsasymmetri!
 Tjek altid SEC Form 4 fodnoter og prisforskellen mellem insiderens købskurs og aktuel kurs. Hvis en 10% ejer køber til en kurs markant OVER markedsprisen (f.eks. +30% over børskurs), eller aktien er kollapset >30% lige efter købet, skal du straks advare om, at det kan være en nødlidende rekapitalisering, gældskonvertering eller 'falling knife' fremfor et normalt åbent markedskøb!
+Du må IKKE gætte løst på emissionsrisiko! Brug de faktiske SEC XBRL-balancetal (cashAndEquivalentsUsd, totalDebtUsd, quarterlyCashBurnUsd og estimatedRunwayMonths):
+- Hvis selskabet brænder penge og har under 9 måneders runway (fundamentalHealthBadge = 'DILUTION_RISK'), skal du HÅRDT ALARMERE om akut overhængende risiko for aktieudvanding, giftige konvertible lån eller tvungen fortegningsemission!
+- Hvis selskabet derimod er Cash-Flow Positivt eller har en 'FORTRESS_BALANCE' med >24 måneders kontant runway og nul/lav gæld, SKAL du anerkende dette og utvetydigt FRIKENDE selskabet for udvandingsrisiko!
 Undersøg altid aktiens likviditet og børs: Hvis aktien handler på OTC, eller den daglige omsætning er under $2.000.000 USD/dag, skal du advare om spread-slippage og likviditetsrisiko for en institutionel/dansk investor på Nordnet/Saxo.
 SKRIV PÅ DANSK. Maksimalt 140 ord. Nådesløs og kritisk.`;
 
@@ -464,6 +534,10 @@ Regler for dommen:
 - Hvis handlen er udført under en Rule 10b5-1 automatisk forudbestemt handelsplan: Sæt altid Asymmetry Score under 25 og dommen til "PR STUNT / STØJ (IGNORER)", da der er 0% aktuel informationsasymmetri eller skønsmæssigt engagement fra insideren.
 - Historisk Track Record: Hvis insideren/ledelsen er en verificeret 'SMART_MONEY_SNIPER' (win-rate >= 65% og positiv historisk alpha), forstærk overbevisningen og løft Asymmetry Scoren (typisk 85-98), da insideren har bevist timing-disciplin. Hvis insideren derimod er en 'EARLY_OR_BAGHOLDER' (køber gentagne gange i minus), skal Asymmetry Scoren reduceres markant, og du skal advare mod kronisk dårlig timing og faldende knive. Hvis status er 'FIRST_TIME_OR_RARE' (første køb i >3 år), understreg det sjældne og potentielt stærke asymmetriske regimeskift.
 - Hvis CFO/General Counsel/CEO køber markant (+15% beholdning) og/eller indgår i et verificeret cluster-køb med andre uafhængige med-købere: Typisk score 80-98 og STRONG ASYMMETRY (KØB).
+- Fundamental Balance Sheet & Cash Runway:
+  * Hvis fundamentalHealthBadge er 'DILUTION_RISK' (selskabets kontante runway er under 9 måneder og selskabet brænder penge), SKAL Asymmetry Scoren reduceres til under 50 og dommen sænkes til PR STUNT / STØJ eller MODERATE SIGNAL, da forestående aktieudvanding eller kapitalrejsning truer aktionærerne uanset insiderens optimisme.
+  * Hvis fundamentalHealthBadge er 'SHORT_SQUEEZE_SETUP' (short float >= 12% kombineret med solid kassebeholdning/runway), forstærkes det asymmetriske potentiale mod toppen (typisk score 88-98 og STRONG ASYMMETRY), da insiderkøb i en tungt shortet aktie kan antænde en voldsom short squeeze.
+  * Hvis selskabet har en 'FORTRESS_BALANCE' (rigelig net cash, >24 mdr. runway eller positiv cash-flow), frikend selskabet for konkurs/emissionsfrygt og beløn signalet med ekstra overbevisning.
 - Hvis CEO/insider køber for småpenge i forhold til formue (<2% stigning i beholdning): Typisk score <35 og PR STUNT / STØJ.
 - Vurder altid om der er med-købere i clusteret. Hvis både en CFO og et bestyrelsesmedlem køber for egne midler i samme tidsvindue, validerer de hinandens conviction.
 - Returner KUN ren JSON i dit afsluttende svar.`;

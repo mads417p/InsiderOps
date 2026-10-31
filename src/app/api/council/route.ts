@@ -3,6 +3,7 @@ import { conveneCouncil } from '@/lib/claude-council';
 import { fetchSecForm4Footnotes } from '@/lib/sec-scanner';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { fetchInsiderTrackRecord } from '@/lib/track-record';
+import { fetchCompanyFundamentals } from '@/lib/fundamentals';
 import { getSavedVerdicts, saveVerdict, deleteVerdict } from '@/lib/db';
 import { InsiderTransaction } from '@/types/insider';
 
@@ -67,35 +68,66 @@ export async function POST(request: Request) {
       await enrichTransactionWithMarketData(tx);
     }
 
-    // Hvis transaktionen stammer fra en SEC EDGAR filing og vi ikke allerede har udtrukket fodnoter,
-    // hent det rå Form 4 XML og udtræk de juridiske fodnoter ("det med småt")
+    // Parallel hentning af Form 4 fodnoter, insider track record og fundamentale nøgletal / SEC balance
+    const enrichmentTasks: Promise<unknown>[] = [];
+
+    // 1. SEC EDGAR Form 4 juridiske fodnoter
     if (
       tx.secFilingUrl &&
       tx.secFilingUrl.includes('sec.gov') &&
       !tx.contextNotes?.includes('SEC Form 4 Fodnoter')
     ) {
-      const footnotes = await fetchSecForm4Footnotes(tx.secFilingUrl);
-      if (footnotes.length > 0) {
-        tx.footnotesSummary = footnotes.join('\n\n');
-        const footnoteSection = `SEC Form 4 Fodnoter (Det med småt):\n${tx.footnotesSummary}`;
-        tx.contextNotes = tx.contextNotes
-          ? `${tx.contextNotes}\n\n${footnoteSection}`
-          : footnoteSection;
+      enrichmentTasks.push(
+        (async () => {
+          try {
+            const footnotes = await fetchSecForm4Footnotes(tx.secFilingUrl);
+            if (footnotes.length > 0) {
+              tx.footnotesSummary = footnotes.join('\n\n');
+              const footnoteSection = `SEC Form 4 Fodnoter (Det med småt):\n${tx.footnotesSummary}`;
+              tx.contextNotes = tx.contextNotes
+                ? `${tx.contextNotes}\n\n${footnoteSection}`
+                : footnoteSection;
 
-        // Tjek om fodnoterne nævner Rule 10b5-1 automatisk handelsplan
-        if (/10b5-1|rule 10b5-1|pre-arranged|automatic purchase|trading plan/i.test(tx.footnotesSummary)) {
-          tx.is10b51Plan = true;
-        }
-      }
+              // Tjek om fodnoterne nævner Rule 10b5-1 automatisk handelsplan
+              if (/10b5-1|rule 10b5-1|pre-arranged|automatic purchase|trading plan/i.test(tx.footnotesSummary)) {
+                tx.is10b51Plan = true;
+              }
+            }
+          } catch (fnErr) {
+            console.warn('Kunne ikke hente SEC fodnoter:', fnErr);
+          }
+        })()
+      );
     }
 
-    // Hent og beregn historisk track record for insideren / ledelsen hvis ikke allerede sat
+    // 2. Historisk track record for insideren / ledelsen
     if (!tx.trackRecord) {
-      try {
-        tx.trackRecord = await fetchInsiderTrackRecord(tx);
-      } catch (trErr) {
-        console.warn('Kunne ikke hente insider track record:', trErr);
-      }
+      enrichmentTasks.push(
+        (async () => {
+          try {
+            tx.trackRecord = await fetchInsiderTrackRecord(tx);
+          } catch (trErr) {
+            console.warn('Kunne ikke hente insider track record:', trErr);
+          }
+        })()
+      );
+    }
+
+    // 3. Fundamentale nøgletal, SEC XBRL balance sheet, cash runway & short interest
+    if (!tx.fundamentals) {
+      enrichmentTasks.push(
+        (async () => {
+          try {
+            tx.fundamentals = await fetchCompanyFundamentals(tx);
+          } catch (fundErr) {
+            console.warn('Kunne ikke hente company fundamentals:', fundErr);
+          }
+        })()
+      );
+    }
+
+    if (enrichmentTasks.length > 0) {
+      await Promise.all(enrichmentTasks);
     }
 
     const verdict = await conveneCouncil(tx, judgeTier);

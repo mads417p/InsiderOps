@@ -36,6 +36,31 @@ export interface InsiderTransaction {
   dailyVolatilityPct?: number; // (atr14d / currentMarketPrice) * 100 - normal daglig udsving i %
   supportLow30d?: number; // Laveste lukkekurs de seneste 30 dage
   resistanceHigh90d?: number; // Højeste kurs de seneste 90 dage
+  fundamentals?: CompanyFundamentals; // Fundamental balance sheet, cash runway, short interest & earnings data
+}
+
+export type FundamentalHealthBadge =
+  | 'FORTRESS_BALANCE'
+  | 'SOLID_RUNWAY'
+  | 'SHORT_SQUEEZE_SETUP'
+  | 'DILUTION_RISK'
+  | 'NEUTRAL';
+
+export interface CompanyFundamentals {
+  cashAndEquivalentsUsd?: number; // Kontanter + kortfristede værdipapirer i USD
+  totalDebtUsd?: number; // Samlet kort- og langfristet gæld i USD
+  netCashUsd?: number; // cashAndEquivalentsUsd - totalDebtUsd
+  quarterlyCashBurnUsd?: number; // Kvartalsvist drifttab / negativt Operating Cash Flow i USD, hvis selskabet brænder penge
+  estimatedRunwayMonths?: number | null; // Beregnet Cash Runway i måneder hvis cash burn > 0, ellers null hvis selskabet er cash-flow positivt!
+  isCashFlowPositive?: boolean;
+  shortPercentOfFloat?: number; // Procent af free float der er shortet, f.eks. 14.5
+  daysToCover?: number; // Short ratio / dage til at dække shorts
+  nextEarningsDate?: string; // ISO dato for næste kvartalsregnskab
+  daysUntilEarnings?: number; // Antal dage til/fra regnskab
+  peRatio?: number | null;
+  priceToBook?: number | null;
+  fundamentalHealthBadge: FundamentalHealthBadge;
+  fundamentalSummary: string; // Kort, præcis 1-linjes dansk opsummering
 }
 
 export interface TradeTranche {

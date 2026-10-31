@@ -16,6 +16,8 @@ import {
   EyeOff,
   FileText,
   Filter,
+  Flame,
+  Landmark,
   RefreshCw,
   Scale,
   Search,
@@ -38,6 +40,7 @@ import {
   PortfolioSummary,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
+import { formatCompactUsd } from '@/lib/fundamentals';
 
 interface ScanItem {
   transaction: InsiderTransaction;
@@ -215,7 +218,43 @@ ${
 
 ---
 
-## 4. The Council: CIO Dom & Asymmetry Score
+## 4. Fundamental Balance Sheet, Cash Runway & Short Guard
+${
+  tx.fundamentals
+    ? `- **Status & Badge:** [${tx.fundamentals.fundamentalHealthBadge}] ${tx.fundamentals.fundamentalSummary}
+- **Kontanter & Værdipapirer (SEC XBRL):** ${formatCompactUsd(tx.fundamentals.cashAndEquivalentsUsd)} USD
+- **Samlet Gæld (Kort- & Langfristet):** ${formatCompactUsd(tx.fundamentals.totalDebtUsd)} USD
+- **Netto Kassebeholdning (Net Cash):** ${tx.fundamentals.netCashUsd !== undefined ? `${tx.fundamentals.netCashUsd >= 0 ? '+' : ''}${formatCompactUsd(tx.fundamentals.netCashUsd)} USD` : 'Ukendt'}
+- **Drift Cash Flow & Burn Rate:** ${
+        tx.fundamentals.isCashFlowPositive
+          ? 'Positiv Drift (Cash-Flow Positiv)'
+          : tx.fundamentals.quarterlyCashBurnUsd
+          ? `-${formatCompactUsd(tx.fundamentals.quarterlyCashBurnUsd)}/kvartal i cash burn`
+          : 'Ukendt'
+      }
+- **Estimeret Kontant Runway:** ${
+        tx.fundamentals.isCashFlowPositive
+          ? 'Uendelig / Selvfinansierende (Cash-Flow Positiv)'
+          : tx.fundamentals.estimatedRunwayMonths !== null && tx.fundamentals.estimatedRunwayMonths !== undefined
+          ? `${tx.fundamentals.estimatedRunwayMonths} måneder`
+          : 'Ukendt'
+      }
+- **Short Interest (% af Free Float):** ${tx.fundamentals.shortPercentOfFloat !== undefined ? `${tx.fundamentals.shortPercentOfFloat.toFixed(1)}%` : 'N/A'}${
+        (tx.fundamentals.shortPercentOfFloat ?? 0) >= 10 ? ' 🔥 (Høj short-interesse - Squeeze potentiale)' : ''
+      }
+- **Short Ratio (Days to Cover):** ${tx.fundamentals.daysToCover !== undefined ? `${tx.fundamentals.daysToCover} dage` : 'N/A'}
+- **Næste Kvartalsregnskab:** ${tx.fundamentals.nextEarningsDate || 'N/A'}${
+        tx.fundamentals.daysUntilEarnings !== undefined
+          ? ` (${tx.fundamentals.daysUntilEarnings === 0 ? 'I dag' : tx.fundamentals.daysUntilEarnings > 0 ? `om ${tx.fundamentals.daysUntilEarnings} dage` : `${Math.abs(tx.fundamentals.daysUntilEarnings)} dage siden`})`
+          : ''
+      }
+- **Multipler:** P/E: ${tx.fundamentals.peRatio ?? 'N/A'} | P/B: ${tx.fundamentals.priceToBook ?? 'N/A'}`
+    : '- Ingen regnskabsbalance udtrukket for denne filing.'
+}
+
+---
+
+## 5. The Council: CIO Dom & Asymmetry Score
 **Afgørelse:** ${verdict.verdict}  
 **Asymmetry Score:** ${verdict.asymmetryScore}/100  
 **Overskrift:** ${verdict.headline}  
@@ -225,7 +264,7 @@ ${verdict.synthesis}
 
 ---
 
-## 5. Kvantitativ Eksekverings- & Risikoplan (Frie Midler)
+## 6. Kvantitativ Eksekverings- & Risikoplan (Frie Midler)
 ${(() => {
   const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk);
   if (plan.status === 'DO_NOT_TRADE') {
@@ -1432,6 +1471,53 @@ ${verdict.judgeThinking}
                                   </span>
                                 );
                               })()}
+                              {(() => {
+                                const fund =
+                                  tx.fundamentals ||
+                                  verdictHistory[tx.id]?.transaction.fundamentals;
+                                if (!fund) return null;
+                                if (fund.fundamentalHealthBadge === 'DILUTION_RISK') {
+                                  return (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.2 rounded bg-rose-950/90 border border-rose-600 text-rose-300 font-bold flex items-center gap-0.5"
+                                      title={fund.fundamentalSummary}
+                                    >
+                                      ⚠️ Runway &lt;9m
+                                    </span>
+                                  );
+                                }
+                                if (fund.fundamentalHealthBadge === 'SHORT_SQUEEZE_SETUP') {
+                                  return (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950/90 border border-amber-500 text-amber-300 font-bold flex items-center gap-0.5"
+                                      title={fund.fundamentalSummary}
+                                    >
+                                      🔥 Squeeze ({fund.shortPercentOfFloat?.toFixed(1)}% Short)
+                                    </span>
+                                  );
+                                }
+                                if (fund.fundamentalHealthBadge === 'FORTRESS_BALANCE') {
+                                  return (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950/90 border border-emerald-500 text-emerald-300 font-bold flex items-center gap-0.5"
+                                      title={fund.fundamentalSummary}
+                                    >
+                                      🏰 Fortress Cash
+                                    </span>
+                                  );
+                                }
+                                if (fund.fundamentalHealthBadge === 'SOLID_RUNWAY') {
+                                  return (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950/80 border border-cyan-600 text-cyan-300 font-medium flex items-center gap-0.5"
+                                      title={fund.fundamentalSummary}
+                                    >
+                                      📈 Solid Runway
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </div>
                           </td>
 
@@ -2450,6 +2536,194 @@ ${verdict.judgeThinking}
                   </span>
                 </div>
               </div>
+
+              {/* Dedicated Fundamental Balance Sheet, Cash Runway & Short Guard Card */}
+              {(() => {
+                const fundamentals =
+                  selectedTx.fundamentals ||
+                  verdictHistory[selectedTx.id]?.transaction.fundamentals;
+                if (!fundamentals) return null;
+
+                return (
+                  <div className="p-4 rounded bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <Landmark className="w-4 h-4 text-cyan-400" />
+                        <span className="font-mono text-xs font-bold text-slate-200 uppercase tracking-wider">
+                          FUNDAMENTAL BALANCE, CASH RUNWAY & SHORT-SQUEEZE GUARD
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`px-2.5 py-1 rounded text-xs font-mono font-bold border ${
+                            fundamentals.fundamentalHealthBadge === 'FORTRESS_BALANCE'
+                              ? 'bg-emerald-950/90 border-emerald-500 text-emerald-300 shadow-md shadow-emerald-950'
+                              : fundamentals.fundamentalHealthBadge === 'SHORT_SQUEEZE_SETUP'
+                              ? 'bg-amber-950/90 border-amber-500 text-amber-300 shadow-md shadow-amber-950'
+                              : fundamentals.fundamentalHealthBadge === 'DILUTION_RISK'
+                              ? 'bg-rose-950/90 border-rose-500 text-rose-300 shadow-md shadow-rose-950'
+                              : fundamentals.fundamentalHealthBadge === 'SOLID_RUNWAY'
+                              ? 'bg-cyan-950/80 border-cyan-600 text-cyan-300'
+                              : 'bg-slate-800/80 border-slate-700 text-slate-300'
+                          }`}
+                        >
+                          {fundamentals.fundamentalHealthBadge === 'FORTRESS_BALANCE' && '🏰 Fortress Cash'}
+                          {fundamentals.fundamentalHealthBadge === 'SHORT_SQUEEZE_SETUP' && '🔥 Short Squeeze Setup'}
+                          {fundamentals.fundamentalHealthBadge === 'DILUTION_RISK' && '⚠️ Dilution Risk (<9m)'}
+                          {fundamentals.fundamentalHealthBadge === 'SOLID_RUNWAY' && '📈 Solid Runway'}
+                          {fundamentals.fundamentalHealthBadge === 'NEUTRAL' && '⚖️ Neutral Balance'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Summary row */}
+                    <div className="text-xs font-mono text-slate-300 bg-slate-950/70 p-2.5 rounded border border-slate-800/70">
+                      {fundamentals.fundamentalSummary}
+                    </div>
+
+                    {/* 4 Key Pillars Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 font-mono">
+                      {/* 1. Kontanter vs Gæld */}
+                      <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80">
+                        <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between">
+                          <span>Kontanter vs. Gæld</span>
+                          <span className="text-[9px] text-cyan-400 font-bold">SEC XBRL</span>
+                        </div>
+                        <div className="mt-1 space-y-0.5 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Cash:</span>
+                            <span className="text-emerald-400 font-bold">
+                              {formatCompactUsd(fundamentals.cashAndEquivalentsUsd)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Gæld:</span>
+                            <span className="text-rose-400 font-bold">
+                              {formatCompactUsd(fundamentals.totalDebtUsd)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between border-t border-slate-800/60 pt-0.5 font-bold">
+                            <span className="text-slate-400">Net Cash:</span>
+                            <span className={(fundamentals.netCashUsd ?? 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'}>
+                              {(fundamentals.netCashUsd ?? 0) >= 0 ? '+' : ''}
+                              {formatCompactUsd(fundamentals.netCashUsd)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 2. Cash Flow & Runway */}
+                      <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80">
+                        <div className="text-[10px] text-slate-400 uppercase">Cash Flow & Runway</div>
+                        <div className="mt-1 space-y-0.5 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Drift:</span>
+                            <span className={fundamentals.isCashFlowPositive ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+                              {fundamentals.isCashFlowPositive
+                                ? 'Cash-Flow Positiv'
+                                : fundamentals.quarterlyCashBurnUsd
+                                ? `-${formatCompactUsd(fundamentals.quarterlyCashBurnUsd)}/kvt`
+                                : 'Ukendt'}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Runway:</span>
+                            <span
+                              className={`font-bold ${
+                                fundamentals.isCashFlowPositive
+                                  ? 'text-emerald-400'
+                                  : (fundamentals.estimatedRunwayMonths ?? 99) < 9
+                                  ? 'text-rose-400 animate-pulse'
+                                  : 'text-cyan-400'
+                              }`}
+                            >
+                              {fundamentals.isCashFlowPositive
+                                ? 'Uendelig (Overskud)'
+                                : fundamentals.estimatedRunwayMonths !== null && fundamentals.estimatedRunwayMonths !== undefined
+                                ? `${fundamentals.estimatedRunwayMonths} mdr.`
+                                : 'N/A'}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 pt-0.5 border-t border-slate-800/60 truncate">
+                            {(fundamentals.estimatedRunwayMonths ?? 99) < 9 && !fundamentals.isCashFlowPositive
+                              ? '⚠️ Akut emissionsrisiko'
+                              : '🛡️ Ingen udvandingsfare'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 3. Short Interest & Squeeze */}
+                      <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80">
+                        <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between">
+                          <span>Short Interest</span>
+                          {(fundamentals.shortPercentOfFloat ?? 0) >= 10 && (
+                            <span className="text-[9px] text-amber-400 font-bold flex items-center gap-0.5">
+                              <Flame className="w-2.5 h-2.5" /> High Short
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 space-y-0.5 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Short Float:</span>
+                            <span
+                              className={`font-bold ${
+                                (fundamentals.shortPercentOfFloat ?? 0) >= 10 ? 'text-amber-400' : 'text-slate-200'
+                              }`}
+                            >
+                              {fundamentals.shortPercentOfFloat !== undefined
+                                ? `${fundamentals.shortPercentOfFloat.toFixed(1)}%`
+                                : 'N/A'}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Days to Cover:</span>
+                            <span className="text-slate-200 font-bold">
+                              {fundamentals.daysToCover !== undefined ? `${fundamentals.daysToCover}d` : 'N/A'}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 pt-0.5 border-t border-slate-800/60 truncate">
+                            {(fundamentals.shortPercentOfFloat ?? 0) >= 12
+                              ? '🔥 Short Squeeze kandidat'
+                              : 'Normal short-andel'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 4. Regnskab & Multipler */}
+                      <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80">
+                        <div className="text-[10px] text-slate-400 uppercase">Regnskab & Multipler</div>
+                        <div className="mt-1 space-y-0.5 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Earnings:</span>
+                            <span className="text-slate-200 font-bold">
+                              {fundamentals.nextEarningsDate
+                                ? `${fundamentals.nextEarningsDate.substring(5)} (${fundamentals.daysUntilEarnings !== undefined ? (fundamentals.daysUntilEarnings >= 0 ? `+${fundamentals.daysUntilEarnings}d` : `${fundamentals.daysUntilEarnings}d`) : ''})`
+                                : 'N/A'}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">P/E:</span>
+                            <span className="text-slate-200 font-bold">
+                              {fundamentals.peRatio !== null && fundamentals.peRatio !== undefined
+                                ? fundamentals.peRatio.toFixed(1)
+                                : 'Negativ'}
+                            </span>
+                          </div>
+                          <div className="flex justify-between border-t border-slate-800/60 pt-0.5">
+                            <span className="text-slate-400">P/B:</span>
+                            <span className="text-slate-200 font-bold">
+                              {fundamentals.priceToBook !== null && fundamentals.priceToBook !== undefined
+                                ? fundamentals.priceToBook.toFixed(2)
+                                : 'N/A'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Dedicated Insider Track Record & Sniper Engine Card */}
               {selectedTx.trackRecord && (
