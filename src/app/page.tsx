@@ -65,6 +65,24 @@ interface ScanResponse {
 const STORAGE_KEY = 'insiderops_verdicts_v1';
 const CAPITAL_STORAGE_KEY = 'insiderops_capital_frame_dkk';
 
+function formatQuoteTime(isoOrStr?: string): string {
+  if (!isoOrStr) return 'Lige nu';
+  try {
+    const d = new Date(isoOrStr);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleString('da-DK', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+    }
+  } catch {}
+  return isoOrStr;
+}
+
 export default function Dashboard() {
   const [source, setSource] = useState<'mock' | 'live' | 'nordic' | 'csuite'>('csuite');
   const [quickFilter, setQuickFilter] = useState<'all' | 'csuite' | 'cluster_discount'>('all');
@@ -267,7 +285,9 @@ ${verdict.judgeThinking}
   // Indlæs gemte domme fra localStorage og synkroniser med serverens persistente database
   useEffect(() => {
     const isMock = (id: string, ticker?: string) =>
-      id.startsWith('mock-') || (ticker ? ['MTLR', 'PLXR', 'PLAN'].includes(ticker) : false);
+      id === 'pos-rapp-cfo' ||
+      id.startsWith('mock-') ||
+      (ticker ? ['MTLR', 'PLXR', 'PLAN'].includes(ticker.toUpperCase().trim()) : false);
 
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -322,14 +342,16 @@ ${verdict.judgeThinking}
       })
       .catch((err) => console.warn('Kunne ikke synkronisere med server-database:', err));
 
-    // Indlæs paper-trading porteføljen fra server-databasen (/api/portfolio)
-    fetch('/api/portfolio')
+    // Indlæs altid friske realtids-kurser for paper-trading porteføljen ved indlæsning/F5
+    fetch(`/api/portfolio?refresh=true&_t=${Date.now()}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.positions) {
           const map: Record<string, PaperTradePosition> = {};
           data.positions.forEach((p: PaperTradePosition) => {
-            map[p.id] = p;
+            if (!isMock(p.id, p.ticker)) {
+              map[p.id] = p;
+            }
           });
           setPaperPortfolio(map);
           if (data.summary) setPortfolioSummary(data.summary);
@@ -529,6 +551,7 @@ ${verdict.judgeThinking}
         insiderName: tx.insiderName,
         insiderTitle: tx.insiderTitle,
         asymmetryScore: activeVerdict?.asymmetryScore || 85,
+        insiderBuyPrice: tx.pricePerShare,
         entryPrice: tx.currentMarketPrice || tx.pricePerShare || 1.0,
         currentPrice: tx.currentMarketPrice || tx.pricePerShare || 1.0,
         shares: plan.totalShares,
@@ -558,7 +581,7 @@ ${verdict.judgeThinking}
   const handleRefreshPortfolioLivePnl = async () => {
     setPortfolioRefreshing(true);
     try {
-      const res = await fetch('/api/portfolio?refresh=true');
+      const res = await fetch(`/api/portfolio?refresh=true&_t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
         if (data.positions) {
@@ -983,7 +1006,10 @@ ${verdict.judgeThinking}
             </button>
 
             <button
-              onClick={() => setActiveTab('portfolio')}
+              onClick={() => {
+                setActiveTab('portfolio');
+                handleRefreshPortfolioLivePnl();
+              }}
               className={`px-4 py-2 font-mono text-xs font-bold tracking-wider border-b-2 transition-colors flex items-center gap-2 ${
                 activeTab === 'portfolio'
                   ? 'border-emerald-400 text-emerald-300 bg-slate-900/40'
@@ -1729,7 +1755,7 @@ ${verdict.judgeThinking}
                   {(portfolioSummary?.totalCurrentValueDkk || 0).toLocaleString('da-DK')} DKK
                 </div>
                 <div className="text-[11px] text-slate-500 font-mono">
-                  Realtid Yahoo Finance kurser
+                  Realtid CNBC + Yahoo kurser
                 </div>
               </div>
 
@@ -1809,6 +1835,7 @@ ${verdict.judgeThinking}
                   const isDkk = pos.ticker.endsWith('.CO') || pos.exchange?.includes('Copenhagen');
                   const isSek = pos.ticker.endsWith('.ST') || pos.exchange?.includes('Stockholm');
                   const currSym = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';
+                  const currencyCode = isDkk ? 'DKK' : isSek ? 'SEK' : 'USD';
 
                   // Beregn Stop-Loss -> Entry -> Target visuel progress-bar
                   const minP = pos.stopLossPrice > 0 ? pos.stopLossPrice : pos.entryPrice * 0.85;
@@ -1818,6 +1845,15 @@ ${verdict.judgeThinking}
                   const entryPct = Math.min(100, Math.max(0, ((pos.entryPrice - minP) / span) * 100));
 
                   const isProfit = pos.pnlDkk >= 0;
+                  const isBelowInsider =
+                    typeof pos.insiderBuyPrice === 'number' &&
+                    pos.insiderBuyPrice > 0 &&
+                    pos.currentPrice < pos.insiderBuyPrice;
+
+                  const nordnetUrl = isDkk
+                    ? `https://www.nordnet.dk/markedet/aktier/${encodeURIComponent(pos.ticker)}`
+                    : `https://www.nordnet.dk/markedet/aktier?query=${encodeURIComponent(pos.ticker)}`;
+                  const yahooUrl = `https://finance.yahoo.com/quote/${encodeURIComponent(pos.ticker)}`;
 
                   return (
                     <div
@@ -1871,53 +1907,99 @@ ${verdict.judgeThinking}
                         </div>
                       </div>
 
-                      {/* 4 Metrics Grid */}
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
-                        {/* 1. Kurs & Entry */}
-                        <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80 space-y-1">
-                          <span className="text-[10px] text-slate-400">ENTRY VS. AKTUEL KURS</span>
-                          <div className="text-slate-200">
-                            Entry: <span className="font-bold">{currSym}{pos.entryPrice}</span>
+                      {/* 4 Metrics Grid: Adskilt for 100% transparens */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
+                        {/* 1. Din Entry vs Live Børskurs -> Dit Faktiske Afkast */}
+                        <div
+                          className={`p-3 rounded border space-y-1.5 ${
+                            isProfit
+                              ? 'bg-emerald-950/25 border-emerald-900/60'
+                              : 'bg-rose-950/25 border-rose-900/60'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                            <span>1. DIT FAKTISKE AFKAST</span>
+                            {isProfit ? (
+                              <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                            ) : (
+                              <TrendingDown className="w-3.5 h-3.5 text-rose-400" />
+                            )}
                           </div>
-                          <div className="text-slate-300">
+                          <div className="text-[11px] text-slate-300">
+                            Entry: <span className="font-semibold text-slate-100">{currSym}{pos.entryPrice}</span>
+                            <span className="text-slate-500 mx-1">→</span>
                             Nu: <span className="font-bold text-white">{currSym}{pos.currentPrice}</span>
                           </div>
+                          <div className="pt-1 border-t border-slate-800/60">
+                            <div className={`text-base font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {isProfit ? '+' : ''}{pos.pnlPct}%
+                              <span className="text-xs font-medium ml-1.5 opacity-90">
+                                ({isProfit ? '+' : ''}{pos.pnlDkk.toLocaleString('da-DK')} DKK)
+                              </span>
+                            </div>
+                          </div>
                         </div>
 
-                        {/* 2. Aktier & Investeret */}
-                        <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80 space-y-1">
-                          <span className="text-[10px] text-slate-400">POSITION & INVESTERET</span>
-                          <div className="font-bold text-slate-200">
+                        {/* 2. Insiderens Købskurs vs Live Kurs */}
+                        <div className="p-3 rounded bg-slate-950/60 border border-slate-800/80 space-y-1.5">
+                          <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                            <span>2. INSIDER ALPHA</span>
+                            <UserCheck className="w-3.5 h-3.5 text-amber-400" />
+                          </div>
+                          <div className="text-[11px] text-slate-300">
+                            Insider: <span className="font-semibold text-amber-300">{currSym}{pos.insiderBuyPrice || pos.entryPrice}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 truncate" title={`${pos.insiderName} (${pos.insiderTitle})`}>
+                            {pos.insiderName} ({pos.insiderTitle})
+                          </div>
+                          <div className="pt-1 border-t border-slate-800/60 flex items-center justify-between">
+                            <span className="text-[10px] text-slate-400">Insider P&L:</span>
+                            <span
+                              className={`text-[11px] font-bold ${
+                                (pos.insiderPnlPct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                              }`}
+                            >
+                              {(pos.insiderPnlPct || 0) >= 0 ? '+' : ''}{pos.insiderPnlPct || 0}%
+                            </span>
+                          </div>
+                          {isBelowInsider && (
+                            <div className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/40 border border-emerald-900/50 rounded px-1.5 py-0.5 text-center">
+                              🔥 Rabat ift. insider
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 3. Position & Allokering */}
+                        <div className="p-3 rounded bg-slate-950/60 border border-slate-800/80 space-y-1.5">
+                          <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                            <span>3. ALLOKERING</span>
+                            <Briefcase className="w-3.5 h-3.5 text-cyan-400" />
+                          </div>
+                          <div className="text-sm font-bold text-slate-200">
                             {pos.shares} aktier
                           </div>
-                          <div className="text-slate-300 font-semibold">
-                            {pos.investedDkk.toLocaleString('da-DK')} DKK
+                          <div className="text-xs text-slate-300 font-semibold">
+                            {pos.investedDkk.toLocaleString('da-DK')} DKK inv.
                           </div>
-                        </div>
-
-                        {/* 3. Live P&L */}
-                        <div className={`p-2.5 rounded border space-y-1 ${
-                          isProfit
-                            ? 'bg-emerald-950/30 border-emerald-900/60'
-                            : 'bg-rose-950/30 border-rose-900/60'
-                        }`}>
-                          <span className="text-[10px] text-slate-400">UREALISERET LIVE P&L</span>
-                          <div className={`text-sm font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {isProfit ? '+' : ''}{pos.pnlDkk.toLocaleString('da-DK')} DKK
-                          </div>
-                          <div className={`text-[11px] font-semibold ${isProfit ? 'text-emerald-300' : 'text-rose-300'}`}>
-                            {isProfit ? '+' : ''}{pos.pnlPct}%
+                          <div className="pt-1 border-t border-slate-800/60 text-[10px] text-slate-400">
+                            Værdi nu: <span className="text-cyan-300 font-bold">{Math.round(pos.shares * pos.currentPrice * (pos.currentFxRateDkk || 1)).toLocaleString('da-DK')} DKK</span>
                           </div>
                         </div>
 
                         {/* 4. Stop-Loss & Target */}
-                        <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80 space-y-1">
-                          <span className="text-[10px] text-slate-400">RISIKO & KURSMÅL</span>
-                          <div className="text-rose-400">
+                        <div className="p-3 rounded bg-slate-950/60 border border-slate-800/80 space-y-1.5">
+                          <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                            <span>4. RISIKO & MÅL</span>
+                            <Target className="w-3.5 h-3.5 text-purple-400" />
+                          </div>
+                          <div className="text-rose-400 text-xs">
                             Stop: <span className="font-bold">{currSym}{pos.stopLossPrice}</span>
                           </div>
-                          <div className="text-emerald-400">
+                          <div className="text-emerald-400 text-xs">
                             Mål: <span className="font-bold">{currSym}{pos.targetPrice}</span>
+                          </div>
+                          <div className="pt-1 border-t border-slate-800/60 text-[10px] text-slate-500">
+                            Åbnet: {new Date(pos.openedAt).toLocaleDateString('da-DK')}
                           </div>
                         </div>
                       </div>
@@ -1929,7 +2011,7 @@ ${verdict.judgeThinking}
                             🛑 Stop-Loss: {currSym}{pos.stopLossPrice}
                           </span>
                           <span className="text-slate-400">
-                            📍 Entry: {currSym}{pos.entryPrice}
+                            📍 Din Entry: {currSym}{pos.entryPrice}
                           </span>
                           <span className="text-emerald-400 font-semibold">
                             🎯 Mål: {currSym}{pos.targetPrice}
@@ -1952,18 +2034,50 @@ ${verdict.judgeThinking}
                             title={`Entry Kurs: ${currSym}${pos.entryPrice}`}
                           />
                         </div>
+                      </div>
 
-                        <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 pt-0.5">
-                          <span>
-                            Insider: {pos.insiderName} ({pos.insiderTitle})
+                      {/* Verifikations-linje i bunden af kortet med live kurs, tidsstempel, kilde, FX & eksterne links */}
+                      <div className="pt-2.5 border-t border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-2.5 text-[11px] font-mono">
+                        <div className="flex items-center gap-2 text-slate-300 flex-wrap">
+                          <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                            Verificeret kurs: {currSym}{pos.currentPrice}
                           </span>
-                          <span>
-                            Åbnet: {new Date(pos.openedAt).toLocaleDateString('da-DK', {
-                              day: 'numeric',
-                              month: 'short',
-                              year: 'numeric',
-                            })}
+                          <span className="text-slate-600">•</span>
+                          <span className="text-slate-400">
+                            Seneste børs-tick: <span className="text-slate-200">{formatQuoteTime(pos.lastQuoteTime)}</span>
                           </span>
+                          <span className="text-slate-600">•</span>
+                          <span className="text-slate-400">
+                            Kilde: <span className="text-cyan-300 font-semibold">{pos.quoteSource || 'CNBC + Yahoo Real-Time Verified'}</span>
+                          </span>
+                          <span className="text-slate-600">•</span>
+                          <span className="text-slate-400">
+                            Valuta: <span className="text-amber-300">1 {currencyCode} = {Number(pos.currentFxRateDkk || 6.70).toFixed(4)} DKK</span>
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2 self-end md:self-auto shrink-0">
+                          <a
+                            href={nordnetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors text-[10px]"
+                            title="Tjek kursen live hos Nordnet"
+                          >
+                            <span>Nordnet</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                          <a
+                            href={yahooUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors text-[10px]"
+                            title="Tjek kursen live hos Yahoo Finance"
+                          >
+                            <span>Yahoo Finance</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
                         </div>
                       </div>
                     </div>

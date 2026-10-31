@@ -77,8 +77,14 @@ export interface PaperTradePosition {
   insiderTitle: string;
   asymmetryScore: number;
   openedAt: string;
+  insiderBuyPrice: number;
   entryPrice: number;
   currentPrice: number;
+  entryFxRateDkk: number;
+  currentFxRateDkk: number;
+  lastQuoteTime: string;
+  quoteSource: string;
+  insiderPnlPct: number;
   shares: number;
   investedDkk: number;
   stopLossPrice: number;
