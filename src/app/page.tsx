@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Cpu,
+  Edit3,
   ExternalLink,
   Eye,
   EyeOff,
@@ -22,6 +23,7 @@ import {
   Scale,
   Search,
   ShieldAlert,
+  ShieldCheck,
   Target,
   Trash2,
   TrendingDown,
@@ -126,6 +128,23 @@ export default function Dashboard() {
   const [portfolioSummary, setPortfolioSummary] = useState<PortfolioSummary | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState<boolean>(false);
   const [portfolioRefreshing, setPortfolioRefreshing] = useState<boolean>(false);
+
+  // Inline Position Editing State (Nordnet Match)
+  const [editingPosId, setEditingPosId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{
+    tradeType: 'PAPER' | 'REAL_NORDNET';
+    entryPrice: number;
+    shares: number;
+    stopLossPrice: number;
+    targetPrice: number;
+  }>({
+    tradeType: 'PAPER',
+    entryPrice: 0,
+    shares: 0,
+    stopLossPrice: 0,
+    targetPrice: 0,
+  });
+  const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
 
   // The Council & Persistent Watchlist State
   const [selectedTx, setSelectedTx] = useState<InsiderTransaction | null>(null);
@@ -675,6 +694,49 @@ ${verdict.judgeThinking}
       }
     } catch (e) {
       console.error('Fejl ved lukning af paper-trade position:', e);
+    }
+  };
+
+  const handleStartEdit = (pos: PaperTradePosition) => {
+    setEditingPosId(pos.id);
+    setEditForm({
+      tradeType: pos.tradeType || 'PAPER',
+      entryPrice: pos.entryPrice,
+      shares: pos.shares,
+      stopLossPrice: pos.stopLossPrice || 0,
+      targetPrice: pos.targetPrice || 0,
+    });
+  };
+
+  const handleSaveEdit = async (id: string) => {
+    setIsSavingEdit(true);
+    try {
+      const res = await fetch('/api/portfolio', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id,
+          tradeType: editForm.tradeType,
+          entryPrice: Number(editForm.entryPrice),
+          shares: Number(editForm.shares),
+          stopLossPrice: Number(editForm.stopLossPrice),
+          targetPrice: Number(editForm.targetPrice),
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.positions) {
+        const map: Record<string, PaperTradePosition> = {};
+        data.positions.forEach((p: PaperTradePosition) => {
+          map[p.id] = p;
+        });
+        setPaperPortfolio(map);
+        if (data.summary) setPortfolioSummary(data.summary);
+        setEditingPosId(null);
+      }
+    } catch (err) {
+      console.error('Fejl ved opdatering af position:', err);
+    } finally {
+      setIsSavingEdit(false);
     }
   };
 
@@ -1889,11 +1951,11 @@ ${verdict.judgeThinking}
         {activeTab === 'portfolio' && (
           <div className="space-y-6">
             {/* Top Portfolio KPI-Bar */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
               {/* Card 1: Samlet Investeret */}
               <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg space-y-1">
                 <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-                  <span>SAMLET INVESTERET (FRIE MIDLER)</span>
+                  <span>SAMLET INVESTERET</span>
                   <Briefcase className="w-4 h-4 text-emerald-400" />
                 </div>
                 <div className="text-2xl font-mono font-bold text-slate-100">
@@ -1921,7 +1983,7 @@ ${verdict.judgeThinking}
               {/* Card 3: Samlet P&L */}
               <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg space-y-1">
                 <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-                  <span>UREALISERET P&L (DKK)</span>
+                  <span>UREALISERET P&L</span>
                   {(portfolioSummary?.totalPnlDkk || 0) >= 0 ? (
                     <TrendingUp className="w-4 h-4 text-emerald-400" />
                   ) : (
@@ -1946,7 +2008,27 @@ ${verdict.judgeThinking}
                 </div>
               </div>
 
-              {/* Card 4: Win-Rate & Refresh Button */}
+              {/* Card 4: Netto Alpha vs. S&P 500 (SPY) */}
+              <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
+                  <span>ALPHA VS. S&P 500</span>
+                  <Flame className="w-4 h-4 text-amber-400" />
+                </div>
+                <div
+                  className={`text-2xl font-mono font-bold ${
+                    (portfolioSummary?.avgAlphaPct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  {(portfolioSummary?.avgAlphaPct || 0) >= 0 ? '+' : ''}
+                  {portfolioSummary?.avgAlphaPct || 0}% Alpha
+                </div>
+                <div className="text-[11px] text-slate-500 font-mono">
+                  SPY i perioden: {(portfolioSummary?.benchmarkReturnPct || 0) >= 0 ? '+' : ''}
+                  {portfolioSummary?.benchmarkReturnPct || 0}%
+                </div>
+              </div>
+
+              {/* Card 5: Win-Rate & Refresh Button */}
               <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
@@ -1963,7 +2045,7 @@ ${verdict.judgeThinking}
                   className="mt-2 w-full py-1.5 px-3 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-700 text-xs font-mono text-cyan-300 flex items-center justify-center gap-1.5 transition-colors"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${portfolioRefreshing ? 'animate-spin' : ''}`} />
-                  <span>{portfolioRefreshing ? 'Henter kurser...' : 'Opdatér Live P&L'}</span>
+                  <span>{portfolioRefreshing ? 'Henter kurser & radar...' : 'Opdatér Live P&L'}</span>
                 </button>
               </div>
             </div>
@@ -2036,7 +2118,17 @@ ${verdict.judgeThinking}
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                          {pos.tradeType === 'REAL_NORDNET' ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-950/90 border border-amber-500 text-amber-300 shadow-sm shadow-amber-950">
+                              🏦 NORDNET LIVE HANDEL
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-cyan-950/80 border border-cyan-700 text-cyan-300">
+                              🧪 PAPER-TRADE
+                            </span>
+                          )}
+
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
                               pos.status === 'STOPPED_OUT'
@@ -2054,6 +2146,15 @@ ${verdict.judgeThinking}
                               ? '🎯 KURSMÅL NÅET'
                               : 'LUKKET'}
                           </span>
+
+                          <button
+                            onClick={() => (editingPosId === pos.id ? setEditingPosId(null) : handleStartEdit(pos))}
+                            className="px-2.5 py-1 rounded bg-slate-800 hover:bg-cyan-950 hover:text-cyan-300 hover:border-cyan-700 border border-slate-700 text-slate-300 text-xs font-mono transition-colors flex items-center gap-1"
+                            title="Redigér position for at matche din reelle Nordnet handel"
+                          >
+                            <Edit3 className="w-3 h-3 text-cyan-400" />
+                            <span>{editingPosId === pos.id ? 'Luk Redigering' : 'Redigér / Nordnet Match'}</span>
+                          </button>
 
                           <button
                             onClick={() => handleClosePaperTrade(pos.id)}
@@ -2094,6 +2195,23 @@ ${verdict.judgeThinking}
                               {isProfit ? '+' : ''}{pos.pnlPct}%
                               <span className="text-xs font-medium ml-1.5 opacity-90">
                                 ({isProfit ? '+' : ''}{pos.pnlDkk.toLocaleString('da-DK')} DKK)
+                              </span>
+                            </div>
+                            <div className="pt-1 mt-1 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
+                              <span className="text-slate-400 flex items-center gap-0.5">
+                                <Zap className="w-3 h-3 text-amber-400" /> Alpha:
+                              </span>
+                              <span
+                                className={`font-bold ${
+                                  (pos.alphaPct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                                }`}
+                              >
+                                {(pos.alphaPct || 0) >= 0 ? '+' : ''}
+                                {pos.alphaPct || 0}%
+                                <span className="text-[10px] font-normal text-slate-400 ml-1">
+                                  (SPY: {(pos.benchmarkReturnPct || 0) >= 0 ? '+' : ''}
+                                  {pos.benchmarkReturnPct || 0}%)
+                                </span>
                               </span>
                             </div>
                           </div>
@@ -2162,6 +2280,141 @@ ${verdict.judgeThinking}
                           </div>
                         </div>
                       </div>
+
+                      {/* Insider-Exit Guard Status */}
+                      {pos.insiderExitWarning?.hasExit ? (
+                        <div className="p-2.5 rounded bg-rose-950/80 border border-rose-500 text-rose-200 text-xs font-mono flex items-center justify-between gap-2 shadow-lg shadow-rose-950/50 animate-pulse">
+                          <div className="flex items-center gap-2">
+                            <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                            <div>
+                              <span className="font-bold text-rose-100">🚨 INSIDER-EXIT DETEKTERET: </span>
+                              <span>{pos.insiderExitWarning.message}</span>
+                            </div>
+                          </div>
+                          <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-rose-900 border border-rose-700 text-rose-200 shrink-0">
+                            Exit Alarm
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="px-3 py-1.5 rounded bg-slate-950/50 border border-slate-800/80 flex items-center justify-between text-[11px] font-mono text-slate-400">
+                          <div className="flex items-center gap-1.5 text-emerald-400">
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>🛡️ Exit-Radar: 0 insider-salg (Kode S) siden din entry</span>
+                          </div>
+                          <span className="text-[10px] text-slate-500">OpenInsider & SEC Verificeret</span>
+                        </div>
+                      )}
+
+                      {/* Inline Formular for Redigering (Nordnet Match) */}
+                      {editingPosId === pos.id && (
+                        <div className="p-4 rounded-lg bg-slate-950 border border-cyan-800/80 shadow-2xl space-y-3 font-mono">
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                            <div className="flex items-center gap-2">
+                              <Edit3 className="w-4 h-4 text-cyan-400" />
+                              <span className="text-xs font-bold text-cyan-300 uppercase tracking-wider">
+                                Manuel Redigering & Nordnet Match for ${pos.ticker}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-slate-400">Opdaterer straks investering og P&L</span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                            {/* Trade Type */}
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-slate-400 uppercase">Handelstype</label>
+                              <select
+                                value={editForm.tradeType}
+                                onChange={(e) =>
+                                  setEditForm((prev) => ({
+                                    ...prev,
+                                    tradeType: e.target.value as 'PAPER' | 'REAL_NORDNET',
+                                  }))
+                                }
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-100 font-bold focus:border-cyan-500 focus:outline-none"
+                              >
+                                <option value="PAPER">🧪 Paper-Trade</option>
+                                <option value="REAL_NORDNET">🏦 Nordnet Live</option>
+                              </select>
+                            </div>
+
+                            {/* Entry Price */}
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-slate-400 uppercase">Min Købskurs ({currSym.trim()})</label>
+                              <input
+                                type="number"
+                                step="any"
+                                value={editForm.entryPrice}
+                                onChange={(e) =>
+                                  setEditForm((prev) => ({ ...prev, entryPrice: parseFloat(e.target.value) || 0 }))
+                                }
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-100 focus:border-cyan-500 focus:outline-none"
+                              />
+                            </div>
+
+                            {/* Shares */}
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-slate-400 uppercase">Antal Aktier</label>
+                              <input
+                                type="number"
+                                step="1"
+                                value={editForm.shares}
+                                onChange={(e) =>
+                                  setEditForm((prev) => ({ ...prev, shares: parseInt(e.target.value, 10) || 0 }))
+                                }
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-100 focus:border-cyan-500 focus:outline-none"
+                              />
+                            </div>
+
+                            {/* Stop Loss */}
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-rose-400 uppercase">Stop-Loss ({currSym.trim()})</label>
+                              <input
+                                type="number"
+                                step="any"
+                                value={editForm.stopLossPrice}
+                                onChange={(e) =>
+                                  setEditForm((prev) => ({ ...prev, stopLossPrice: parseFloat(e.target.value) || 0 }))
+                                }
+                                className="w-full bg-slate-900 border border-rose-900/60 rounded px-2.5 py-1.5 text-rose-300 focus:border-rose-500 focus:outline-none"
+                              />
+                            </div>
+
+                            {/* Target Price */}
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-emerald-400 uppercase">Kursmål ({currSym.trim()})</label>
+                              <input
+                                type="number"
+                                step="any"
+                                value={editForm.targetPrice}
+                                onChange={(e) =>
+                                  setEditForm((prev) => ({ ...prev, targetPrice: parseFloat(e.target.value) || 0 }))
+                                }
+                                className="w-full bg-slate-900 border border-emerald-900/60 rounded px-2.5 py-1.5 text-emerald-300 focus:border-emerald-500 focus:outline-none"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Edit Actions */}
+                          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                            <button
+                              type="button"
+                              onClick={() => setEditingPosId(null)}
+                              className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors"
+                            >
+                              Annuller
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isSavingEdit}
+                              onClick={() => handleSaveEdit(pos.id)}
+                              className="px-3.5 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-slate-950 font-bold text-xs transition-colors flex items-center gap-1.5"
+                            >
+                              <RefreshCw className={`w-3 h-3 ${isSavingEdit ? 'animate-spin' : ''}`} />
+                              <span>{isSavingEdit ? 'Gemmer...' : 'Gem Ændringer'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Visual Stop-Loss <-> Entry <-> Target Progress Bar */}
                       <div className="space-y-1.5 pt-1">

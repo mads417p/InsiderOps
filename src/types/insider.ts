@@ -93,6 +93,17 @@ export interface TradeExecutionPlan {
 
 export type PaperTradeStatus = 'OPEN' | 'STOPPED_OUT' | 'TARGET_HIT' | 'CLOSED_MANUAL';
 
+export type TradeType = 'PAPER' | 'REAL_NORDNET';
+
+export interface InsiderExitWarning {
+  hasExit: boolean;
+  sellerName?: string;
+  sellerTitle?: string;
+  saleDate?: string;
+  saleValueUsd?: number;
+  message?: string;
+}
+
 export interface PaperTradePosition {
   id: string;
   ticker: string;
@@ -117,6 +128,13 @@ export interface PaperTradePosition {
   pnlPct: number;
   pnlDkk: number;
   status: PaperTradeStatus;
+  tradeType?: TradeType; // 'PAPER' | 'REAL_NORDNET'
+  benchmarkTicker?: string; // default 'SPY'
+  benchmarkEntryPrice?: number; // S&P 500 SPY kurs da positionen blev åbnet
+  benchmarkCurrentPrice?: number; // aktuel SPY live kurs
+  benchmarkReturnPct?: number; // ((benchmarkCurrentPrice - benchmarkEntryPrice) / benchmarkEntryPrice) * 100
+  alphaPct?: number; // pnlPct - benchmarkReturnPct
+  insiderExitWarning?: InsiderExitWarning;
 }
 
 export interface PortfolioSummary {
@@ -127,6 +145,8 @@ export interface PortfolioSummary {
   winRatePct: number;
   openCount: number;
   closedCount: number;
+  avgAlphaPct?: number; // porteføljens vægtede Alpha mod S&P 500
+  benchmarkReturnPct?: number; // S&P 500 afkast i samme periode
 }
 
 export type TrackRecordReputation =
