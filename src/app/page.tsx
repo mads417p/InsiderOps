@@ -19,6 +19,7 @@ import {
   Filter,
   Flame,
   Landmark,
+  Play,
   RefreshCw,
   Scale,
   Search,
@@ -82,6 +83,22 @@ function formatQuoteTime(isoOrStr?: string): string {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
+      });
+    }
+  } catch {}
+  return isoOrStr;
+}
+
+function formatDateTimeDk(isoOrStr?: string): string {
+  if (!isoOrStr) return 'Ukendt tidspunkt';
+  try {
+    const d = new Date(isoOrStr);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString('da-DK', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
       });
     }
   } catch {}
@@ -158,12 +175,18 @@ export default function Dashboard() {
   const [showThinking, setShowThinking] = useState<boolean>(true);
   const [memoCopied, setMemoCopied] = useState<boolean>(false);
   const [maxCapitalDkk, setMaxCapitalDkk] = useState<number>(25000);
-  const [autoPilotRunning, setAutoPilotRunning] = useState<boolean>(false);
-  const [autoPilotProgress, setAutoPilotProgress] = useState<{
+  const [councilQueueRunning, setCouncilQueueRunning] = useState<boolean>(false);
+  const [councilQueueProgress, setCouncilQueueProgress] = useState<{
     current: number;
     total: number;
     ticker: string;
+    label?: string;
   } | null>(null);
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
+  const [recommendationFilterTab, setRecommendationFilterTab] = useState<'BUY' | 'WATCH' | 'REJECTED'>('BUY');
+  // Backward compatibility alias for any autoPilot references
+  const autoPilotRunning = councilQueueRunning;
+  const autoPilotProgress = councilQueueProgress;
 
   const generateInvestmentMemoMarkdown = (tx: InsiderTransaction, verdict: CouncilVerdict): string => {
     const dateFormatted = tx.filingDate || new Date().toISOString().split('T')[0];
@@ -533,7 +556,7 @@ ${verdict.judgeThinking}
       const res = await fetch('/api/council', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transaction: tx, judgeTier: targetTier }),
+        body: JSON.stringify({ transaction: tx, judgeTier: targetTier, forceRefresh }),
       });
       if (!res.ok) throw new Error('Fejl under rådsmøde');
       const data = await res.json();
@@ -620,7 +643,8 @@ ${verdict.judgeThinking}
 
   const handleOpenPaperTrade = async (
     tx: InsiderTransaction,
-    plan: ReturnType<typeof generateTradeExecutionPlan>
+    plan: ReturnType<typeof generateTradeExecutionPlan>,
+    scoreOverride?: number
   ) => {
     if (plan.status !== 'ACTIVE_PLAN' || plan.recommendedAllocationDkk <= 0) return;
     setPortfolioLoading(true);
@@ -632,7 +656,7 @@ ${verdict.judgeThinking}
         exchange: tx.exchange || 'NASDAQ',
         insiderName: tx.insiderName,
         insiderTitle: tx.insiderTitle,
-        asymmetryScore: activeVerdict?.asymmetryScore || 85,
+        asymmetryScore: scoreOverride || activeVerdict?.asymmetryScore || 85,
         insiderBuyPrice: tx.pricePerShare,
         entryPrice: tx.currentMarketPrice || tx.pricePerShare || 1.0,
         currentPrice: tx.currentMarketPrice || tx.pricePerShare || 1.0,
@@ -742,71 +766,64 @@ ${verdict.judgeThinking}
     }
   };
 
-  const handleRunAutoPilotTop3 = async () => {
-    if (autoPilotRunning || loading) return;
+  // 1. Uvurderede HIGH signaler (asymmetrySignal === 'HIGH' eller score >= 75 uden rådsdom)
+  const unjudgedHighItems = items.filter(
+    (item) =>
+      item.result.passedHardFilter &&
+      (item.result.asymmetrySignal === 'HIGH' || item.result.geminiPreScore >= 75) &&
+      !verdictHistory[item.transaction.id]
+  );
+  const unjudgedHighCount = unjudgedHighItems.length;
 
-    // 1. Filtrer godkendte kandidater, der bestod hard filter og er handlbare i DK
-    const passedTradable = items.filter(
-      (item) => item.result.passedHardFilter && item.transaction.isTradableInDK !== false
-    );
+  // 2. Afvikling af The Council på brugerens valgte rækker (Multi-Select Queue)
+  const handleRunCouncilOnSelected = async () => {
+    if (councilQueueRunning || loading || selectedRowIds.length === 0) return;
 
-    if (passedTradable.length === 0) {
-      alert('Ingen godkendte og handlbare transaktioner fundet i det aktuelle scan.');
-      return;
+    const selectedTransactions: InsiderTransaction[] = [];
+    for (const id of selectedRowIds) {
+      const foundInItems = items.find((i) => i.transaction.id === id)?.transaction;
+      if (foundInItems) {
+        selectedTransactions.push(foundInItems);
+      } else if (verdictHistory[id]?.transaction) {
+        selectedTransactions.push(verdictHistory[id].transaction);
+      }
     }
 
-    // Sorter efter Gemini Pre-Score faldende
-    const sorted = [...passedTradable].sort(
-      (a, b) => b.result.geminiPreScore - a.result.geminiPreScore
-    );
+    if (selectedTransactions.length === 0) return;
 
-    // Prioriter dem, der ikke allerede ligger i råds-cachen for denne tier
-    const unanalyzed = sorted.filter((item) => {
-      const rec = verdictHistory[item.transaction.id];
-      return !rec || (rec.verdict.modelsUsed?.judgeTier && rec.verdict.modelsUsed.judgeTier !== judgeTier);
-    });
-
-    const candidates = unanalyzed.length >= 3 ? unanalyzed.slice(0, 3) : sorted.slice(0, 3);
-
-    setAutoPilotRunning(true);
+    setCouncilQueueRunning(true);
     setActiveTab('radar');
-
-    const completed: Array<{ tx: InsiderTransaction; verdict: CouncilVerdict }> = [];
     let currentHistory = { ...verdictHistory };
+    const completed: Array<{ tx: InsiderTransaction; verdict: CouncilVerdict }> = [];
 
     try {
-      for (let i = 0; i < candidates.length; i++) {
-        const item = candidates[i];
-        const tx = item.transaction;
-
-        setAutoPilotProgress({
+      for (let i = 0; i < selectedTransactions.length; i++) {
+        const tx = selectedTransactions[i];
+        setCouncilQueueProgress({
           current: i + 1,
-          total: candidates.length,
+          total: selectedTransactions.length,
           ticker: tx.ticker,
+          label: `Analyserer ${tx.ticker} (${i + 1}/${selectedTransactions.length})...`,
         });
 
-        // Tjek om eksisterende dom findes for denne tier (spar tokens)
-        const existing = currentHistory[tx.id];
-        if (
-          existing &&
-          (!existing.verdict.modelsUsed?.judgeTier ||
-            existing.verdict.modelsUsed.judgeTier === judgeTier)
-        ) {
-          completed.push({ tx, verdict: existing.verdict });
-          continue;
-        }
+        const hasOldVerdict = Boolean(currentHistory[tx.id]);
 
         const res = await fetch('/api/council', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transaction: tx, judgeTier }),
+          body: JSON.stringify({
+            transaction: tx,
+            judgeTier,
+            forceRefresh: hasOldVerdict,
+          }),
         });
 
         if (res.ok) {
           const data = await res.json();
           if (data.verdict) {
+            const enrichedTx = data.transaction || tx;
             const newRecord: SavedVerdictItem = {
-              transaction: tx,
+              transaction: enrichedTx,
               verdict: data.verdict,
               savedAt: new Date().toISOString(),
             };
@@ -817,28 +834,97 @@ ${verdict.judgeThinking}
             } catch (storageErr) {
               console.warn(storageErr);
             }
-            completed.push({ tx, verdict: data.verdict });
+            completed.push({ tx: enrichedTx, verdict: data.verdict });
           }
         }
       }
 
-      // Find vinderen med højest asymmetryScore og vis i The Council Chamber
       if (completed.length > 0) {
         completed.sort((a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore);
-        const winner = completed[0];
-        setSelectedTx(winner.tx);
-        setActiveVerdict(winner.verdict);
-
+        const best = completed[0];
+        setSelectedTx(best.tx);
+        setActiveVerdict(best.verdict);
         setTimeout(() => {
           const chamberEl = document.getElementById('council-chamber');
           if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
-        }, 300);
+        }, 250);
+      }
+      setSelectedRowIds([]);
+    } catch (err) {
+      console.error('Fejl under afvikling af rådskø:', err);
+    } finally {
+      setCouncilQueueRunning(false);
+      setCouncilQueueProgress(null);
+    }
+  };
+
+  // 3. Analyser alle uvurderede HIGH signaler automatisk
+  const handleAnalyzeAllUnjudgedHigh = async () => {
+    if (councilQueueRunning || loading || unjudgedHighCount === 0) return;
+
+    setCouncilQueueRunning(true);
+    setActiveTab('radar');
+    let currentHistory = { ...verdictHistory };
+    const completed: Array<{ tx: InsiderTransaction; verdict: CouncilVerdict }> = [];
+
+    try {
+      for (let i = 0; i < unjudgedHighItems.length; i++) {
+        const item = unjudgedHighItems[i];
+        const tx = item.transaction;
+
+        setCouncilQueueProgress({
+          current: i + 1,
+          total: unjudgedHighItems.length,
+          ticker: tx.ticker,
+          label: `Analyserer HIGH signal ${tx.ticker} (${i + 1}/${unjudgedHighItems.length})...`,
+        });
+
+        const res = await fetch('/api/council', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transaction: tx,
+            judgeTier,
+            forceRefresh: false,
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.verdict) {
+            const enrichedTx = data.transaction || tx;
+            const newRecord: SavedVerdictItem = {
+              transaction: enrichedTx,
+              verdict: data.verdict,
+              savedAt: new Date().toISOString(),
+            };
+            currentHistory = { ...currentHistory, [tx.id]: newRecord };
+            setVerdictHistory(currentHistory);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(currentHistory));
+            } catch (storageErr) {
+              console.warn(storageErr);
+            }
+            completed.push({ tx: enrichedTx, verdict: data.verdict });
+          }
+        }
+      }
+
+      if (completed.length > 0) {
+        completed.sort((a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore);
+        const best = completed[0];
+        setSelectedTx(best.tx);
+        setActiveVerdict(best.verdict);
+        setTimeout(() => {
+          const chamberEl = document.getElementById('council-chamber');
+          if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
+        }, 250);
       }
     } catch (err) {
-      console.error('Fejl under Auto-Pilot:', err);
+      console.error('Fejl under analyse af uvurderede HIGH signaler:', err);
     } finally {
-      setAutoPilotRunning(false);
-      setAutoPilotProgress(null);
+      setCouncilQueueRunning(false);
+      setCouncilQueueProgress(null);
     }
   };
 
@@ -850,6 +936,18 @@ ${verdict.judgeThinking}
     (a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore
   );
   const councilsConvenedCount = savedVerdictItems.length;
+
+  const buyRecommendations = savedVerdictItems.filter(
+    (i) => i.verdict.asymmetryScore >= 75 || i.verdict.verdict === 'STRONG ASYMMETRY (KØB)'
+  );
+  const watchRecommendations = savedVerdictItems.filter(
+    (i) =>
+      (i.verdict.asymmetryScore >= 60 && i.verdict.asymmetryScore < 75) ||
+      i.verdict.verdict === 'MODERATE SIGNAL (OVERVÅG)'
+  );
+  const rejectedRecommendations = savedVerdictItems.filter(
+    (i) => i.verdict.asymmetryScore < 60 || i.verdict.verdict === 'PR STUNT / STØJ (IGNORER)'
+  );
 
   const strongBuyItems = savedVerdictItems.filter(
     (i) =>
@@ -1011,23 +1109,38 @@ ${verdict.judgeThinking}
               Scan Nu
             </button>
 
-            {/* Auto-Pilot Top 3 Button */}
+            {/* 1. Send Valgte til Rådet Button */}
             <button
-              onClick={handleRunAutoPilotTop3}
-              disabled={loading || autoPilotRunning}
+              onClick={handleRunCouncilOnSelected}
+              disabled={loading || councilQueueRunning || selectedRowIds.length === 0}
               className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded text-xs font-mono font-bold transition-all shadow-md ${
-                autoPilotRunning
+                councilQueueRunning
                   ? 'bg-amber-500/20 border border-amber-500/60 text-amber-300 shadow-amber-950 animate-pulse'
-                  : 'bg-gradient-to-r from-purple-900 to-cyan-900 hover:from-purple-800 hover:to-cyan-800 border border-cyan-500/60 text-cyan-200 hover:text-white shadow-cyan-950'
+                  : selectedRowIds.length > 0
+                  ? 'bg-gradient-to-r from-purple-800 to-cyan-700 hover:from-purple-700 hover:to-cyan-600 text-white border border-cyan-400 shadow-cyan-950 shadow-sm animate-pulse'
+                  : 'bg-slate-800/80 border border-slate-700 text-slate-400 opacity-60 cursor-not-allowed'
               }`}
-              title="Kør automatisk The Council på de 3 stærkeste godkendte picks og vis vinderen"
+              title="Kør The Council på præcis de rækker der er krydset af i tabellen (gen-vurderer med frisk live-kurs hvis de har en gammel dom)"
             >
-              <Zap className={`w-3.5 h-3.5 ${autoPilotRunning ? 'text-amber-400 animate-spin' : 'text-cyan-400'}`} />
-              <span>
-                {autoPilotRunning && autoPilotProgress
-                  ? `Auto-Pilot: Voterer ${autoPilotProgress.current}/${autoPilotProgress.total} (${autoPilotProgress.ticker})...`
-                  : '⚡ Auto-Pilot (Top 3 til Rådet)'}
-              </span>
+              <Scale className="w-3.5 h-3.5 text-cyan-400" />
+              <span>⚖️ Send Valgte til Rådet ({selectedRowIds.length})</span>
+            </button>
+
+            {/* 2. Analyser Alle Uvurderede 'HIGH' Signaler */}
+            <button
+              onClick={handleAnalyzeAllUnjudgedHigh}
+              disabled={loading || councilQueueRunning || unjudgedHighCount === 0}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded text-xs font-mono font-bold transition-all shadow-md ${
+                councilQueueRunning
+                  ? 'bg-slate-800 border border-slate-700 text-slate-400 opacity-60 cursor-not-allowed'
+                  : unjudgedHighCount > 0
+                  ? 'bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-500/80 text-emerald-200 hover:text-white shadow-emerald-950'
+                  : 'bg-slate-800/80 border border-slate-700 text-slate-400 opacity-60 cursor-not-allowed'
+              }`}
+              title="Finder alle aktier med asymmetrySignal === 'HIGH' eller score >= 75 der endnu ikke har en rådsdom"
+            >
+              <Zap className="w-3.5 h-3.5 text-emerald-400" />
+              <span>⚡ Analyser Alle Uvurderede &apos;HIGH&apos; Signaler ({unjudgedHighCount})</span>
             </button>
           </div>
         </div>
@@ -1203,27 +1316,306 @@ ${verdict.judgeThinking}
           </div>
         )}
 
-        {/* Auto-Pilot Live Indicator Banner */}
-        {autoPilotRunning && autoPilotProgress && (
-          <div className="p-4 rounded bg-purple-950/70 border border-purple-500/80 text-purple-200 text-xs font-mono flex items-center justify-between gap-3 shadow-lg shadow-purple-950/40 animate-pulse">
+        {/* Council Queue Live Indicator Banner */}
+        {councilQueueRunning && councilQueueProgress && (
+          <div className="p-4 rounded bg-purple-950/80 border border-purple-500/80 text-purple-200 text-xs font-mono flex items-center justify-between gap-3 shadow-lg shadow-purple-950/40 animate-pulse">
             <div className="flex items-center gap-2.5">
-              <Zap className="w-4 h-4 text-amber-400 animate-spin" />
+              <RefreshCw className="w-4 h-4 text-cyan-400 animate-spin" />
               <div>
-                <span className="font-bold text-amber-300">⚡ AUTO-PILOT AKTIV: </span>
-                <span>The Council voterer på </span>
-                <span className="font-bold text-cyan-300">${autoPilotProgress.ticker}</span>
-                <span> ({autoPilotProgress.current} af {autoPilotProgress.total} kandidater)...</span>
+                <span className="font-bold text-amber-300">⚖️ RÅDS-KØ AKTIV: </span>
+                <span>
+                  {councilQueueProgress.label ||
+                    `The Council voterer på $${councilQueueProgress.ticker} (${councilQueueProgress.current} af ${councilQueueProgress.total} kandidater)...`}
+                </span>
               </div>
             </div>
             <div className="text-[11px] text-purple-300/80 hidden sm:block">
-              Kører Claude Sonnet Specialister + Claude Opus CIO med Extended Thinking
+              Dual-Feed Live Kurs + Claude Specialister + Extended Thinking CIO
             </div>
           </div>
         )}
 
-        {/* TAB 1: RADAR TABLE */}
+        {/* TAB 1: RADAR TABLE & TOP PICKS HUB */}
         {activeTab === 'radar' && (
-          <div className="border border-slate-800 rounded bg-slate-900/40 overflow-hidden">
+          <div className="space-y-6">
+            {/* 🎯 RÅDETS AKTIVE KØBS-ANBEFALINGER (TOP PICKS) HUB */}
+            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-2xl backdrop-blur-sm">
+              {/* Header & Filter Tabs */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3.5 mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                    <Target className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-mono text-sm sm:text-base font-bold text-slate-100 tracking-wider">
+                        🎯 RÅDETS AKTIVE KØBS-ANBEFALINGER (TOP PICKS)
+                      </h2>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700 text-emerald-300 font-bold">
+                        {buyRecommendations.length} KØB
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 font-mono mt-0.5">
+                      Filtreret til aktier godkendt af The Council med asymmetri og positiv risikoprofil
+                    </p>
+                  </div>
+                </div>
+
+                {/* Filter Tabs */}
+                <div className="flex items-center rounded-lg border border-slate-800 bg-slate-950 p-1 text-xs font-mono self-stretch sm:self-auto overflow-x-auto">
+                  <button
+                    type="button"
+                    onClick={() => setRecommendationFilterTab('BUY')}
+                    className={`px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5 font-bold whitespace-nowrap ${
+                      recommendationFilterTab === 'BUY'
+                        ? 'bg-emerald-950 border border-emerald-500 text-emerald-300 shadow-md shadow-emerald-950'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <span>🟢 Kun KØB-Anbefalinger ({buyRecommendations.length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRecommendationFilterTab('WATCH')}
+                    className={`px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5 font-bold whitespace-nowrap ${
+                      recommendationFilterTab === 'WATCH'
+                        ? 'bg-amber-950 border border-amber-500 text-amber-300 shadow-md shadow-amber-950'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <span>🟡 Overvåg / Afvent 60-74 ({watchRecommendations.length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRecommendationFilterTab('REJECTED')}
+                    className={`px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5 font-bold whitespace-nowrap ${
+                      recommendationFilterTab === 'REJECTED'
+                        ? 'bg-rose-950 border border-rose-700 text-rose-300 shadow-md shadow-rose-950'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <span>🔴 Afvist af Rådet &lt;60 ({rejectedRecommendations.length})</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Cards Grid */}
+              {(() => {
+                const activeList =
+                  recommendationFilterTab === 'BUY'
+                    ? buyRecommendations
+                    : recommendationFilterTab === 'WATCH'
+                    ? watchRecommendations
+                    : rejectedRecommendations;
+
+                if (activeList.length === 0) {
+                  return (
+                    <div className="py-8 text-center text-slate-400 font-mono text-xs border border-dashed border-slate-800 rounded-lg bg-slate-950/40">
+                      {recommendationFilterTab === 'BUY' ? (
+                        <div className="space-y-1">
+                          <p className="font-bold text-slate-300">Ingen aktive købs-anbefalinger fra Rådet endnu</p>
+                          <p className="text-[11px] text-slate-500">
+                            Vælg interessante aktier fra radaren nedenfor med afkrydsning og klik &apos;Send Valgte til Rådet&apos;!
+                          </p>
+                        </div>
+                      ) : recommendationFilterTab === 'WATCH' ? (
+                        <div>Ingen aktier i overvågningskategorien (score 60-74).</div>
+                      ) : (
+                        <div>Ingen afviste aktier (score &lt;60).</div>
+                      )}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {activeList.map(({ transaction: tx, verdict, savedAt }) => {
+                      const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk);
+                      const isDkk = tx.ticker.endsWith('.CO') || tx.exchange?.includes('Copenhagen');
+                      const isSek = tx.ticker.endsWith('.ST') || tx.exchange?.includes('Stockholm');
+                      const currSym = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';
+                      const currentPrice = tx.currentMarketPrice || tx.pricePerShare;
+                      const returnPct =
+                        tx.returnSinceBuyPct !== undefined
+                          ? tx.returnSinceBuyPct
+                          : currentPrice && tx.pricePerShare > 0
+                          ? Number((((currentPrice - tx.pricePerShare) / tx.pricePerShare) * 100).toFixed(1))
+                          : 0;
+                      const isDiscount = returnPct < 0;
+                      const evalTime = verdict.evaluatedAt || verdict.timestamp || savedAt;
+                      const evalDateStr = formatDateTimeDk(evalTime);
+                      const isInPortfolio = Boolean(paperPortfolio[tx.id]);
+                      const isCardEvaluating = councilLoading && selectedTx?.id === tx.id;
+
+                      const isBuy = verdict.asymmetryScore >= 75;
+                      const isWatch = verdict.asymmetryScore >= 60 && verdict.asymmetryScore < 75;
+
+                      return (
+                        <div
+                          key={`recom-${tx.id}`}
+                          className={`rounded-lg p-4 flex flex-col justify-between transition-all border ${
+                            isBuy
+                              ? 'bg-gradient-to-b from-slate-900 via-slate-900/90 to-slate-950 border-emerald-500/40 hover:border-emerald-500/80 shadow-lg shadow-emerald-950/20'
+                              : isWatch
+                              ? 'bg-slate-900/90 border-amber-500/30 hover:border-amber-500/60 shadow-lg shadow-amber-950/10'
+                              : 'bg-slate-900/60 border-rose-900/40 opacity-75 hover:opacity-100'
+                          }`}
+                        >
+                          <div>
+                            {/* Card Header: Flag + Ticker + Company + Score Badge */}
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xl shrink-0" title={getRegionBadge(tx.ticker, tx.exchange).label}>
+                                  {getRegionBadge(tx.ticker, tx.exchange).flag}
+                                </span>
+                                <div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-mono font-bold text-base text-cyan-300 tracking-wider">
+                                      {tx.ticker}
+                                    </span>
+                                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                                      {getRegionBadge(tx.ticker, tx.exchange).code}
+                                    </span>
+                                    {tx.exchange && (
+                                      <span className="text-[10px] font-mono text-slate-400 hidden sm:inline">
+                                        • {tx.exchange}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-slate-200 font-sans font-medium line-clamp-1 max-w-[200px]" title={tx.companyName}>
+                                    {tx.companyName}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Grønt KØB Badge eller Overvåg / Afvist */}
+                              <div className="text-right shrink-0">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-mono font-bold border ${
+                                    isBuy
+                                      ? 'bg-emerald-950 border-emerald-500 text-emerald-300 shadow-sm shadow-emerald-900/50'
+                                      : isWatch
+                                      ? 'bg-amber-950 border-amber-500 text-amber-300'
+                                      : 'bg-rose-950 border-rose-700 text-rose-300'
+                                  }`}
+                                >
+                                  {isBuy ? '🟢 KØB' : isWatch ? '🟡 AFVENT' : '🔴 AFVIST'}{' '}
+                                  ({verdict.previousScore && verdict.previousScore !== verdict.asymmetryScore ? `${verdict.previousScore} → ` : ''}
+                                  {verdict.asymmetryScore}/100)
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* CIO 1-line Headline */}
+                            <p className="mt-2.5 text-xs font-sans text-slate-200 line-clamp-2 italic bg-slate-950/50 p-2.5 rounded border border-slate-800/80">
+                              &ldquo;{verdict.headline}&rdquo;
+                            </p>
+
+                            {/* Pris & Timing vs. Vurdering */}
+                            <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-1.5 text-xs font-mono">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-slate-400">Insider:</span>
+                                <span className="text-slate-200 font-bold">{currSym}{tx.pricePerShare}</span>
+                                <span className="text-slate-500">•</span>
+                                <span className="text-slate-400">Nu:</span>
+                                <span className="text-cyan-300 font-bold">{currSym}{currentPrice}</span>
+                                {isDiscount ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-950/90 border border-emerald-600/70 text-emerald-300 font-bold text-[10px]">
+                                    💎 {Math.abs(returnPct).toFixed(1)}% under insider
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded bg-cyan-950/60 border border-cyan-800 text-cyan-300 text-[10px]">
+                                    +{returnPct.toFixed(1)}% siden køb
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-400">
+                                Vurderet: <span className="text-slate-300">{evalDateStr}</span>
+                              </div>
+                            </div>
+
+                            {/* Konkret Handels-Opskrift */}
+                            <div className="mt-2.5">
+                              {plan.status === 'ACTIVE_PLAN' ? (
+                                <div className="p-2.5 rounded bg-cyan-950/30 border border-cyan-800/50 text-[11px] font-mono text-slate-200 leading-snug">
+                                  <div className="text-[9px] uppercase tracking-wider text-cyan-400 font-bold mb-1 flex items-center gap-1">
+                                    <Scale className="w-3 h-3" />
+                                    <span>Konkret Handels-Opskrift</span>
+                                  </div>
+                                  <div>
+                                    Forslag ({plan.recommendedAllocationDkk.toLocaleString('da-DK')} kr.): Køb{' '}
+                                    <span className="font-bold text-white">{plan.totalShares} stk.</span> @ ~{currSym}{currentPrice} • Stop-Loss:{' '}
+                                    <span className="text-rose-300 font-bold">{currSym}{plan.stopLossPrice}</span> ({plan.stopLossRiskPct}%) • Target:{' '}
+                                    <span className="text-emerald-300 font-bold">{currSym}{plan.targetPrice1}</span> (+{plan.targetReturnPct1}%) • R/R 1:{plan.riskRewardRatio}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="p-2 rounded bg-slate-950/40 border border-slate-800 text-[11px] font-mono text-slate-400">
+                                  🛡️ Kapitalbeskyttelse: Rådet fraråder kapitalallokering.
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* 3 Hurtige Knapper på Kortet */}
+                          <div className="mt-3.5 pt-2.5 border-t border-slate-800/80 grid grid-cols-3 gap-1.5 font-mono text-[11px]">
+                            {/* 1. Åbn Fuld Analyse */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTx(tx);
+                                setActiveVerdict(verdict);
+                                const chamberEl = document.getElementById('council-chamber');
+                                if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
+                              }}
+                              className="px-2 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center justify-center gap-1 text-center font-medium transition-colors"
+                              title="Åbn fuld rådsanalyse, specialist-rapporter og memo"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                              <span className="truncate">📖 Analyse</span>
+                            </button>
+
+                            {/* 2. Gen-vurder i Rådet */}
+                            <button
+                              type="button"
+                              onClick={() => handleConveneCouncil(tx, true)}
+                              disabled={isCardEvaluating}
+                              className="px-2 py-1.5 rounded bg-purple-950/60 hover:bg-purple-900/60 text-purple-200 border border-purple-700 flex items-center justify-center gap-1 text-center font-medium transition-colors disabled:opacity-50"
+                              title="Hent frisk live-kurs og 14d ATR og kør gen-vurdering i Rådet"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 text-purple-300 shrink-0 ${isCardEvaluating ? 'animate-spin' : ''}`} />
+                              <span className="truncate">{isCardEvaluating ? 'Kører...' : '🔄 Gen-vurder'}</span>
+                            </button>
+
+                            {/* 3. Åbn Paper-Trade */}
+                            {isInPortfolio ? (
+                              <div className="px-2 py-1.5 rounded bg-emerald-950/90 border border-emerald-600 text-emerald-300 flex items-center justify-center gap-1 text-center font-bold text-[10px]">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                <span className="truncate">✅ I Portefølje</span>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenPaperTrade(tx, plan, verdict.asymmetryScore)}
+                                disabled={portfolioLoading || plan.status !== 'ACTIVE_PLAN'}
+                                className="px-2 py-1.5 rounded bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-600 hover:to-teal-600 text-white font-bold flex items-center justify-center gap-1 text-center transition-all disabled:opacity-40"
+                                title="Åbn paper-trade position med den foreslåede opskrift"
+                              >
+                                <Play className="w-3.5 h-3.5 text-emerald-200 shrink-0" />
+                                <span className="truncate">📌 Paper-Trade</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Radar-tabel container */}
+            <div className="border border-slate-800 rounded bg-slate-900/40 overflow-hidden">
             {/* Quick-Filter Chips Bar */}
             <div className="flex flex-wrap items-center justify-between gap-2.5 px-4 py-2.5 bg-slate-900/80 border-b border-slate-800 text-xs font-mono">
               <div className="flex flex-wrap items-center gap-2">
@@ -1340,8 +1732,15 @@ ${verdict.judgeThinking}
                   </button>
                 </div>
               </div>
-              <div className="text-[11px] text-slate-400">
-                Viser <span className="text-cyan-300 font-bold">{filteredItems.length}</span> handler
+              <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                {selectedRowIds.length > 0 && (
+                  <span className="text-cyan-300 font-bold px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800">
+                    {selectedRowIds.length} valgt til Rådet
+                  </span>
+                )}
+                <span>
+                  Viser <span className="text-cyan-300 font-bold">{filteredItems.length}</span> handler
+                </span>
               </div>
             </div>
 
@@ -1349,6 +1748,24 @@ ${verdict.judgeThinking}
               <table className="w-full text-left border-collapse text-xs font-mono">
                 <thead>
                   <tr className="bg-slate-900/80 border-b border-slate-800 text-slate-400 text-[11px]">
+                    <th className="py-3 px-3 text-center w-10">
+                      <input
+                        type="checkbox"
+                        checked={
+                          filteredItems.length > 0 &&
+                          filteredItems.every((item) => selectedRowIds.includes(item.transaction.id))
+                        }
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedRowIds(filteredItems.map((i) => i.transaction.id));
+                          } else {
+                            setSelectedRowIds([]);
+                          }
+                        }}
+                        className="rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-cyan-500/20 cursor-pointer"
+                        title="Vælg alle viste handler"
+                      />
+                    </th>
                     <th className="py-3 px-3">TICKER / SELSKAB</th>
                     <th className="py-3 px-3">INSIDER & ROLLE</th>
                     <th className="py-3 px-2 text-center">TYPE</th>
@@ -1361,7 +1778,7 @@ ${verdict.judgeThinking}
                 <tbody className="divide-y divide-slate-800/60">
                   {loading ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-400">
+                      <td colSpan={8} className="py-12 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center gap-2">
                           <RefreshCw className="w-5 h-5 animate-spin text-cyan-400" />
                           <span>
@@ -1374,7 +1791,7 @@ ${verdict.judgeThinking}
                     </tr>
                   ) : filteredItems.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-500">
+                      <td colSpan={8} className="py-12 text-center text-slate-500">
                         Ingen transaktioner at vise.
                       </td>
                     </tr>
@@ -1382,11 +1799,13 @@ ${verdict.judgeThinking}
                     filteredItems.map(({ transaction: tx, result: res }) => {
                       const isSelected = selectedTx?.id === tx.id;
                       const saved = verdictHistory[tx.id];
+                      const isCouncilRejected = saved && saved.verdict.asymmetryScore < 60;
                       const isCFOorGC = /cfo|chief financial|general counsel|chief legal/i.test(
                         tx.insiderTitle
                       );
                       const isCosmeticBuy =
                         tx.transactionCode === 'P' && tx.holdingsIncreasePct < 1.0;
+                      const isChecked = selectedRowIds.includes(tx.id);
 
                       return (
                         <tr
@@ -1394,11 +1813,29 @@ ${verdict.judgeThinking}
                           className={`transition-colors ${
                             isSelected
                               ? 'bg-cyan-950/30'
+                              : isCouncilRejected
+                              ? 'bg-rose-950/15 opacity-65 hover:opacity-100'
                               : !res.passedHardFilter
                               ? 'bg-slate-950/60 opacity-60 hover:opacity-100'
                               : 'hover:bg-slate-900/60'
                           }`}
                         >
+                          {/* Multi-Select Checkbox */}
+                          <td className="py-3 px-3 text-center" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedRowIds((prev) => [...prev, tx.id]);
+                                } else {
+                                  setSelectedRowIds((prev) => prev.filter((id) => id !== tx.id));
+                                }
+                              }}
+                              className="rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-cyan-500/20 cursor-pointer"
+                              title={isChecked ? 'Fravælg række' : 'Vælg til Råds-kø'}
+                            />
+                          </td>
                           {/* Ticker & Company */}
                           <td className="py-3 px-3 font-semibold">
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1744,19 +2181,22 @@ ${verdict.judgeThinking}
                                     Score: {res.geminiPreScore}/100
                                   </span>
 
-                                  {/* Badge hvis der allerede findes en afsagt dom */}
+                                  {/* Badge hvis der allerede findes en afsagt dom - Ultra-tydelig farvekodning */}
                                   {saved && (
                                     <span
                                       className={`px-2 py-0.5 rounded text-[10px] font-bold border flex items-center gap-1 ${
-                                        saved.verdict.verdict === 'STRONG ASYMMETRY (KØB)'
-                                          ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
-                                          : saved.verdict.verdict === 'MODERATE SIGNAL (OVERVÅG)'
+                                        saved.verdict.asymmetryScore >= 75
+                                          ? 'bg-emerald-950 border-emerald-500 text-emerald-300 shadow-sm shadow-emerald-950'
+                                          : saved.verdict.asymmetryScore >= 60
                                           ? 'bg-amber-950 border-amber-600 text-amber-300'
-                                          : 'bg-rose-950 border-rose-600 text-rose-300'
+                                          : 'bg-rose-950 border-rose-700 text-rose-300'
                                       }`}
                                     >
-                                      <Scale className="w-2.5 h-2.5" />
-                                      CIO: {saved.verdict.asymmetryScore}/100
+                                      {saved.verdict.asymmetryScore >= 75
+                                        ? `🟢 ANBEFALET KØB (${saved.verdict.asymmetryScore}/100)`
+                                        : saved.verdict.asymmetryScore >= 60
+                                        ? `🟡 AFVENT / OVERVÅG (${saved.verdict.asymmetryScore}/100)`
+                                        : `🔴 AFVIST (${saved.verdict.asymmetryScore}/100)`}
                                     </span>
                                   )}
                                 </div>
@@ -1772,37 +2212,74 @@ ${verdict.judgeThinking}
                             )}
                           </td>
 
-                          {/* Action Button */}
+                          {/* Action Buttons */}
                           <td className="py-3 px-3 text-right">
                             {res.passedHardFilter ? (
-                              <button
-                                onClick={() => handleConveneCouncil(tx)}
-                                disabled={councilLoading && isSelected}
-                                className={`px-3 py-1.5 rounded text-xs font-mono font-medium transition-all flex items-center gap-1.5 ml-auto ${
-                                  saved
-                                    ? 'bg-cyan-950/80 border border-cyan-500/60 text-cyan-300 hover:bg-cyan-900'
-                                    : isSelected
-                                    ? 'bg-cyan-500 text-slate-950 shadow-lg shadow-cyan-500/20'
-                                    : 'bg-slate-800 hover:bg-cyan-950/80 hover:text-cyan-300 border border-slate-700 text-slate-200'
-                                }`}
-                              >
-                                {councilLoading && isSelected ? (
+                              <div className="flex items-center justify-end gap-1.5">
+                                {saved ? (
                                   <>
-                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                    <span>Rådet tænker...</span>
-                                  </>
-                                ) : saved ? (
-                                  <>
-                                    <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />
-                                    <span>Vis Rådsdom</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedTx(tx);
+                                        setActiveVerdict(saved.verdict);
+                                        const chamberEl = document.getElementById('council-chamber');
+                                        if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
+                                      }}
+                                      className={`px-2.5 py-1.5 rounded text-xs font-mono font-bold transition-all flex items-center gap-1 border ${
+                                        saved.verdict.asymmetryScore >= 75
+                                          ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 hover:bg-emerald-900 shadow-sm shadow-emerald-950'
+                                          : saved.verdict.asymmetryScore >= 60
+                                          ? 'bg-amber-950/80 border-amber-600 text-amber-300 hover:bg-amber-900'
+                                          : 'bg-rose-950/80 border-rose-700 text-rose-300 hover:bg-rose-900'
+                                      }`}
+                                      title="Åbn afsagt rådsdom i The Council Chamber"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                      <span>Vis Dom ({saved.verdict.asymmetryScore}/100)</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleConveneCouncil(tx, true)}
+                                      disabled={councilLoading && isSelected}
+                                      className="p-1.5 rounded bg-slate-800 hover:bg-purple-950/80 hover:border-purple-600 border border-slate-700 text-slate-300 hover:text-purple-200 transition-all disabled:opacity-50"
+                                      title="Gen-vurder aktien i Rådet med frisk live kurs og ATR"
+                                    >
+                                      <RefreshCw
+                                        className={`w-3.5 h-3.5 ${
+                                          councilLoading && isSelected
+                                            ? 'animate-spin text-purple-400'
+                                            : 'text-slate-400'
+                                        }`}
+                                      />
+                                    </button>
                                   </>
                                 ) : (
-                                  <>
-                                    <Scale className="w-3.5 h-3.5" />
-                                    <span>Saml Rådet</span>
-                                  </>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleConveneCouncil(tx, false)}
+                                    disabled={councilLoading && isSelected}
+                                    className={`px-3 py-1.5 rounded text-xs font-mono font-medium transition-all flex items-center gap-1.5 ${
+                                      isSelected
+                                        ? 'bg-cyan-500 text-slate-950 shadow-lg shadow-cyan-500/20 font-bold'
+                                        : 'bg-slate-800 hover:bg-cyan-950/80 hover:text-cyan-300 border border-slate-700 text-slate-200'
+                                    }`}
+                                  >
+                                    {councilLoading && isSelected ? (
+                                      <>
+                                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                        <span>Rådet tænker...</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Scale className="w-3.5 h-3.5 text-cyan-400" />
+                                        <span>Saml Rådet</span>
+                                      </>
+                                    )}
+                                  </button>
                                 )}
-                              </button>
+                              </div>
                             ) : (
                               <span className="text-[11px] text-slate-600 font-mono">Afvist</span>
                             )}
@@ -1815,6 +2292,7 @@ ${verdict.judgeThinking}
               </table>
             </div>
           </div>
+        </div>
         )}
 
         {/* TAB 2: WATCHLIST / GEMTE DOMME */}
@@ -2613,6 +3091,20 @@ ${verdict.judgeThinking}
                 </button>
               </div>
 
+              {/* Gen-evaluér med nyeste kurs & data knap */}
+              {selectedTx && (
+                <button
+                  type="button"
+                  onClick={() => handleConveneCouncil(selectedTx, true)}
+                  disabled={councilLoading}
+                  className="px-3.5 py-1.5 rounded bg-gradient-to-r from-purple-900 to-indigo-900 hover:from-purple-800 hover:to-indigo-800 border border-purple-500/80 text-purple-200 hover:text-white font-mono text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-purple-950 disabled:opacity-50"
+                  title="Hent spritnye live markedskurser og 14d ATR og kør en frisk rådsdom med det samme"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-cyan-300 ${councilLoading ? 'animate-spin' : ''}`} />
+                  <span>🔄 Gen-evaluér med nyeste kurs & data</span>
+                </button>
+              )}
+
               {activeVerdict && (
                 <button
                   onClick={() => {
@@ -2705,12 +3197,21 @@ ${verdict.judgeThinking}
 
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
                   <div>
-                    <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-slate-400">
                       <span>CHIEF INVESTMENT OFFICER (THE JUDGE)</span>
                       <span>•</span>
                       <span className="text-cyan-400 font-bold">
                         {selectedTx.ticker} ({selectedTx.insiderName}, {selectedTx.insiderTitle})
                       </span>
+                      {(activeVerdict.evaluatedAt || activeVerdict.timestamp) && (
+                        <>
+                          <span>•</span>
+                          <span className="text-slate-300">
+                            Vurderet: {formatDateTimeDk(activeVerdict.evaluatedAt || activeVerdict.timestamp)}
+                            {activeVerdict.priceAtEvaluation ? ` @ $${activeVerdict.priceAtEvaluation}` : ''}
+                          </span>
+                        </>
+                      )}
                     </div>
                     <h3 className="text-lg font-bold text-slate-100 mt-1 font-sans">
                       {activeVerdict.headline}
@@ -2786,8 +3287,14 @@ ${verdict.judgeThinking}
                   <div className="flex items-center gap-4">
                     <div className="text-right">
                       <div className="text-[10px] font-mono text-slate-400">ASYMMETRY SCORE</div>
-                      <div className="text-3xl font-mono font-bold text-slate-100">
-                        {activeVerdict.asymmetryScore}
+                      <div className="text-3xl font-mono font-bold text-slate-100 flex items-baseline justify-end gap-1">
+                        {activeVerdict.previousScore !== undefined &&
+                          activeVerdict.previousScore !== activeVerdict.asymmetryScore && (
+                            <span className="text-sm font-normal text-slate-400">
+                              {activeVerdict.previousScore} →
+                            </span>
+                          )}
+                        <span>{activeVerdict.asymmetryScore}</span>
                         <span className="text-xs text-slate-500 font-normal">/100</span>
                       </div>
                     </div>

@@ -210,4 +210,7 @@ export interface CouncilVerdict {
   timestamp: string;
   judgeThinking?: string;
   modelsUsed?: CouncilModelsUsed;
+  evaluatedAt?: string; // ISO tidsstempel for hvornår Rådet afsagde dommen
+  priceAtEvaluation?: number; // aktiens markedskurs da dommen blev afsagt
+  previousScore?: number; // hvis aktien bliver gen-vurderet, gem den forrige asymmetryScore så vi kan vise udviklingen, f.eks. 81 -> 85
 }

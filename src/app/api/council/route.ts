@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { conveneCouncil } from '@/lib/claude-council';
 import { fetchSecForm4Footnotes } from '@/lib/sec-scanner';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
+import { fetchVerifiedLiveQuote } from '@/lib/live-quote';
 import { fetchInsiderTrackRecord } from '@/lib/track-record';
 import { fetchCompanyFundamentals } from '@/lib/fundamentals';
 import { getSavedVerdicts, saveVerdict, deleteVerdict } from '@/lib/db';
@@ -55,6 +56,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const tx = body.transaction as InsiderTransaction | undefined;
     const judgeTier = (body.judgeTier === 'sonnet' ? 'sonnet' : 'opus') as 'opus' | 'sonnet';
+    const forceRefresh = Boolean(body.forceRefresh);
 
     if (!tx || !tx.ticker || !tx.insiderName) {
       return NextResponse.json(
@@ -63,9 +65,41 @@ export async function POST(request: Request) {
       );
     }
 
-    // Sikr at transaktionen har opdaterede markedsdata (aktuel kurs, discount, 30d kursændring)
-    if (tx.currentMarketPrice === undefined || tx.recentPriceChange30dPct === undefined) {
+    // Tjek om der findes en tidligere afsagt dom for at gemme previousScore ved gen-vurdering
+    let previousScore: number | undefined;
+    try {
+      const existingVerdicts = await getSavedVerdicts();
+      const existingItem =
+        existingVerdicts[tx.id] ||
+        Object.values(existingVerdicts).find(
+          (v) => v.transaction.ticker.toUpperCase() === tx.ticker.toUpperCase()
+        );
+      if (existingItem?.verdict?.asymmetryScore) {
+        previousScore = existingItem.verdict.asymmetryScore;
+      }
+    } catch (dbReadErr) {
+      console.warn('Kunne ikke læse eksisterende domme for previousScore:', dbReadErr);
+    }
+
+    // Ved forceRefresh eller manglende markedsdata: Hent spritnye live-kurser, ATR og teknisk kontekst
+    if (forceRefresh || tx.currentMarketPrice === undefined || tx.recentPriceChange30dPct === undefined) {
       await enrichTransactionWithMarketData(tx);
+
+      try {
+        const liveQuote = await fetchVerifiedLiveQuote(tx.ticker);
+        if (liveQuote && typeof liveQuote.price === 'number' && liveQuote.price > 0) {
+          tx.currentMarketPrice = liveQuote.price;
+          if (tx.pricePerShare > 0 && tx.transactionCode === 'P') {
+            const diffPct = Number(
+              (((liveQuote.price - tx.pricePerShare) / tx.pricePerShare) * 100).toFixed(2)
+            );
+            tx.returnSinceBuyPct = diffPct;
+            tx.isTradingBelowInsiderPrice = liveQuote.price < tx.pricePerShare;
+          }
+        }
+      } catch (liveQuoteErr) {
+        console.warn('Kunne ikke hente frisk dual-feed live quote for', tx.ticker, liveQuoteErr);
+      }
     }
 
     // Parallel hentning af Form 4 fodnoter, insider track record og fundamentale nøgletal / SEC balance
@@ -132,12 +166,19 @@ export async function POST(request: Request) {
 
     const verdict = await conveneCouncil(tx, judgeTier);
 
-    // Gem automatisk dommen i server-databasen data/insiderops-db.json
+    const nowIso = new Date().toISOString();
+    verdict.evaluatedAt = nowIso;
+    verdict.priceAtEvaluation = tx.currentMarketPrice || tx.pricePerShare;
+    if (typeof previousScore === 'number') {
+      verdict.previousScore = previousScore;
+    }
+
+    // Gem automatisk dommen i server-databasen data/insiderops-db.json (overskriver tidligere dom)
     try {
       await saveVerdict({
         transaction: tx,
         verdict,
-        savedAt: new Date().toISOString(),
+        savedAt: nowIso,
       });
     } catch (dbErr) {
       console.warn('Kunne ikke gemme dom i server-databasen:', dbErr);
