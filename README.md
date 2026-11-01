@@ -13,6 +13,23 @@ Systemet filtrerer automatisk markedsstøj (optioner, gaver, skatteafregninger, 
 
 ---
 
+## 🚀 Hvad er nyt i InsiderOps v2.0 Quant Terminal?
+
+InsiderOps v2.0 udvider platformen fra ren Form 4 scanning til en komplet institutionel kvantitativ investerings- og porteføljeterminal:
+
+- **Unified Global Omni-Scanner**: Parallel, realtids-scanning af både amerikanske SEC Form 4 filings (Atom Feed & EFTS API) og nordiske Nasdaq Europe MAR Art. 19 indberetninger (København, Stockholm, Helsinki) med automatisk valutanormalisering (USD, DKK, SEK, EUR).
+- **SEC XBRL Balance Sheet & Cash Runway Engine (`src/lib/fundamentals.ts`)**: Direkte integration med det officielle SEC EDGAR XBRL Company Facts API (`data.sec.gov`). Udtrækker 10-Q/10-K regnskabstal (kontantbeholdning, rentebærende gæld, nettokontanter og kvartalsvis cash burn) og beregner præcis **Cash Runway** i måneder, så emissionstruede selskaber afsløres øjeblikkeligt.
+- **Short-Squeeze & Earnings Guard**: Realtime monitorering af **Short Interest** (% of Float), **Days to Cover** og næste regnskabsdato med automatisk helbredsklassificering (`FORTRESS_BALANCE`, `SOLID_RUNWAY`, `SHORT_SQUEEZE_SETUP`, `DILUTION_RISK`, `NEUTRAL`).
+- **S&P 500 (`SPY`) Alpha Benchmarking**: Hver porteføljeposition benchmarks live mod S&P 500 (`SPY`) fra åbningstidspunktet og viser netto Alpha (+/- %) på positions- og porteføljeniveau.
+- **Inline Nordnet Trade Editor (`PATCH /api/portfolio`)**: 1-kliks redigering af faktiske købskurser, kurtage/antal aktier og stop-loss/target, samt lynhurtig skift mellem `🧪 PAPER-TRADE` og `🏦 NORDNET LIVE HANDEL`.
+- **Insider-Exit Radar (`checkInsiderExitRadar`)**: Kontinuerlig overvågning af åbne positioner mod efterfølgende insider-salg (`Kode S`), der proaktivt advarer brugeren, hvis insidere tager gevinst eller flygter.
+- **Smart Sniper Filter-Presets**: Hurtige 1-klik presets i radaren:
+  - `💎 Under Insider Pris (Rabat-Zone)`: Viser godkendte, DK-handelbare aktier, hvor aktuel børskurs er under insiderens købskurs.
+  - `🔥 C-Suite + Cluster Conviction`: Isolerer tunge CEO/CFO handler eller handler med $\ge 2$ samtidige insidere over \$100.000.
+- **1-Klik Desktop Launcher (`Start-InsiderOps.bat`)**: Start hele terminalen og Turbopack-serveren med ét enkelt dobbeltklik fra skrivebordet med automatisk browser-start på `http://localhost:3000`.
+
+---
+
 ## 🏛️ Den 6-Trins Asymmetri-Tragt (Systemarkitektur)
 
 InsiderOps anvender en streng 6-trins tragtarkitektur, der garanterer, at kun de absolut mest overbevisende handler når frem til kapitalallokering:
@@ -179,7 +196,8 @@ ANTHROPIC_SONNET_MODEL=claude-3-5-sonnet-latest
 ANTHROPIC_OPUS_MODEL=claude-3-opus-latest
 ```
 
-### 4. Start Udviklingsserveren
+### 4. Start Udviklingsserveren (1-Klik Launcher eller CLI)
+Start enten direkte med ét dobbeltklik på `Start-InsiderOps.bat` på skrivebordet/i projektmappen (åbner automatisk browser og dev-server), eller kør via terminalen:
 ```bash
 npm run dev
 ```
@@ -197,20 +215,23 @@ npm run start
 
 ```
 InsiderOps/
+├── Start-InsiderOps.bat            # 1-Klik Windows launcher til terminal & dev server
 ├── data/
 │   └── insiderops-db.json          # Persistent serverside database (domme, historik, paper portfolio)
 ├── src/
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── council/route.ts    # POST: Saml rådet / GET: Hent domme / DELETE
-│   │   │   ├── portfolio/route.ts  # GET: Live P&L refresh / POST: Åbn trade / DELETE
+│   │   │   ├── portfolio/route.ts  # GET: Live P&L refresh / POST: Åbn trade / PATCH: Edit / DELETE
 │   │   │   └── scan/route.ts       # Multi-source Form 4 og MAR scanner endpoint
 │   │   ├── layout.tsx              # Root HTML & font wrapper
 │   │   └── page.tsx                # Hoved-dashboard (Radar, Watchlist, Paper Portfolio, Council)
 │   ├── lib/
 │   │   ├── claude-council.ts       # 4-agent Council orkestrering med Claude 5.5
 │   │   ├── db.ts                   # Atomisk filbaseret JSON-database engine
+│   │   ├── fundamentals.ts         # SEC XBRL Company Facts, Runway Engine & Short Interest
 │   │   ├── gemini-gatekeeper.ts    # Gemini 3 Flash batch evaluering & pre-score
+│   │   ├── live-quote.ts           # Verificerede realtime kurser & SPY Alpha benchmark
 │   │   ├── market-enricher.ts      # Yahoo Finance kurser, 14d ATR, volumen og DK tradability
 │   │   ├── nordic-scanner.ts       # Nasdaq Europe MAR art. 19 scraper & XML parser
 │   │   ├── sec-scanner.ts          # SEC EDGAR Atom & EFTS API, C-Suite hunter, footnotes parser

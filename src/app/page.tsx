@@ -109,7 +109,9 @@ function getRegionBadge(
 export default function Dashboard() {
   const [source, setSource] = useState<'unified' | 'csuite' | 'live' | 'nordic' | 'mock'>('unified');
   const [regionFilter, setRegionFilter] = useState<'all' | 'us' | 'nordic'>('all');
-  const [quickFilter, setQuickFilter] = useState<'all' | 'csuite' | 'cluster_discount'>('all');
+  const [quickFilter, setQuickFilter] = useState<
+    'all' | 'csuite' | 'cluster_discount' | 'below_insider' | 'csuite_cluster'
+  >('all');
   const [searchTicker, setSearchTicker] = useState<string>('');
   const [activeTickerQuery, setActiveTickerQuery] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'radar' | 'watchlist' | 'portfolio'>('radar');
@@ -333,7 +335,7 @@ ${verdict.judgeThinking}
     : ''
 }
 ---
-*Genereret af InsiderOps Terminal v1.2-RADAR med Claude 5.5 & Gemini Flash.*
+*Genereret af InsiderOps Terminal v2.0-QUANT med Claude 5.5 & Gemini Flash.*
 `;
   };
 
@@ -900,12 +902,38 @@ ${verdict.judgeThinking}
         i.transaction.isClusterBuy || i.transaction.isTradingBelowInsiderPrice
       );
     }
+    if (quickFilter === 'below_insider') {
+      return (
+        i.result.passedHardFilter &&
+        i.transaction.isTradableInDK !== false &&
+        (i.transaction.returnSinceBuyPct ?? 0) <= 0.5
+      );
+    }
+    if (quickFilter === 'csuite_cluster') {
+      return (
+        i.result.passedHardFilter &&
+        (i.transaction.isExecutiveOfficer === true || (i.transaction.clusterCount ?? 1) >= 2) &&
+        (i.transaction.totalValueUsd ?? 0) >= 100000
+      );
+    }
     return true;
   });
 
   const cSuiteCount = baseFiltered.filter((i) => i.transaction.isExecutiveOfficer === true).length;
   const clusterDiscountCount = baseFiltered.filter((i) =>
     Boolean(i.transaction.isClusterBuy || i.transaction.isTradingBelowInsiderPrice)
+  ).length;
+  const belowInsiderCount = baseFiltered.filter(
+    (i) =>
+      i.result.passedHardFilter &&
+      i.transaction.isTradableInDK !== false &&
+      (i.transaction.returnSinceBuyPct ?? 0) <= 0.5
+  ).length;
+  const csuiteClusterCount = baseFiltered.filter(
+    (i) =>
+      i.result.passedHardFilter &&
+      (i.transaction.isExecutiveOfficer === true || (i.transaction.clusterCount ?? 1) >= 2) &&
+      (i.transaction.totalValueUsd ?? 0) >= 100000
   ).length;
 
   const usCount = baseFiltered.filter((i) => !isNordicTx(i.transaction)).length;
@@ -926,7 +954,7 @@ ${verdict.judgeThinking}
                   INSIDER<span className="text-cyan-400">//</span>OPS
                 </h1>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                  v1.2-RADAR
+                  v2.0-QUANT
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-mono tracking-tight">
@@ -1239,6 +1267,32 @@ ${verdict.judgeThinking}
                   <span>🔥 Kun Cluster Buys & Rabat-Cases</span>
                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-amber-300">
                     {clusterDiscountCount}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setQuickFilter('below_insider')}
+                  className={`px-3 py-1 rounded transition-colors flex items-center gap-1.5 ${
+                    quickFilter === 'below_insider'
+                      ? 'bg-blue-500/20 text-blue-300 font-bold border border-blue-500/40 shadow-sm shadow-blue-950'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  <span>💎 Under Insider Pris (Rabat-Zone)</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-blue-300">
+                    {belowInsiderCount}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setQuickFilter('csuite_cluster')}
+                  className={`px-3 py-1 rounded transition-colors flex items-center gap-1.5 ${
+                    quickFilter === 'csuite_cluster'
+                      ? 'bg-purple-500/20 text-purple-300 font-bold border border-purple-500/40 shadow-sm shadow-purple-950'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  <span>🔥 C-Suite + Cluster Conviction</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-purple-300">
+                    {csuiteClusterCount}
                   </span>
                 </button>
 
