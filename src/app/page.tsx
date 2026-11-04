@@ -48,6 +48,7 @@ import {
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
 import { collectRejected, isModelScore, runwayLabel, TONE_CLASS } from '@/lib/ui-labels';
 import { RejectedNoisePanel } from '@/components/RejectedNoisePanel';
+import { MeasurementTab } from '@/components/MeasurementTab';
 import { latestValidatedVerdict } from '@/lib/verdicts';
 import { PositionVerdict } from '@/components/PositionVerdict';
 import { ClusterBuyers } from '@/components/ClusterBuyers';
@@ -165,7 +166,7 @@ export default function Dashboard() {
   >('all');
   const [searchTicker, setSearchTicker] = useState<string>('');
   const [activeTickerQuery, setActiveTickerQuery] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'radar' | 'watchlist' | 'portfolio'>('radar');
+  const [activeTab, setActiveTab] = useState<'radar' | 'watchlist' | 'portfolio' | 'maaling'>('radar');
 
   const [showRejected, setShowRejected] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
@@ -1425,6 +1426,17 @@ ${verdict.judgeThinking}
                 {Object.keys(paperPortfolio).length}
               </span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('maaling')}
+              className={`px-4 py-2 font-mono text-xs font-bold tracking-wider border-b-2 transition-colors flex items-center gap-2 ${
+                activeTab === 'maaling'
+                  ? 'border-cyan-400 text-cyan-300 bg-slate-900/40'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <span>📏 MÅLING</span>
+            </button>
           </div>
 
           {activeTab === 'radar' && (
@@ -2674,6 +2686,9 @@ ${verdict.judgeThinking}
             )}
           </div>
         )}
+
+        {/* TAB 4: MÅLING (signal-ledger, fase 3) */}
+        {activeTab === 'maaling' && <MeasurementTab />}
 
         {/* TAB 3: PAPER PORTEFØLJE & LIVE P&L */}
         {activeTab === 'portfolio' && (
