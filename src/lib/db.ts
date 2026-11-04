@@ -54,7 +54,11 @@ function ensureDbFile(): void {
 
 const MOCK_TICKERS = ['MTLR', 'PLXR', 'PLAN'];
 
-function isMockEntity(id: string, ticker?: string, entryPrice?: number): boolean {
+/**
+ * Afgør om en post betragtes som mock og derfor slettes af getDatabase().
+ * Eksporteret, så scripts/inspect-verdicts.ts og tests bruger præcis samme regel som appen.
+ */
+export function isMockEntity(id: string, ticker?: string, entryPrice?: number): boolean {
   if (!id) return false;
   if (id === 'pos-rapp-cfo') return true;
   if (id.startsWith('mock-')) return true;
