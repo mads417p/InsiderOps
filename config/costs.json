@@ -1,0 +1,20 @@
+{
+  "TODO": "Pladsholdere (konservative skøn). Ret kurtage, FX-spread og handelsstørrelse til dine egne Nordnet-satser, og slet så denne linje.",
+  "version": 1,
+  "note": "Handelsomkostninger for en dansk detailinvestor. Bruges af appen (src/lib/costs.ts) og research/ (fase 4). Alle pct-felter er i procent (0.25 = 0,25 %). Kurtage og FX-spread gælder pr. handel (én vej); spread/slippage er for hele round-trip'en.",
+  "assumedTradeSizeDkk": 20000,
+  "brokerage": {
+    "US": { "minDkk": 39, "pct": 0.15 },
+    "CPH": { "minDkk": 29, "pct": 0.1 },
+    "STO": { "minDkk": 29, "pct": 0.1 },
+    "HEL": { "minDkk": 29, "pct": 0.1 },
+    "OSL": { "minDkk": 29, "pct": 0.1 }
+  },
+  "fxSpreadPct": 0.25,
+  "roundTripSpreadSlippagePctByLiquidity": [
+    { "minAvgDailyUsd": 50000000, "pct": 0.1 },
+    { "minAvgDailyUsd": 5000000, "pct": 0.3 },
+    { "minAvgDailyUsd": 1000000, "pct": 0.6 },
+    { "minAvgDailyUsd": 0, "pct": 1.2 }
+  ]
+}
