@@ -7,6 +7,7 @@ export interface InsiderTransaction {
   accessionNo?: string; // SEC accession-nummer (18 cifre) – dedup-nøgle sammen med ownerCik
   ownerCik?: string; // reporting owner CIK (uden foranstillede nuller)
   ticker: string;
+  isin?: string; // nordiske meddelelser (MAR art. 19); SEC-rækker har intet ISIN
   companyName: string;
   insiderName: string;
   insiderTitle: string; // f.eks. "CFO", "CEO", "General Counsel", "Director", "10% Owner"
@@ -24,6 +25,7 @@ export interface InsiderTransaction {
   secFilingUrl: string;
   contextNotes?: string;
   currentMarketPrice?: number; // aktuel markedspris fra Yahoo Finance
+  currentMarketPriceTime?: string; // Yahoo meta.regularMarketTime (UTC ISO) for currentMarketPrice
   returnSinceBuyPct?: number; // % ændring fra insiderens købspris til aktuel markedspris
   isTradingBelowInsiderPrice?: boolean; // true hvis aktuel kurs < insiderens købspris (kode P)
   ownershipNature?: 'D' | 'I'; // 'D' = Direct (personlige aktier), 'I' = Indirect (fond/LLC/trust). undefined = ukendt
