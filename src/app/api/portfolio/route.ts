@@ -141,6 +141,7 @@ export async function POST(request: Request) {
       insiderName: body.insiderName || 'ukendt',
       insiderTitle: body.insiderTitle || 'ukendt',
       asymmetryScore: body.asymmetryScore,
+      openedScore: body.asymmetryScore, // kun her; PATCH-skemaet er strict og kender ikke feltet
       openedAt: new Date().toISOString(),
       insiderBuyPrice,
       entryPrice,

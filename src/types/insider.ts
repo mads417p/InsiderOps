@@ -137,6 +137,7 @@ export interface PaperTradePosition {
   insiderName: string;
   insiderTitle: string;
   asymmetryScore: number;
+  openedScore?: number; // rådets score ved åbning – sættes én gang server-side og overskrives aldrig
   openedAt: string;
   insiderBuyPrice: number;
   entryPrice: number;

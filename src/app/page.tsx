@@ -46,6 +46,8 @@ import {
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
 import { isModelScore } from '@/lib/ui-labels';
+import { latestValidatedVerdict } from '@/lib/verdicts';
+import { PositionVerdict } from '@/components/PositionVerdict';
 import { currencyForTicker, type LiveFxRates } from '@/lib/live-quote';
 import { formatCompactUsd } from '@/lib/fundamentals';
 
@@ -2821,8 +2823,12 @@ ${verdict.judgeThinking}
                             {pos.exchange}
                           </span>
                           <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950 border border-cyan-800 text-cyan-300">
-                            Score: {pos.asymmetryScore}/100
+                            Score ved åbning: {pos.openedScore ?? pos.asymmetryScore}/100
                           </span>
+                          <PositionVerdict
+                            openedScore={pos.openedScore ?? pos.asymmetryScore}
+                            latest={latestValidatedVerdict(verdictHistory, pos.ticker)}
+                          />
                         </div>
 
                         <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
