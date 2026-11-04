@@ -99,6 +99,14 @@ describe('cluster og dedup (audit 1.6)', () => {
     expect(pickLead([dir, buy({ insiderName: 'Mini', totalValueUsd: 70_000 })]).insiderName).toBe('Big Director');
   });
 
+  it('lead vælges i det nyeste vindue – et ældre større køb fortrænger ikke den aktuelle runde', () => {
+    const [lead] = rollUpByTicker([
+      buy({ insiderName: 'Myers Franklin', insiderTitle: 'CEO', isExecutiveOfficer: true, tradeDate: '2026-08-11', totalValueUsd: 1_279_500 }),
+      buy({ insiderName: 'Myers Franklin', insiderTitle: 'CEO', isExecutiveOfficer: true, tradeDate: '2026-10-28', totalValueUsd: 1_108_000 }),
+    ]);
+    expect(lead.tradeDate).toBe('2026-10-28');
+  });
+
   it('rækker uden handelsdato afvises med årsag', async () => {
     const { rows, rejected } = await buildScanRows([buy({ tradeDate: undefined })], { enrich: false });
     expect(rows).toHaveLength(0);

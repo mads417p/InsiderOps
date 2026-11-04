@@ -151,6 +151,8 @@ export default function Dashboard() {
   // Rådsfejl vises for brugeren – der findes ingen simuleret eller fallback-dom.
   const [councilError, setCouncilError] = useState<string | null>(null);
   const [items, setItems] = useState<ScanItem[]>([]);
+  // Rækker afvist allerede i scan-pipelinen (kode, beløb, handelbarhed, Norden) – de er ikke i items.
+  const [scanRejectedCount, setScanRejectedCount] = useState<number>(0);
   const [apiKeys, setApiKeys] = useState<{ gemini: boolean; anthropic: boolean }>({
     gemini: false,
     anthropic: false,
@@ -498,6 +500,7 @@ ${verdict.judgeThinking}
         const data: ScanResponse = await res.json().catch(() => ({}) as ScanResponse);
         if (!res.ok) throw new Error(data.error || `HTTP-fejl ${res.status}`);
         setItems(data.items || []);
+        setScanRejectedCount(data.stale ? 0 : data.rejectedCount ?? 0);
         setApiKeys(data.apiKeysConfigured || { gemini: false, anthropic: false });
 
         // Fejl og forældede data vises som det, de er – aldrig som "ingen signaler".
@@ -1248,9 +1251,9 @@ ${verdict.judgeThinking}
               <Filter className="w-3.5 h-3.5 text-rose-400" />
             </div>
             <div className="mt-2 text-2xl font-mono font-bold text-rose-400">
-              {loading ? '-' : hardFilterRejected}
+              {loading ? '-' : hardFilterRejected + scanRejectedCount}
             </div>
-            <div className="text-[11px] text-slate-500 mt-1">0 tokens brugt på støj</div>
+            <div className="text-[11px] text-slate-500 mt-1">0 tokens brugt på støj (afvist før scoring)</div>
           </div>
 
           <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded">

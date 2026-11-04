@@ -219,7 +219,10 @@ export function rollUpByTicker(rows: InsiderTransaction[]): InsiderTransaction[]
 
   const out: InsiderTransaction[] = [];
   for (const group of byTicker.values()) {
-    const leadSrc = pickLead(group);
+    // Lead vælges i det nyeste vindue: et ticker-scan dækker måneder, og et gammelt større køb må ikke
+    // fortrænge den aktuelle runde (DINO: køb fra august blev lead frem for købet i oktober).
+    const newest = Math.max(...group.map((t) => dayIndex(t.tradeDate) ?? -Infinity));
+    const leadSrc = pickLead(group.filter((t) => (dayIndex(t.tradeDate) ?? -Infinity) >= newest - CLUSTER_WINDOW_DAYS));
     const lead: InsiderTransaction = { ...leadSrc };
     const leadDay = dayIndex(lead.tradeDate);
     // ponytail: vinduet centreres om lead-rækken; en klynge > 10 dage fra lead tælles ikke med.
