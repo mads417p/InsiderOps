@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { conveneCouncil } from '@/lib/claude-council';
+import { conveneCouncil, CouncilError } from '@/lib/claude-council';
 import { fetchSecForm4Footnotes } from '@/lib/sec-scanner';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { fetchVerifiedLiveQuote } from '@/lib/live-quote';
@@ -134,8 +134,9 @@ export async function POST(request: Request) {
       );
     }
 
-    // 2. Historisk track record for insideren / ledelsen
-    if (!tx.trackRecord) {
+    // 2. Historisk track record for insideren / ledelsen (hentes igen ved forceRefresh – gemte værdier kan være forældede)
+    if (forceRefresh || !tx.trackRecord) {
+      tx.trackRecord = undefined;
       enrichmentTasks.push(
         (async () => {
           try {
@@ -147,8 +148,9 @@ export async function POST(request: Request) {
       );
     }
 
-    // 3. Fundamentale nøgletal, SEC XBRL balance sheet, cash runway & short interest
-    if (!tx.fundamentals) {
+    // 3. Fundamentale nøgletal, SEC XBRL balance sheet, cash runway & short interest (igen ved forceRefresh)
+    if (forceRefresh || !tx.fundamentals) {
+      tx.fundamentals = undefined;
       enrichmentTasks.push(
         (async () => {
           try {
@@ -164,24 +166,38 @@ export async function POST(request: Request) {
       await Promise.all(enrichmentTasks);
     }
 
-    const verdict = await conveneCouncil(tx, judgeTier);
+    // Fejler rådet, svares der med fejlstatus, og der gemmes intet.
+    let verdict;
+    try {
+      verdict = await conveneCouncil(tx, judgeTier);
+    } catch (councilErr) {
+      if (councilErr instanceof CouncilError) {
+        console.error(`Rådet fejlede for ${tx.ticker} (${councilErr.reason}):`, councilErr.message);
+        return NextResponse.json(
+          { success: false, error: councilErr.message, reason: councilErr.reason },
+          { status: councilErr.reason === 'MISSING_API_KEY' ? 503 : 502 }
+        );
+      }
+      throw councilErr;
+    }
 
     const nowIso = new Date().toISOString();
     verdict.evaluatedAt = nowIso;
+    // ponytail: insiderkurs som fallback for priceAtEvaluation hører til fase 3 (signal-ledger) – uændret her.
     verdict.priceAtEvaluation = tx.currentMarketPrice || tx.pricePerShare;
     if (typeof previousScore === 'number') {
       verdict.previousScore = previousScore;
     }
 
-    // Gem automatisk dommen i server-databasen data/insiderops-db.json (overskriver tidligere dom)
+    // Gem dommen i data/insiderops-db.json (overskriver tidligere dom). Fejler skrivningen, ses det.
     try {
-      await saveVerdict({
-        transaction: tx,
-        verdict,
-        savedAt: nowIso,
-      });
+      await saveVerdict({ transaction: tx, verdict, savedAt: nowIso });
     } catch (dbErr) {
-      console.warn('Kunne ikke gemme dom i server-databasen:', dbErr);
+      console.error('Kunne ikke gemme dom i server-databasen:', dbErr);
+      return NextResponse.json(
+        { success: false, error: `Dommen blev afsagt, men kunne ikke gemmes: ${(dbErr as Error).message}` },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({

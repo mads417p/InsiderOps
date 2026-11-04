@@ -1,7 +1,7 @@
 import { CompanyFundamentals, FundamentalHealthBadge, InsiderTransaction } from '@/types/insider';
 import { getCikForTicker } from '@/lib/sec-scanner';
 
-interface XbrlFactItem {
+export interface XbrlFactItem {
   end: string;
   val: number;
   accn?: string;
@@ -13,7 +13,7 @@ interface XbrlFactItem {
   start?: string;
 }
 
-interface XbrlConcept {
+export interface XbrlConcept {
   label?: string;
   description?: string;
   units?: Record<string, XbrlFactItem[]>;
@@ -41,7 +41,7 @@ const CACHE_TTL_MS = 60 * 60 * 1000; // 1 time
  * Formatér et dollarbeløb kompakt (f.eks. $312M, $1.4B eller $750k).
  */
 export function formatCompactUsd(amount?: number | null): string {
-  if (amount === undefined || amount === null || isNaN(amount)) return '$0';
+  if (amount === undefined || amount === null || isNaN(amount)) return 'mangler data';
   const abs = Math.abs(amount);
   const sign = amount < 0 ? '-' : '';
   if (abs >= 1_000_000_000) {
@@ -99,80 +99,74 @@ function extractConceptItemByDate(
   return filtered[0];
 }
 
-/**
- * Udtrækker samlede kontanter og kortfristede investeringer (Cash & Equivalents).
- */
-function extractCashAndEquivalents(gaap: Record<string, XbrlConcept>): number {
-  const cashCandidates = [
-    'CashAndCashEquivalentsAtCarryingValue',
-    'CashCashEquivalentsAndShortTermInvestments',
-    'MarketableSecuritiesCurrent',
-    'ShortTermInvestments',
-    'Cash',
-    'CashAndCashEquivalentsFairValueOfConsolidatedAndNonconsolidatedEntities',
-  ];
-
-  let latestEnd = '';
-  for (const c of cashCandidates) {
-    const item = extractLatestConceptItem(gaap, c);
-    if (item && item.end > latestEnd) {
-      latestEnd = item.end;
-    }
-  }
-
-  if (!latestEnd) return 0;
-
-  const cash =
-    extractConceptItemByDate(gaap, 'CashAndCashEquivalentsAtCarryingValue', latestEnd)?.val ||
-    extractConceptItemByDate(gaap, 'Cash', latestEnd)?.val ||
-    0;
-
-  const stInvest =
-    extractConceptItemByDate(gaap, 'ShortTermInvestments', latestEnd)?.val ||
-    extractConceptItemByDate(gaap, 'MarketableSecuritiesCurrent', latestEnd)?.val ||
-    0;
-
-  const combined =
-    extractConceptItemByDate(gaap, 'CashCashEquivalentsAndShortTermInvestments', latestEnd)?.val || 0;
-
-  return Math.max(combined, cash + stInvest);
+/** Nyeste balancedato på tværs af tags ('' hvis ingen af dem har 10-Q/10-K-facts). */
+function latestEndOf(gaap: Record<string, XbrlConcept>, tags: string[]): string {
+  return tags.reduce((latest, t) => {
+    const end = extractLatestConceptItem(gaap, t)?.end ?? '';
+    return end > latest ? end : latest;
+  }, '');
 }
 
+const valueAt = (gaap: Record<string, XbrlConcept>, tag: string, end: string) =>
+  extractConceptItemByDate(gaap, tag, end)?.val;
+
+/** Værdierne af de tags, der faktisk har en fact på datoen (manglende tags udelades – de er IKKE 0). */
+const valuesAt = (gaap: Record<string, XbrlConcept>, tags: string[], end: string) =>
+  tags.map((t) => valueAt(gaap, t, end)).filter((v): v is number => v !== undefined);
+
+const CASH_TAGS = [
+  'CashAndCashEquivalentsAtCarryingValue',
+  'Cash',
+  'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents',
+];
+const SHORT_TERM_INVESTMENT_TAGS = ['ShortTermInvestments', 'MarketableSecuritiesCurrent'];
+const CASH_AND_ST_COMBINED = 'CashCashEquivalentsAndShortTermInvestments';
+
 /**
- * Udtrækker samlet kort- og langfristet gæld.
+ * Kontanter + kortfristede investeringer. undefined, hvis selskabet ikke rapporterer cash i XBRL (ukendt ≠ 0).
  */
-function extractTotalDebt(gaap: Record<string, XbrlConcept>): number {
-  const debtCandidates = [
-    'LongTermDebt',
-    'LongTermDebtNoncurrent',
-    'LongTermDebtCurrent',
-    'DebtCurrent',
-    'ShortTermBorrowings',
-    'NotesAndLoansPayable',
-  ];
+export function extractCashAndEquivalents(gaap: Record<string, XbrlConcept>): number | undefined {
+  const latestEnd = latestEndOf(gaap, [...CASH_TAGS, CASH_AND_ST_COMBINED]);
+  if (!latestEnd) return undefined;
 
-  let latestEnd = '';
-  for (const c of debtCandidates) {
-    const item = extractLatestConceptItem(gaap, c);
-    if (item && item.end > latestEnd) {
-      latestEnd = item.end;
-    }
-  }
+  const cash = valuesAt(gaap, CASH_TAGS, latestEnd)[0];
+  const stInvest = valuesAt(gaap, SHORT_TERM_INVESTMENT_TAGS, latestEnd)[0];
+  const combined = valueAt(gaap, CASH_AND_ST_COMBINED, latestEnd);
+  if (cash === undefined && combined === undefined) return undefined;
 
-  if (!latestEnd) return 0;
+  return Math.max(combined ?? 0, (cash ?? 0) + (stInvest ?? 0));
+}
 
-  const ltTotal = extractConceptItemByDate(gaap, 'LongTermDebt', latestEnd)?.val;
-  const ltNonCurrent =
-    extractConceptItemByDate(gaap, 'LongTermDebtNoncurrent', latestEnd)?.val || 0;
-  const ltCurrent = extractConceptItemByDate(gaap, 'LongTermDebtCurrent', latestEnd)?.val || 0;
-  const debtCurrent = extractConceptItemByDate(gaap, 'DebtCurrent', latestEnd)?.val || 0;
-  const stBorrowings = extractConceptItemByDate(gaap, 'ShortTermBorrowings', latestEnd)?.val || 0;
+const LONG_TERM_TOTAL_TAG = 'LongTermDebt'; // inkl. kortfristet del
+// Langfristet del ekskl. kortfristet. ACN bruger kun LongTermDebtAndCapitalLeaseObligations.
+const LONG_TERM_NONCURRENT_TAGS = [
+  'LongTermDebtNoncurrent',
+  'LongTermDebtAndCapitalLeaseObligations',
+  'LongTermNotesPayable',
+];
+const CURRENT_DEBT_TAGS = ['LongTermDebtCurrent', 'DebtCurrent', 'ShortTermBorrowings'];
+const ADDITIONAL_DEBT_TAGS = ['ConvertibleNotesPayable', 'NotesAndLoansPayable'];
 
-  const currentDebt = Math.max(ltCurrent, debtCurrent, stBorrowings);
-  if (ltTotal !== undefined) {
-    return Math.max(ltTotal, ltNonCurrent + currentDebt);
-  }
-  return ltNonCurrent + currentDebt;
+/**
+ * Samlet kort- og langfristet gæld. undefined, hvis ingen gælds-tags findes (ukendt ≠ gældfri).
+ */
+export function extractTotalDebt(gaap: Record<string, XbrlConcept>): number | undefined {
+  const latestEnd = latestEndOf(gaap, [
+    LONG_TERM_TOTAL_TAG,
+    ...LONG_TERM_NONCURRENT_TAGS,
+    ...CURRENT_DEBT_TAGS,
+    ...ADDITIONAL_DEBT_TAGS,
+  ]);
+  if (!latestEnd) return undefined;
+
+  const ltTotal = valueAt(gaap, LONG_TERM_TOTAL_TAG, latestEnd) ?? 0;
+  const nonCurrent = valuesAt(gaap, LONG_TERM_NONCURRENT_TAGS, latestEnd)[0] ?? 0;
+  const current = Math.max(0, ...valuesAt(gaap, CURRENT_DEBT_TAGS, latestEnd));
+  // ponytail: konvertible lån og NotesAndLoansPayable lægges oveni. Kan dobbelttælle, hvis et selskab også
+  // har dem med i LongTermDebt – fjern dem fra summen pr. selskab, hvis det viser sig i praksis.
+  const additional = valuesAt(gaap, ADDITIONAL_DEBT_TAGS, latestEnd).reduce((a, b) => a + b, 0);
+
+  return Math.max(ltTotal, nonCurrent + current) + additional;
 }
 
 /**
@@ -244,24 +238,77 @@ async function fetchSecXbrlFacts(cikStr: string, userAgent: string): Promise<Xbr
   }
 }
 
-/**
- * Parser regnskabsdato fra Finviz ("Oct 22 BMO", "Aug 05 AMC", osv.)
- */
-function parseFinvizEarnings(raw?: string | null): {
+interface EarningsDate {
   nextEarningsDate?: string;
   daysUntilEarnings?: number;
-} {
+  nextEarningsDateEstimated?: boolean;
+}
+
+const MONTHS: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
+/** Kun fremtidige (eller dagens) datoer er en "næste" regnskabsdato. En dato i fortiden betyder ukendt. */
+function futureDateOnly(year: number, month: number, day: number, now: Date): EarningsDate {
+  const date = new Date(Date.UTC(year, month, day));
+  const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const diffDays = Math.round((date.getTime() - todayUtc.getTime()) / (1000 * 60 * 60 * 24));
+  if (isNaN(diffDays) || diffDays < 0) return {};
+  return { nextEarningsDate: date.toISOString().split('T')[0], daysUntilEarnings: diffDays };
+}
+
+/**
+ * Parser Nasdaqs earnings-date-svar: announcement "Earnings announcement* for ACN: Dec 17, 2026".
+ * reportText "is estimated to report" = Zacks-estimat, ikke bekræftet af selskabet.
+ */
+export function parseNasdaqEarnings(
+  data: { announcement?: string | null; reportText?: string | null } | null | undefined,
+  now: Date = new Date()
+): EarningsDate {
+  const m = /:\s*([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),\s*(\d{4})/.exec(data?.announcement ?? '');
+  const month = m ? MONTHS[m[1].toLowerCase()] : undefined;
+  if (!m || month === undefined) return {};
+  const parsed = futureDateOnly(parseInt(m[3], 10), month, parseInt(m[2], 10), now);
+  if (parsed.nextEarningsDate && /estimated to report/i.test(data?.reportText ?? '')) {
+    parsed.nextEarningsDateEstimated = true;
+  }
+  return parsed;
+}
+
+/** Næste regnskabsdato fra Nasdaq (kun US-tickers). null = opslaget fejlede. */
+async function fetchNasdaqNextEarnings(ticker: string): Promise<EarningsDate | null> {
+  try {
+    const res = await fetch(`https://api.nasdaq.com/api/analyst/${encodeURIComponent(ticker)}/earnings-date`, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(6000),
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { data?: { announcement?: string; reportText?: string } | null };
+    return parseNasdaqEarnings(json.data);
+  } catch (err) {
+    console.warn(`Fejl ved hentning af næste regnskabsdato fra Nasdaq for ${ticker}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Parser regnskabsdato fra Finviz ("Oct 22 BMO", "Aug 05 AMC", osv.).
+ * Finviz viser den seneste dato, indtil den næste er kendt – en dato i fortiden kasseres derfor.
+ */
+export function parseFinvizEarnings(raw?: string | null, now: Date = new Date()): EarningsDate {
   if (!raw || raw.trim() === '-' || raw.trim() === '') {
     return {};
   }
 
   const cleaned = raw.replace(/\s*(BMO|AMC|\/r|\/a)\s*/gi, '').trim();
-  const months: Record<string, number> = {
-    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-    jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-  };
+  const months = MONTHS;
 
-  const now = new Date();
   let targetYear = now.getFullYear();
   let targetMonth = now.getMonth();
   let targetDay = now.getDate();
@@ -293,28 +340,19 @@ function parseFinvizEarnings(raw?: string | null): {
     }
   }
 
-  const date = new Date(Date.UTC(targetYear, targetMonth, targetDay));
-  const iso = date.toISOString().split('T')[0];
-  const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-  const diffDays = Math.round((date.getTime() - todayUtc.getTime()) / (1000 * 60 * 60 * 24));
-
-  return {
-    nextEarningsDate: iso,
-    daysUntilEarnings: diffDays,
-  };
+  return futureDateOnly(targetYear, targetMonth, targetDay, now);
 }
 
 /**
- * Henter nøgletal (Short Float, Short Ratio, P/E, P/B, Earnings Date) fra Finviz.
+ * Henter nøgletal (Short Float, Short Ratio, P/E, P/B, Earnings Date) fra Finviz. null = opslaget fejlede.
  */
 async function fetchFinvizMetrics(ticker: string): Promise<{
   shortPercentOfFloat?: number;
   daysToCover?: number;
   peRatio?: number | null;
   priceToBook?: number | null;
-  nextEarningsDate?: string;
-  daysUntilEarnings?: number;
-}> {
+  earnings: EarningsDate;
+} | null> {
   const cleanTicker = ticker.trim().toUpperCase();
   const url = `https://finviz.com/quote.ashx?t=${encodeURIComponent(cleanTicker)}`;
 
@@ -330,7 +368,7 @@ async function fetchFinvizMetrics(ticker: string): Promise<{
       next: { revalidate: 1800 },
     });
 
-    if (!res.ok) return {};
+    if (!res.ok) return null;
 
     const html = await res.text();
     const pairRegex =
@@ -382,21 +420,42 @@ async function fetchFinvizMetrics(ticker: string): Promise<{
       }
     }
 
-    // 5. Earnings Date
-    const earningsParsed = parseFinvizEarnings(kvMap['Earnings']);
-
+    // 5. Earnings Date (kun fremtidige datoer)
     return {
       shortPercentOfFloat,
       daysToCover,
       peRatio,
       priceToBook,
-      nextEarningsDate: earningsParsed.nextEarningsDate,
-      daysUntilEarnings: earningsParsed.daysUntilEarnings,
+      earnings: parseFinvizEarnings(kvMap['Earnings']),
     };
   } catch (err) {
     console.warn(`Fejl ved hentning af Finviz for ${cleanTicker}:`, err);
-    return {};
+    return null;
   }
+}
+
+const NORDIC_SUFFIX = /.(CO|ST|HE|OL)$/i;
+
+/**
+ * Sundhedsbadge ud fra kendte tal. Ukendt cash flow eller ukendt runway giver UNKNOWN – aldrig et positivt badge.
+ */
+export function deriveHealthBadge(f: {
+  estimatedRunwayMonths?: number | null;
+  isCashFlowPositive?: boolean;
+  netCashUsd?: number;
+  shortPercentOfFloat?: number;
+}): FundamentalHealthBadge {
+  const runway = f.estimatedRunwayMonths;
+  if (typeof runway === 'number' && runway < 9) return 'DILUTION_RISK';
+  if (f.isCashFlowPositive === undefined) return 'UNKNOWN';
+  if (f.isCashFlowPositive === false && typeof runway !== 'number') return 'UNKNOWN'; // brænder penge, cash ukendt
+
+  const runwayAtLeast = (months: number) =>
+    f.isCashFlowPositive === true || (typeof runway === 'number' && runway >= months);
+  if ((f.shortPercentOfFloat ?? 0) >= 12 && runwayAtLeast(15)) return 'SHORT_SQUEEZE_SETUP';
+  if (f.netCashUsd !== undefined && f.netCashUsd > 0 && runwayAtLeast(24)) return 'FORTRESS_BALANCE';
+  if (runwayAtLeast(12)) return 'SOLID_RUNWAY';
+  return 'NEUTRAL';
 }
 
 /**
@@ -418,17 +477,17 @@ export async function fetchCompanyFundamentals(
 
   let cashAndEquivalentsUsd: number | undefined;
   let totalDebtUsd: number | undefined;
-  let netCashUsd: number | undefined;
   let quarterlyCashBurnUsd: number | undefined;
   let estimatedRunwayMonths: number | null | undefined;
   let isCashFlowPositive: boolean | undefined;
 
   let shortPercentOfFloat: number | undefined;
   let daysToCover: number | undefined;
-  let nextEarningsDate: string | undefined;
-  let daysUntilEarnings: number | undefined;
+  let earnings: EarningsDate = {};
   let peRatio: number | null | undefined;
   let priceToBook: number | null | undefined;
+  // Fejlede opslag caches ikke, så næste kald prøver igen.
+  let lookupFailed = false;
 
   try {
     // 1. Parallel kørsel: CIK lookup + Finviz metrics
@@ -442,72 +501,68 @@ export async function fetchCompanyFundamentals(
       daysToCover = finviz.daysToCover;
       peRatio = finviz.peRatio;
       priceToBook = finviz.priceToBook;
-      nextEarningsDate = finviz.nextEarningsDate;
-      daysUntilEarnings = finviz.daysUntilEarnings;
+      earnings = finviz.earnings;
+    } else {
+      lookupFailed = true;
+    }
+
+    // Finviz viser den seneste dato, til den næste er kendt. Mangler en fremtidig dato, spørges Nasdaq (kun US).
+    if (!earnings.nextEarningsDate && !NORDIC_SUFFIX.test(cleanTicker)) {
+      const nasdaq = await fetchNasdaqNextEarnings(cleanTicker);
+      if (nasdaq) earnings = nasdaq;
+      else lookupFailed = true;
     }
 
     // 2. Hvis CIK fundet, hent SEC EDGAR XBRL facts
     if (cikInfo && cikInfo.cik) {
       const facts = await fetchSecXbrlFacts(cikInfo.cik, userAgent);
+      if (!facts) lookupFailed = true;
       if (facts && facts.facts && facts.facts['us-gaap']) {
         const gaap = facts.facts['us-gaap'];
 
         cashAndEquivalentsUsd = extractCashAndEquivalents(gaap);
         totalDebtUsd = extractTotalDebt(gaap);
-        netCashUsd = cashAndEquivalentsUsd - totalDebtUsd;
 
         const cf = extractOperatingCashFlow(gaap);
         if (cf) {
           isCashFlowPositive = cf.isPositive;
           if (cf.isPositive) {
-            estimatedRunwayMonths = null;
-            quarterlyCashBurnUsd = undefined;
+            estimatedRunwayMonths = null; // null = selvfinansierende, undefined = ukendt
           } else {
             const burn = Math.abs(cf.quarterlyRate);
             quarterlyCashBurnUsd = burn;
-            if (burn > 0 && cashAndEquivalentsUsd > 0) {
+            if (cashAndEquivalentsUsd !== undefined) {
               estimatedRunwayMonths =
-                Math.round((cashAndEquivalentsUsd / burn) * 3 * 10) / 10;
-            } else if (cashAndEquivalentsUsd <= 0) {
-              estimatedRunwayMonths = 0;
+                cashAndEquivalentsUsd > 0 ? Math.round((cashAndEquivalentsUsd / burn) * 3 * 10) / 10 : 0;
             }
           }
         }
       }
     }
   } catch (err) {
+    lookupFailed = true;
     console.warn(`Fejl under udtræk af fundamentals for ${cleanTicker}:`, err);
   }
 
-  // 3. Klassificering (fundamentalHealthBadge)
-  let fundamentalHealthBadge: FundamentalHealthBadge = 'NEUTRAL';
+  const netCashUsd =
+    cashAndEquivalentsUsd !== undefined && totalDebtUsd !== undefined
+      ? cashAndEquivalentsUsd - totalDebtUsd
+      : undefined;
 
-  if (estimatedRunwayMonths !== null && estimatedRunwayMonths !== undefined && estimatedRunwayMonths < 9) {
-    // Akut risiko for aktieudvanding!
-    fundamentalHealthBadge = 'DILUTION_RISK';
-  } else if (
-    (shortPercentOfFloat ?? 0) >= 12 &&
-    (isCashFlowPositive || (estimatedRunwayMonths ?? 99) >= 15)
-  ) {
-    // Høj short-andel + stærk kassebeholdning + insiderkøb = klassisk short squeeze setup
-    fundamentalHealthBadge = 'SHORT_SQUEEZE_SETUP';
-  } else if (
-    (netCashUsd ?? 0) > 0 &&
-    (isCashFlowPositive || (estimatedRunwayMonths ?? 99) >= 24)
-  ) {
-    // Netto kontant formue og enten cash-flow positiv eller > 2 års runway
-    fundamentalHealthBadge = 'FORTRESS_BALANCE';
-  } else if (isCashFlowPositive || (estimatedRunwayMonths ?? 99) >= 12) {
-    fundamentalHealthBadge = 'SOLID_RUNWAY';
-  } else {
-    fundamentalHealthBadge = 'NEUTRAL';
-  }
+  // 3. Klassificering (fundamentalHealthBadge) – ukendt data giver UNKNOWN, aldrig et positivt badge
+  const fundamentalHealthBadge = deriveHealthBadge({
+    estimatedRunwayMonths,
+    isCashFlowPositive,
+    netCashUsd,
+    shortPercentOfFloat,
+  });
 
   // 4. Generér 1-linjes skarp opsummering (fundamentalSummary)
   let fundamentalSummary = '';
   const cashStr = formatCompactUsd(cashAndEquivalentsUsd);
   const debtStr = formatCompactUsd(totalDebtUsd);
   const shortStr = shortPercentOfFloat !== undefined ? `${shortPercentOfFloat.toFixed(1)}%` : undefined;
+  const runwayStr = isCashFlowPositive ? 'Cash-Flow Positiv' : `Runway: ~${estimatedRunwayMonths} mdr.`;
 
   switch (fundamentalHealthBadge) {
     case 'DILUTION_RISK':
@@ -517,33 +572,33 @@ export async function fetchCompanyFundamentals(
       break;
 
     case 'SHORT_SQUEEZE_SETUP':
-      fundamentalSummary = `🔥 Squeeze-Setup! Short Float: ${shortStr || '>12%'} • Days to Cover: ${
-        daysToCover ?? 'N/A'
-      } • Cash: ${cashStr} • Ingen udvandingsrisiko`;
+      fundamentalSummary = `🔥 Squeeze-Setup! Short Float: ${shortStr} • Days to Cover: ${
+        daysToCover ?? 'mangler data'
+      } • Cash: ${cashStr} • ${runwayStr}`;
       break;
 
     case 'FORTRESS_BALANCE':
       fundamentalSummary = `💰 Fortress Cash: ${cashStr} • Gæld: ${debtStr} • Net Cash: +${formatCompactUsd(
         netCashUsd
-      )} • Runway: ${
-        isCashFlowPositive ? 'Cash-Flow Positiv' : `>${Math.round(estimatedRunwayMonths ?? 24)} mdr.`
-      }${shortStr ? ` • Short Float: ${shortStr}` : ''}`;
+      )} • ${runwayStr}${shortStr ? ` • Short Float: ${shortStr}` : ''}`;
       break;
 
     case 'SOLID_RUNWAY':
-      fundamentalSummary = `📈 Cash-Flow Positiv • Cash: ${cashStr} • Gæld: ${debtStr}${
+      fundamentalSummary = `📈 ${runwayStr} • Cash: ${cashStr} • Gæld: ${debtStr}${
         shortStr ? ` • Short Float: ${shortStr}` : ''
       }`;
       break;
 
+    case 'UNKNOWN':
+      fundamentalSummary = `❔ Mangler data: ${
+        isCashFlowPositive === undefined ? 'cash flow ukendt (ingen SEC XBRL-data)' : 'cash ukendt, runway kan ikke beregnes'
+      } • Cash: ${cashStr} • Gæld: ${debtStr}${shortStr ? ` • Short Float: ${shortStr}` : ''}`;
+      break;
+
     default:
-      fundamentalSummary = `⚖️ Cash: ${cashStr} • Gæld: ${debtStr}${
-        estimatedRunwayMonths !== null && estimatedRunwayMonths !== undefined
-          ? ` • Runway: ~${estimatedRunwayMonths} mdr.`
-          : isCashFlowPositive
-          ? ' • Cash-Flow Positiv'
-          : ''
-      }${shortStr ? ` • Short Float: ${shortStr}` : ''}`;
+      fundamentalSummary = `⚖️ Cash: ${cashStr} • Gæld: ${debtStr} • ${runwayStr}${
+        shortStr ? ` • Short Float: ${shortStr}` : ''
+      }`;
       break;
   }
 
@@ -556,14 +611,15 @@ export async function fetchCompanyFundamentals(
     isCashFlowPositive,
     shortPercentOfFloat,
     daysToCover,
-    nextEarningsDate,
-    daysUntilEarnings,
+    ...earnings,
     peRatio,
     priceToBook,
     fundamentalHealthBadge,
     fundamentalSummary,
   };
 
-  fundamentalsCache.set(cleanTicker, { timestamp: Date.now(), data: result });
+  if (!lookupFailed) {
+    fundamentalsCache.set(cleanTicker, { timestamp: Date.now(), data: result });
+  }
   return result;
 }

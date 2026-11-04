@@ -29,120 +29,9 @@ export async function fetchInsiderTrackRecord(
 ): Promise<InsiderTrackRecord> {
   const cleanTicker = tx.ticker.trim().toUpperCase();
 
-  // Hvis det er en nordisk aktie (.CO, .ST, .HE)
-  if (cleanTicker.endsWith('.CO') || cleanTicker.endsWith('.ST') || cleanTicker.endsWith('.HE')) {
-    return {
-      historicalBuysCount: 0,
-      winRatePct: 0,
-      avgReturnPct: 0,
-      reputation: 'FIRST_TIME_OR_RARE',
-      reputationLabel: '🆕 Nordisk MAR: Første registrerede åbne markedskøb i perioden',
-      notablePastTrades: [],
-    };
-  }
-
-  // Tjek for kendte mock cases til Asymmetry Lab
-  if (tx.id === 'mock-cfo-cluster-buy' || cleanTicker === 'NVCR') {
-    return {
-      historicalBuysCount: 2,
-      winRatePct: 100,
-      avgReturnPct: 53.6,
-      reputation: 'SMART_MONEY_SNIPER',
-      reputationLabel: '🎯 Smart Money Sniper (100% Win-Rate, Gns. +53.6%)',
-      notablePastTrades: [
-        {
-          date: '2024-11-12',
-          insiderName: 'Sarah Jenkins',
-          insiderTitle: 'CFO',
-          price: 14.5,
-          valueUsd: 290000,
-          returnPct: 57.2,
-        },
-        {
-          date: '2024-11-14',
-          insiderName: 'Marcus Hall',
-          insiderTitle: 'General Counsel',
-          price: 15.2,
-          valueUsd: 182400,
-          returnPct: 50.0,
-        },
-      ],
-    };
-  }
-
-  if (tx.id === 'mock-ceo-cosmetic-buy' || cleanTicker === 'PLXR') {
-    return {
-      historicalBuysCount: 3,
-      winRatePct: 0,
-      avgReturnPct: -49.0,
-      reputation: 'EARLY_OR_BAGHOLDER',
-      reputationLabel: '⚠️ Tidligere køb i minus (0% Win-Rate, Gns. -49.0%) - Bagholder-risiko',
-      notablePastTrades: [
-        {
-          date: '2024-08-15',
-          insiderName: 'Marcus Vance',
-          insiderTitle: 'CEO',
-          price: 28.0,
-          valueUsd: 140000,
-          returnPct: -58.2,
-        },
-        {
-          date: '2024-11-20',
-          insiderName: 'Marcus Vance',
-          insiderTitle: 'CEO',
-          price: 24.0,
-          valueUsd: 120000,
-          returnPct: -51.3,
-        },
-        {
-          date: '2025-03-10',
-          insiderName: 'Marcus Vance',
-          insiderTitle: 'CEO',
-          price: 19.0,
-          valueUsd: 95000,
-          returnPct: -38.4,
-        },
-      ],
-    };
-  }
-
-  if (tx.id === 'mock-chair-cfo-earnings-buy' || cleanTicker === 'MTLR') {
-    return {
-      historicalBuysCount: 0,
-      winRatePct: 0,
-      avgReturnPct: 0,
-      reputation: 'FIRST_TIME_OR_RARE',
-      reputationLabel: '🆕 Sjældent signal: Første åbne markedskøb fra ledelsen i >3 år',
-      notablePastTrades: [],
-    };
-  }
-
-  if (tx.id === 'mock-10b51-plan-buy' || cleanTicker === 'PLAN') {
-    return {
-      historicalBuysCount: 2,
-      winRatePct: 50,
-      avgReturnPct: 4.5,
-      reputation: 'CREDIBLE_BUYER',
-      reputationLabel: '📈 Kredibel køber (50% Win-Rate, Gns. +4.5%)',
-      notablePastTrades: [
-        {
-          date: '2025-06-15',
-          insiderName: 'Robert Sterling',
-          insiderTitle: 'COO',
-          price: 21.0,
-          valueUsd: 105000,
-          returnPct: 16.7,
-        },
-        {
-          date: '2025-12-15',
-          insiderName: 'Robert Sterling',
-          insiderTitle: 'COO',
-          price: 26.5,
-          valueUsd: 132500,
-          returnPct: -7.5,
-        },
-      ],
-    };
+  // OpenInsider dækker kun US. Nordiske tickers har ingen track record her → mangler data (ikke "første gang").
+  if (/.(CO|ST|HE|OL)$/.test(cleanTicker)) {
+    return unknownRecord('ingen track record-kilde for nordiske aktier');
   }
 
   // Live opslag for amerikanske aktier via OpenInsider
@@ -163,14 +52,15 @@ export async function fetchInsiderTrackRecord(
     });
 
     if (!res.ok) {
-      return fallbackDefaultRecord('Kunne ikke hente historiske data');
+      return unknownRecord(`OpenInsider svarede ${res.status}`);
     }
 
     const html = await res.text();
     const trMatches = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)];
 
     const pastTrades: NotablePastTrade[] = [];
-    const currentPrice = tx.currentMarketPrice || tx.pricePerShare || 1.0;
+    const currentPrice = tx.currentMarketPrice || tx.pricePerShare;
+    if (!currentPrice) return unknownRecord('ingen kurs at måle tidligere køb mod');
 
     // Fastlæg reference-dato for den aktuelle transaktion (filingDate eller i dag)
     const txFilingTime = tx.filingDate ? new Date(tx.filingDate).getTime() : Date.now();
@@ -275,19 +165,20 @@ export async function fetchInsiderTrackRecord(
     };
   } catch (err) {
     console.warn(`Fejl ved hentning af historisk track record for ${cleanTicker}:`, err);
-    return fallbackDefaultRecord('Fejl ved historisk opslag');
+    return unknownRecord('opslag fejlede eller fik timeout');
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-function fallbackDefaultRecord(label: string): InsiderTrackRecord {
+/** Opslaget gav ingen data. Tallene er 0, men reputation UNKNOWN betyder, at de ikke må læses som et signal. */
+function unknownRecord(reason: string): InsiderTrackRecord {
   return {
     historicalBuysCount: 0,
     winRatePct: 0,
     avgReturnPct: 0,
-    reputation: 'FIRST_TIME_OR_RARE',
-    reputationLabel: `🆕 ${label}: Første registrerede åbne markedskøb i perioden`,
+    reputation: 'UNKNOWN',
+    reputationLabel: `❔ Mangler data: ${reason}`,
     notablePastTrades: [],
   };
 }

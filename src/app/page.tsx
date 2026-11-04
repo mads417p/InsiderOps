@@ -136,6 +136,8 @@ export default function Dashboard() {
   const [hideNoise, setHideNoise] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  // Rådsfejl vises for brugeren – der findes ingen simuleret eller fallback-dom.
+  const [councilError, setCouncilError] = useState<string | null>(null);
   const [items, setItems] = useState<ScanItem[]>([]);
   const [apiKeys, setApiKeys] = useState<{ gemini: boolean; anthropic: boolean }>({
     gemini: false,
@@ -219,7 +221,7 @@ export default function Dashboard() {
 - **Titel / Rolle:** ${tx.insiderTitle} ${tx.isExecutiveOfficer ? '(C-Suite / Direktion)' : ''}
 - **Ejerskabets natur:** ${tx.ownershipNature === 'D' ? 'Direkte (D - Egne personlige aktier)' : 'Indirekte (I - Fond / Trust / Holdingselskab)'}
 - **Rule 10b5-1 Handelsplan:** ${tx.is10b51Plan ? '⚠️ JA (Automatisk forudbestemt plan - 0% aktuel asymmetri)' : '✅ NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
-${tx.footnotesSummary ? `- **SEC Fodnoter (Det med småt):**\n${tx.footnotesSummary}\n` : ''}- **Børs & Handelbarhed (DK / Nordnet / Saxo):** ${tx.isTradableInDK !== false ? '✅ Verificeret handelbar' : '🚫 Ikke godkendt'} (${tx.exchange || 'N/A'}${tx.avgDailyDollarVolume ? `, Gns. omsætning: $${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')}/dag` : ''})
+${tx.footnotesSummary ? `- **SEC Fodnoter (Det med småt):**\n${tx.footnotesSummary}\n` : ''}- **Børs & Handelbarhed (DK / Nordnet / Saxo):** ${tx.isTradableInDK === true ? '✅ Verificeret handelbar' : tx.isTradableInDK === false ? '🚫 Ikke godkendt' : '❔ Ikke verificeret – mangler data'} (${tx.exchange || 'N/A'}${tx.avgDailyDollarVolume ? `, Gns. omsætning: $${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')}/dag` : ''})
 - **Handelbarheds-status:** ${tx.tradabilityReason || (tx.isTradableInDK !== false ? 'Handelbar på standard DK mæglere' : 'Ikke verificeret')}
 - **Transaktionstype:** Kode ${tx.transactionCode} (Åbent markedskøb)
 - **Handelsbeløb:** $${Math.round(tx.totalValueUsd).toLocaleString()} USD (${tx.shares.toLocaleString()} aktier á $${tx.pricePerShare} USD)
@@ -239,7 +241,7 @@ ${clusterPeersStr}
 
 ## 3. Insider Track Record & Historisk Træfsikkerhed
 ${
-  tx.trackRecord
+  tx.trackRecord && tx.trackRecord.reputation !== 'UNKNOWN'
     ? `- **Status & Omdømme:** ${tx.trackRecord.reputationLabel}
 - **Tidligere registrerede køb (3-4 år):** ${tx.trackRecord.historicalBuysCount} handler
 - **Historisk Win-Rate:** ${tx.trackRecord.winRatePct}%
@@ -257,7 +259,7 @@ ${
         .join('\n')
     : ''
 }`
-    : '- Ingen historisk track record registreret for dette selskab.'
+    : `- **Track record:** mangler data${tx.trackRecord ? ` (${tx.trackRecord.reputationLabel})` : ''}`
 }
 
 ---
@@ -287,13 +289,15 @@ ${
         (tx.fundamentals.shortPercentOfFloat ?? 0) >= 10 ? ' 🔥 (Høj short-interesse - Squeeze potentiale)' : ''
       }
 - **Short Ratio (Days to Cover):** ${tx.fundamentals.daysToCover !== undefined ? `${tx.fundamentals.daysToCover} dage` : 'N/A'}
-- **Næste Kvartalsregnskab:** ${tx.fundamentals.nextEarningsDate || 'N/A'}${
+- **Næste Kvartalsregnskab:** ${tx.fundamentals.nextEarningsDate || 'mangler data'}${
+        tx.fundamentals.nextEarningsDateEstimated ? ' (estimeret)' : ''
+      }${
         tx.fundamentals.daysUntilEarnings !== undefined
-          ? ` (${tx.fundamentals.daysUntilEarnings === 0 ? 'I dag' : tx.fundamentals.daysUntilEarnings > 0 ? `om ${tx.fundamentals.daysUntilEarnings} dage` : `${Math.abs(tx.fundamentals.daysUntilEarnings)} dage siden`})`
+          ? ` (${tx.fundamentals.daysUntilEarnings === 0 ? 'I dag' : `om ${tx.fundamentals.daysUntilEarnings} dage`})`
           : ''
       }
 - **Multipler:** P/E: ${tx.fundamentals.peRatio ?? 'N/A'} | P/B: ${tx.fundamentals.priceToBook ?? 'N/A'}`
-    : '- Ingen regnskabsbalance udtrukket for denne filing.'
+    : '- **Balance:** mangler data (ingen regnskabsbalance udtrukket).'
 }
 
 ---
@@ -303,7 +307,7 @@ ${
 **Asymmetry Score:** ${verdict.asymmetryScore}/100  
 **Overskrift:** ${verdict.headline}  
 
-### CIO Syntese (${verdict.modelsUsed?.judge || 'Opus 5.5'}):
+### CIO Syntese (${verdict.modelsUsed?.judge || 'ukendt model'}):
 ${verdict.synthesis}
 
 ---
@@ -330,7 +334,7 @@ ${(() => {
 
 ---
 
-## 6. Specialisternes Rapporter (Claude Sonnet 5.5)
+## 6. Specialisternes Rapporter (${verdict.modelsUsed?.specialists || 'ukendt model'})
 
 ### [The Insider Profiler]
 ${verdict.reports.profiler}
@@ -350,7 +354,7 @@ ${
   verdict.judgeThinking
     ? `---
 
-## 8. CIO Extended Thinking Trace
+## 8. Dommerens ræsonnement (resumé fra API)
 \`\`\`
 ${verdict.judgeThinking}
 \`\`\`
@@ -358,7 +362,7 @@ ${verdict.judgeThinking}
     : ''
 }
 ---
-*Genereret af InsiderOps Terminal v2.0-QUANT med Claude 5.5 & Gemini Flash.*
+*Genereret af InsiderOps Terminal v2.0-QUANT.${verdict.promptVersion ? ` Prompt-version: ${verdict.promptVersion}.` : ' Ældre dom uden skema-validering.'}*
 `;
   };
 
@@ -386,10 +390,8 @@ ${verdict.judgeThinking}
 
   // Indlæs gemte domme fra localStorage og synkroniser med serverens persistente database
   useEffect(() => {
-    const isMock = (id: string, ticker?: string) =>
-      id === 'pos-rapp-cfo' ||
-      id.startsWith('mock-') ||
-      (ticker ? ['MTLR', 'PLXR', 'PLAN'].includes(ticker.toUpperCase().trim()) : false);
+    // Samme regel som isMockEntity i db.ts: kun id-præfikset "mock-", aldrig ticker.
+    const isMock = (id: string) => id.startsWith('mock-');
 
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -397,7 +399,7 @@ ${verdict.judgeThinking}
         const parsed = JSON.parse(stored);
         const cleaned: Record<string, SavedVerdictItem> = {};
         for (const [k, v] of Object.entries(parsed as Record<string, SavedVerdictItem>)) {
-          if (!isMock(k, v?.transaction?.ticker)) {
+          if (!isMock(k)) {
             cleaned[k] = v;
           }
         }
@@ -426,10 +428,11 @@ ${verdict.judgeThinking}
       .then((data) => {
         if (data?.verdicts) {
           setVerdictHistory((prev) => {
-            const merged = { ...data.verdicts, ...prev };
+            // Serveren er sandheden (fx efter migration); localStorage er kun cache.
+            const merged = { ...prev, ...data.verdicts };
             const cleaned: Record<string, SavedVerdictItem> = {};
             for (const [k, v] of Object.entries(merged as Record<string, SavedVerdictItem>)) {
-              if (!isMock(k, v?.transaction?.ticker)) {
+              if (!isMock(k)) {
                 cleaned[k] = v;
               }
             }
@@ -451,7 +454,7 @@ ${verdict.judgeThinking}
         if (data?.positions) {
           const map: Record<string, PaperTradePosition> = {};
           data.positions.forEach((p: PaperTradePosition) => {
-            if (!isMock(p.id, p.ticker)) {
+            if (!isMock(p.id)) {
               map[p.id] = p;
             }
           });
@@ -524,6 +527,15 @@ ${verdict.judgeThinking}
     }
   };
 
+  const readCouncilError = async (res: Response): Promise<string> => {
+    try {
+      const data = await res.json();
+      return data?.error || `HTTP ${res.status}`;
+    } catch {
+      return `HTTP ${res.status}`;
+    }
+  };
+
   const handleConveneCouncil = async (
     tx: InsiderTransaction,
     forceRefresh: boolean = false,
@@ -548,6 +560,7 @@ ${verdict.judgeThinking}
 
     setCouncilLoading(true);
     setActiveVerdict(null);
+    setCouncilError(null);
 
     const chamberEl = document.getElementById('council-chamber');
     if (chamberEl) chamberEl.scrollIntoView({ behavior: 'smooth' });
@@ -558,7 +571,7 @@ ${verdict.judgeThinking}
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transaction: tx, judgeTier: targetTier, forceRefresh }),
       });
-      if (!res.ok) throw new Error('Fejl under rådsmøde');
+      if (!res.ok) throw new Error(await readCouncilError(res));
       const data = await res.json();
       if (data.verdict) {
         const enrichedTx = data.transaction || tx;
@@ -581,6 +594,9 @@ ${verdict.judgeThinking}
       }
     } catch (err) {
       console.error(err);
+      setCouncilError(
+        `Rådet fejlede for ${tx.ticker} – ingen dom er afsagt eller gemt. ${err instanceof Error ? err.message : String(err)}`
+      );
     } finally {
       setCouncilLoading(false);
     }
@@ -766,10 +782,12 @@ ${verdict.judgeThinking}
     }
   };
 
-  // 1. Uvurderede HIGH signaler (asymmetrySignal === 'HIGH' eller score >= 75 uden rådsdom)
+  // 1. Uvurderede HIGH signaler (asymmetrySignal === 'HIGH' eller score >= 75 uden rådsdom).
+  //    Kun Gemini-scorer – en heuristisk score må ikke starte auto-køen.
   const unjudgedHighItems = items.filter(
     (item) =>
       item.result.passedHardFilter &&
+      item.result.scoreSource === 'gemini' &&
       (item.result.asymmetrySignal === 'HIGH' || item.result.geminiPreScore >= 75) &&
       !verdictHistory[item.transaction.id]
   );
@@ -795,6 +813,8 @@ ${verdict.judgeThinking}
     setActiveTab('radar');
     let currentHistory = { ...verdictHistory };
     const completed: Array<{ tx: InsiderTransaction; verdict: CouncilVerdict }> = [];
+    const failures: string[] = [];
+    setCouncilError(null);
 
     try {
       for (let i = 0; i < selectedTransactions.length; i++) {
@@ -836,7 +856,13 @@ ${verdict.judgeThinking}
             }
             completed.push({ tx: enrichedTx, verdict: data.verdict });
           }
+        } else {
+          failures.push(`${tx.ticker}: ${await readCouncilError(res)}`);
         }
+      }
+
+      if (failures.length > 0) {
+        setCouncilError(`${failures.length} råd fejlede – ingen dom gemt for dem. ${failures.join(' · ')}`);
       }
 
       if (completed.length > 0) {
@@ -866,6 +892,8 @@ ${verdict.judgeThinking}
     setActiveTab('radar');
     let currentHistory = { ...verdictHistory };
     const completed: Array<{ tx: InsiderTransaction; verdict: CouncilVerdict }> = [];
+    const failures: string[] = [];
+    setCouncilError(null);
 
     try {
       for (let i = 0; i < unjudgedHighItems.length; i++) {
@@ -907,7 +935,13 @@ ${verdict.judgeThinking}
             }
             completed.push({ tx: enrichedTx, verdict: data.verdict });
           }
+        } else {
+          failures.push(`${tx.ticker}: ${await readCouncilError(res)}`);
         }
+      }
+
+      if (failures.length > 0) {
+        setCouncilError(`${failures.length} råd fejlede – ingen dom gemt for dem. ${failures.join(' · ')}`);
       }
 
       if (completed.length > 0) {
@@ -937,8 +971,17 @@ ${verdict.judgeThinking}
   );
   const councilsConvenedCount = savedVerdictItems.length;
 
+  // Top Picks: kun skema-validerede domme med verificeret handelbarhed og kendte fundamentals.
+  // Ældre domme (uden validated) eller UNKNOWN-data vises ikke her, før de er vurderet igen.
+  const isTopPickEligible = (i: SavedVerdictItem) =>
+    i.verdict.validated === true &&
+    i.transaction.isTradableInDK === true &&
+    !!i.transaction.fundamentals &&
+    i.transaction.fundamentals.fundamentalHealthBadge !== 'UNKNOWN';
   const buyRecommendations = savedVerdictItems.filter(
-    (i) => i.verdict.asymmetryScore >= 75 || i.verdict.verdict === 'STRONG ASYMMETRY (KØB)'
+    (i) =>
+      isTopPickEligible(i) &&
+      (i.verdict.asymmetryScore >= 75 || i.verdict.verdict === 'STRONG ASYMMETRY (KØB)')
   );
   const watchRecommendations = savedVerdictItems.filter(
     (i) =>
@@ -1069,7 +1112,7 @@ ${verdict.judgeThinking}
                 <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="text-slate-400">GEMINI FLASH:</span>
                 <span className={apiKeys.gemini ? 'text-emerald-400' : 'text-amber-400'}>
-                  {apiKeys.gemini ? 'API AKTIV' : 'SIMULATION'}
+                  {apiKeys.gemini ? 'NØGLE SAT' : 'INGEN NØGLE · HEURISTIK'}
                 </span>
               </div>
 
@@ -1077,7 +1120,7 @@ ${verdict.judgeThinking}
                 <span className="h-2 w-2 rounded-full bg-cyan-500 animate-pulse" />
                 <span className="text-slate-400">CLAUDE SONNET + OPUS:</span>
                 <span className={apiKeys.anthropic ? 'text-cyan-400' : 'text-amber-400'}>
-                  {apiKeys.anthropic ? 'API AKTIV' : 'SIMULATION'}
+                  {apiKeys.anthropic ? 'NØGLE SAT' : 'INGEN NØGLE · RÅDET FEJLER'}
                 </span>
               </div>
             </div>
@@ -1316,6 +1359,17 @@ ${verdict.judgeThinking}
           </div>
         )}
 
+        {/* Rådsfejl */}
+        {councilError && (
+          <div role="alert" className="p-3 rounded bg-rose-950/40 border border-rose-800 text-rose-300 text-xs font-mono flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
+            <span className="flex-1">{councilError}</span>
+            <button onClick={() => setCouncilError(null)} className="text-rose-400 hover:text-rose-200" aria-label="Luk fejlbesked">
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Council Queue Live Indicator Banner */}
         {councilQueueRunning && councilQueueProgress && (
           <div className="p-4 rounded bg-purple-950/80 border border-purple-500/80 text-purple-200 text-xs font-mono flex items-center justify-between gap-3 shadow-lg shadow-purple-950/40 animate-pulse">
@@ -1330,7 +1384,7 @@ ${verdict.judgeThinking}
               </div>
             </div>
             <div className="text-[11px] text-purple-300/80 hidden sm:block">
-              Dual-Feed Live Kurs + Claude Specialister + Extended Thinking CIO
+              Dual-Feed Live Kurs + Claude-specialister + CIO-dommer
             </div>
           </div>
         )}
@@ -1872,10 +1926,10 @@ ${verdict.judgeThinking}
                                 >
                                   🚫 IKKE HANDELBAR I DK
                                 </span>
-                              ) : tx.exchange ? (
+                              ) : tx.isTradableInDK === true && tx.exchange ? (
                                 <span
                                   className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800/90 border border-slate-700 text-slate-300 font-mono flex items-center gap-1"
-                                  title={tx.tradabilityReason || 'Handelbar på Nordnet / Saxo'}
+                                  title={tx.tradabilityReason}
                                 >
                                   <span className="text-emerald-400 font-bold">✓</span>
                                   <span>{tx.exchange}</span>
@@ -1888,7 +1942,14 @@ ${verdict.judgeThinking}
                                     </span>
                                   ) : null}
                                 </span>
-                              ) : null}
+                              ) : (
+                                <span
+                                  className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800/60 border border-slate-600 text-slate-400 font-mono"
+                                  title={tx.tradabilityReason || 'Handelbarhed ikke verificeret – data mangler'}
+                                >
+                                  ❔ Handelbarhed: mangler data{tx.exchange ? ` (${tx.exchange})` : ''}
+                                </span>
+                              )}
                             </div>
                             {/* Quick Broker / Chart Links */}
                             <div className="mt-1.5 flex items-center gap-1.5 text-[10px] font-mono">
@@ -1985,6 +2046,16 @@ ${verdict.judgeThinking}
                               {(() => {
                                 const tr = tx.trackRecord || verdictHistory[tx.id]?.transaction.trackRecord;
                                 if (!tr) return null;
+                                if (tr.reputation === 'UNKNOWN') {
+                                  return (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800/60 border border-slate-600 text-slate-400 font-medium flex items-center gap-0.5"
+                                      title={tr.reputationLabel}
+                                    >
+                                      ❔ Track record: mangler data
+                                    </span>
+                                  );
+                                }
                                 if (tr.reputation === 'SMART_MONEY_SNIPER') {
                                   return (
                                     <span
@@ -2029,6 +2100,16 @@ ${verdict.judgeThinking}
                                   tx.fundamentals ||
                                   verdictHistory[tx.id]?.transaction.fundamentals;
                                 if (!fund) return null;
+                                if (fund.fundamentalHealthBadge === 'UNKNOWN') {
+                                  return (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800/60 border border-slate-600 text-slate-400 font-medium flex items-center gap-0.5"
+                                      title={fund.fundamentalSummary}
+                                    >
+                                      ❔ Balance: mangler data
+                                    </span>
+                                  );
+                                }
                                 if (fund.fundamentalHealthBadge === 'DILUTION_RISK') {
                                   return (
                                     <span
@@ -2179,6 +2260,11 @@ ${verdict.judgeThinking}
                                     }`}
                                   >
                                     Score: {res.geminiPreScore}/100
+                                    {res.scoreSource !== 'gemini' && (
+                                      <span className="ml-1 font-normal opacity-75" title="Heuristisk score (Gemini svarede ikke) – starter ikke auto-køen">
+                                        · heuristik
+                                      </span>
+                                    )}
                                   </span>
 
                                   {/* Badge hvis der allerede findes en afsagt dom - Ultra-tydelig farvekodning */}
@@ -3066,10 +3152,10 @@ ${verdict.judgeThinking}
                       ? 'bg-purple-950/90 text-purple-200 font-bold border border-purple-600/70 shadow-sm shadow-purple-950'
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
-                  title="Anbefalet: Claude Opus med 2048 tokens Extended Thinking for maksimal ræsonnering"
+                  title="Dommer: Claude Opus (CLAUDE_JUDGE_MODEL) med adaptive thinking"
                 >
                   <Brain className="w-3.5 h-3.5 text-purple-400" />
-                  <span>🧠 OPUS CIO (Deep Thinking)</span>
+                  <span>🧠 OPUS CIO</span>
                 </button>
                 <button
                   type="button"
@@ -3084,10 +3170,10 @@ ${verdict.judgeThinking}
                       ? 'bg-cyan-950/90 text-cyan-200 font-bold border border-cyan-600/70 shadow-sm shadow-cyan-950'
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
-                  title="Claude Sonnet for hurtig, omkostningseffektiv syntese"
+                  title="Dommer: specialistmodellen (Sonnet) – hurtigere og billigere"
                 >
                   <Zap className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>⚡ SONNET CIO (Fast Mode)</span>
+                  <span>⚡ SONNET CIO</span>
                 </button>
               </div>
 
@@ -3119,6 +3205,17 @@ ${verdict.judgeThinking}
               )}
             </div>
           </div>
+
+          {/* Rådsfejl i kammeret */}
+          {councilError && (
+            <div role="alert" className="p-3 rounded bg-rose-950/40 border border-rose-800 text-rose-300 text-xs font-mono flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
+              <span className="flex-1">{councilError}</span>
+              <button onClick={() => setCouncilError(null)} className="text-rose-400 hover:text-rose-200" aria-label="Luk fejlbesked">
+                ✕
+              </button>
+            </div>
+          )}
 
           {/* Loading State for The Council */}
           {councilLoading && (
@@ -3220,12 +3317,20 @@ ${verdict.judgeThinking}
                       <div className="mt-1.5 flex flex-wrap items-center gap-2 font-mono text-[11px]">
                         <span
                           className={`px-2 py-0.5 rounded border text-[10px] font-semibold flex items-center gap-1 ${
-                            selectedTx.isTradableInDK !== false
+                            selectedTx.isTradableInDK === true
                               ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
-                              : 'bg-rose-950/70 border-rose-700 text-rose-300'
+                              : selectedTx.isTradableInDK === false
+                              ? 'bg-rose-950/70 border-rose-700 text-rose-300'
+                              : 'bg-slate-800/60 border-slate-600 text-slate-400'
                           }`}
+                          title={selectedTx.tradabilityReason}
                         >
-                          {selectedTx.isTradableInDK !== false ? '✅ Handelbar i DK' : '🚫 Ikke godkendt i DK'}: {selectedTx.exchange}
+                          {selectedTx.isTradableInDK === true
+                            ? '✅ Handelbar i DK'
+                            : selectedTx.isTradableInDK === false
+                            ? '🚫 Ikke godkendt i DK'
+                            : '❔ Handelbarhed: mangler data'}
+                          : {selectedTx.exchange}
                         </span>
                         {selectedTx.avgDailyDollarVolume ? (
                           <span className="text-slate-400">
@@ -3327,10 +3432,10 @@ ${verdict.judgeThinking}
                 <div className="mt-3 pt-3 border-t border-slate-800/60 flex flex-wrap items-center gap-2 text-[10px] font-mono">
                   <span className="text-slate-500 uppercase tracking-wider">Aktive Modeller:</span>
                   <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-300">
-                    Gatekeeper: {activeVerdict.modelsUsed?.gatekeeper || 'gemini-2.5-flash'}
+                    Gatekeeper: {activeVerdict.modelsUsed?.gatekeeper || 'ukendt'}
                   </span>
                   <span className="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800 text-cyan-300">
-                    Specialister: {activeVerdict.modelsUsed?.specialists || 'claude-3-7-sonnet'} (x3)
+                    Specialister: {activeVerdict.modelsUsed?.specialists || 'ukendt'} (x3)
                   </span>
                   <span
                     className={`px-2 py-0.5 rounded border ${
@@ -3339,14 +3444,17 @@ ${verdict.judgeThinking}
                         : 'bg-cyan-950/80 border-cyan-700 text-cyan-200'
                     }`}
                   >
-                    CIO Dommer:{' '}
-                    {activeVerdict.modelsUsed?.judge ||
-                      (activeVerdict.modelsUsed?.judgeTier === 'sonnet'
-                        ? 'claude-3-7-sonnet'
-                        : 'claude-3-opus')}{' '}
-                    {activeVerdict.modelsUsed?.judgeTier === 'opus'
-                      ? '[Extended Thinking 2048 tok]'
-                      : '[Fast Mode]'}
+                    CIO Dommer: {activeVerdict.modelsUsed?.judge || 'ukendt'}
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded border ${
+                      activeVerdict.validated
+                        ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
+                        : 'bg-slate-800/60 border-slate-600 text-slate-400'
+                    }`}
+                    title={activeVerdict.validated ? 'Dommerens output bestod skema-validering' : 'Ældre dom fra før fase 1 – ikke skema-valideret. Vurdér igen.'}
+                  >
+                    {activeVerdict.validated ? `✓ Valideret · ${activeVerdict.promptVersion}` : '❔ Ikke valideret (ældre dom)'}
                   </span>
                 </div>
               </div>
@@ -3379,6 +3487,8 @@ ${verdict.judgeThinking}
                               ? 'bg-rose-950/90 border-rose-500 text-rose-300 shadow-md shadow-rose-950'
                               : fundamentals.fundamentalHealthBadge === 'SOLID_RUNWAY'
                               ? 'bg-cyan-950/80 border-cyan-600 text-cyan-300'
+                              : fundamentals.fundamentalHealthBadge === 'UNKNOWN'
+                              ? 'bg-slate-800/60 border-slate-600 text-slate-400'
                               : 'bg-slate-800/80 border-slate-700 text-slate-300'
                           }`}
                         >
@@ -3387,6 +3497,7 @@ ${verdict.judgeThinking}
                           {fundamentals.fundamentalHealthBadge === 'DILUTION_RISK' && '⚠️ Dilution Risk (<9m)'}
                           {fundamentals.fundamentalHealthBadge === 'SOLID_RUNWAY' && '📈 Solid Runway'}
                           {fundamentals.fundamentalHealthBadge === 'NEUTRAL' && '⚖️ Neutral Balance'}
+                          {fundamentals.fundamentalHealthBadge === 'UNKNOWN' && '❔ Mangler data'}
                         </span>
                       </div>
                     </div>
@@ -3512,8 +3623,8 @@ ${verdict.judgeThinking}
                             <span className="text-slate-400">Earnings:</span>
                             <span className="text-slate-200 font-bold">
                               {fundamentals.nextEarningsDate
-                                ? `${fundamentals.nextEarningsDate.substring(5)} (${fundamentals.daysUntilEarnings !== undefined ? (fundamentals.daysUntilEarnings >= 0 ? `+${fundamentals.daysUntilEarnings}d` : `${fundamentals.daysUntilEarnings}d`) : ''})`
-                                : 'N/A'}
+                                ? `${fundamentals.nextEarningsDate.substring(5)}${fundamentals.daysUntilEarnings !== undefined ? ` (+${fundamentals.daysUntilEarnings}d)` : ''}${fundamentals.nextEarningsDateEstimated ? ' est.' : ''}`
+                                : 'mangler data'}
                             </span>
                           </div>
                           <div className="flex justify-between">
@@ -3559,6 +3670,8 @@ ${verdict.judgeThinking}
                             ? 'bg-rose-950/90 border-rose-500 text-rose-300 shadow-md shadow-rose-950'
                             : selectedTx.trackRecord.reputation === 'FIRST_TIME_OR_RARE'
                             ? 'bg-cyan-950/80 border-cyan-600 text-cyan-300'
+                            : selectedTx.trackRecord.reputation === 'UNKNOWN'
+                            ? 'bg-slate-800/60 border-slate-600 text-slate-400'
                             : 'bg-blue-950/80 border-blue-600 text-blue-300'
                         }`}
                       >
@@ -3567,7 +3680,8 @@ ${verdict.judgeThinking}
                     </div>
                   </div>
 
-                  {/* Key Stats Bar */}
+                  {/* Key Stats Bar – skjules ved UNKNOWN, så 0-tal ikke ligner målte tal */}
+                  {selectedTx.trackRecord.reputation !== 'UNKNOWN' && (
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-mono text-center">
                     <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80">
                       <div className="text-[10px] text-slate-400 uppercase">Tidligere Åbne Køb (3-4 år)</div>
@@ -3608,6 +3722,7 @@ ${verdict.judgeThinking}
                       </div>
                     </div>
                   </div>
+                  )}
 
                   {/* Notable Past Trades List */}
                   {selectedTx.trackRecord.notablePastTrades.length > 0 ? (
@@ -3878,7 +3993,7 @@ ${verdict.judgeThinking}
                 );
               })()}
 
-              {/* CIO Extended Thinking Trace Fold-Out Panel */}
+              {/* Dommerens thinking-resumé – kun det, API'et faktisk returnerede */}
               {activeVerdict.judgeThinking && (
                 <div className="rounded bg-slate-950 border border-purple-900/60 overflow-hidden shadow-lg shadow-purple-950/20">
                   <button
@@ -3886,14 +4001,12 @@ ${verdict.judgeThinking}
                     className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-950/60 via-slate-900 to-slate-900 hover:from-purple-950/80 transition-colors flex items-center justify-between text-left font-mono text-xs border-b border-purple-900/40"
                   >
                     <div className="flex items-center gap-2 text-purple-300 font-bold tracking-wide">
-                      <Brain className="w-4 h-4 text-purple-400 animate-pulse" />
-                      <span>🧠 CIO EXTENDED THINKING // INTERN RÆSONNERING (RAW COGNITIVE TRACE)</span>
+                      <Brain className="w-4 h-4 text-purple-400" />
+                      <span>🧠 DOMMERENS RÆSONNEMENT (RESUMÉ FRA API)</span>
                     </div>
                     <div className="flex items-center gap-2 text-purple-300/80 text-[11px]">
                       <span className="px-1.5 py-0.5 rounded bg-purple-900/50 border border-purple-700/60 text-purple-200">
-                        {activeVerdict.modelsUsed?.judgeTier === 'opus'
-                          ? 'OPUS • 2048 TOKENS BUDGET'
-                          : 'SONNET • FAST REASONING'}
+                        {activeVerdict.modelsUsed?.judge || 'ukendt model'}
                       </span>
                       <span>{showThinking ? 'Skjul tankestrøm' : 'Vis tankestrøm'}</span>
                       <ChevronDown

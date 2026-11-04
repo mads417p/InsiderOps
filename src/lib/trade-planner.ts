@@ -1,5 +1,6 @@
 import { InsiderTransaction, CouncilVerdict, TradeExecutionPlan } from '@/types/insider';
 
+// ponytail: hardkodet FX – erstattes af live-kurser i fase 2 (audit 1.8).
 const USD_TO_DKK = 6.9;
 const SEK_TO_DKK = 0.65;
 
@@ -14,37 +15,18 @@ export function generateTradeExecutionPlan(
 ): TradeExecutionPlan {
   // 1. Kapitalbeskyttelse: Afvis transaktioner med lav score eller PR-stunt
   if (verdict.asymmetryScore < 60 || verdict.verdict === 'PR STUNT / STØJ (IGNORER)') {
-    return {
-      status: 'DO_NOT_TRADE',
-      reason: `Asymmetry Score er ${verdict.asymmetryScore}/100 (${verdict.verdict}). Rådet fraråder kapitalallokering for at beskytte frie midler.`,
-      recommendedAllocationDkk: 0,
-      recommendedAllocationUsd: 0,
-      totalShares: 0,
-      entryZoneMin: 0,
-      entryZoneMax: 0,
-      entryZoneLabel: 'Ingen handel (Beskyt kapital)',
-      stopLossPrice: 0,
-      stopLossRiskPct: 0,
-      maxLossDkk: 0,
-      targetPrice1: 0,
-      targetReturnPct1: 0,
-      riskRewardRatio: 0,
-      tranche1: {
-        shares: 0,
-        price: 0,
-        allocationDkk: 0,
-        allocationUsd: 0,
-        description: 'Ingen allokering',
-      },
-      tranche2: {
-        shares: 0,
-        price: 0,
-        allocationDkk: 0,
-        allocationUsd: 0,
-        description: 'Ingen allokering',
-      },
-      volatilityTag: 'N/A',
-    };
+    return doNotTrade(
+      `Asymmetry Score er ${verdict.asymmetryScore}/100 (${verdict.verdict}). Rådet fraråder kapitalallokering for at beskytte frie midler.`
+    );
+  }
+
+  // Ingen opfundne kurser eller volatilitet: uden live-kurs og ATR kan stop og størrelse ikke beregnes.
+  const missing = [
+    !(tx.currentMarketPrice && tx.currentMarketPrice > 0) && 'live-kurs',
+    !(tx.atr14d && tx.atr14d > 0) && 'ATR14',
+  ].filter(Boolean);
+  if (missing.length > 0) {
+    return doNotTrade(`Data mangler: ${missing.join(' og ')}. Ingen handelsplan uden målte tal.`);
   }
 
   // 2. Valuta og kurser
@@ -52,11 +34,11 @@ export function generateTradeExecutionPlan(
   const isSek = tx.ticker.endsWith('.ST') || tx.exchange?.includes('Stockholm');
   const fxToDkk = isDkk ? 1.0 : isSek ? SEK_TO_DKK : USD_TO_DKK;
 
-  const currentPrice = tx.currentMarketPrice || tx.pricePerShare || 1.0;
+  const currentPrice = tx.currentMarketPrice as number;
   const insiderPrice = tx.pricePerShare || currentPrice;
 
   // 3. Volatilitet og 14-dages ATR
-  const atr = tx.atr14d && tx.atr14d > 0 ? tx.atr14d : Number((currentPrice * 0.04).toFixed(2));
+  const atr = tx.atr14d as number;
   const dailyVol =
     tx.dailyVolatilityPct && tx.dailyVolatilityPct > 0
       ? tx.dailyVolatilityPct
@@ -175,5 +157,28 @@ export function generateTradeExecutionPlan(
       description: `Tranche 2 (40%): ${tranche2Shares} aktier @ ${currPrefix}${entryZoneMin} (Pullback ordrebog)`,
     },
     volatilityTag,
+  };
+}
+
+function doNotTrade(reason: string): TradeExecutionPlan {
+  const none = { shares: 0, price: 0, allocationDkk: 0, allocationUsd: 0, description: 'Ingen allokering' };
+  return {
+    status: 'DO_NOT_TRADE',
+    reason,
+    recommendedAllocationDkk: 0,
+    recommendedAllocationUsd: 0,
+    totalShares: 0,
+    entryZoneMin: 0,
+    entryZoneMax: 0,
+    entryZoneLabel: 'Ingen handel (Beskyt kapital)',
+    stopLossPrice: 0,
+    stopLossRiskPct: 0,
+    maxLossDkk: 0,
+    targetPrice1: 0,
+    targetReturnPct1: 0,
+    riskRewardRatio: 0,
+    tranche1: none,
+    tranche2: { ...none },
+    volatilityTag: 'N/A',
   };
 }

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import {
   CouncilVerdict,
   GatekeeperResult,
@@ -28,233 +29,177 @@ export interface DatabaseSchema {
   paperPortfolio: Record<string, PaperTradePosition>;
 }
 
-const DB_DIR = path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DB_DIR, 'insiderops-db.json');
+// Stien beregnes ved hvert kald (ikke ved import), så tests kan pege process.cwd() på en tmp-mappe.
+const dbFile = () => path.join(process.cwd(), 'data', 'insiderops-db.json');
 
 /**
- * Sikrer at data-mappen og database-filen eksisterer.
- */
-function ensureDbFile(): void {
-  try {
-    if (!fs.existsSync(DB_DIR)) {
-      fs.mkdirSync(DB_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(DB_FILE)) {
-      const initial: DatabaseSchema = {
-        verdicts: {},
-        scanHistory: {},
-        paperPortfolio: {},
-      };
-      fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), 'utf-8');
-    }
-  } catch (err) {
-    console.error('Fejl ved initialisering af data/insiderops-db.json:', err);
-  }
-}
-
-const MOCK_TICKERS = ['MTLR', 'PLXR', 'PLAN'];
-
-/**
- * Afgør om en post betragtes som mock og derfor slettes af getDatabase().
+ * Afgør om en post er mock og derfor renses. Matcher KUN på id-præfikset "mock-" – aldrig på ticker eller kurs.
  * Eksporteret, så scripts/inspect-verdicts.ts og tests bruger præcis samme regel som appen.
  */
-export function isMockEntity(id: string, ticker?: string, entryPrice?: number): boolean {
-  if (!id) return false;
-  if (id === 'pos-rapp-cfo') return true;
-  if (id.startsWith('mock-')) return true;
-  if (entryPrice === 11.48) return true;
-  if (ticker && MOCK_TICKERS.includes(ticker.toUpperCase().trim())) return true;
-  return false;
+export function isMockEntity(id: string): boolean {
+  return typeof id === 'string' && id.startsWith('mock-');
 }
 
 /**
- * Læser den fulde database fra disk og renser automatisk alle fiktive mock-data og test-positioner.
+ * Læser og normaliserer DB'en. Mangler filen (første kørsel), er DB'en tom.
+ * Alle andre læse- og parse-fejl kaster – der returneres aldrig en tom DB i stedet for data.
  */
-export async function getDatabase(): Promise<DatabaseSchema> {
-  ensureDbFile();
+async function readDb(): Promise<DatabaseSchema> {
+  let raw: string;
   try {
-    const raw = await fs.promises.readFile(DB_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-
-    const verdicts: Record<string, SavedVerdictItem> = {};
-    let changed = false;
-
-    for (const [k, v] of Object.entries((parsed.verdicts || {}) as Record<string, SavedVerdictItem>)) {
-      if (isMockEntity(k, v?.transaction?.ticker)) {
-        changed = true;
-      } else {
-        verdicts[k] = v;
-      }
-    }
-
-    const scanHistory: Record<string, SavedScanItem> = {};
-    for (const [k, v] of Object.entries((parsed.scanHistory || {}) as Record<string, SavedScanItem>)) {
-      if (k === 'mock') {
-        changed = true;
-        continue;
-      }
-      const filteredItems = (v?.items || []).filter(
-        (it) => !isMockEntity(it.transaction?.id, it.transaction?.ticker)
-      );
-      if (filteredItems.length !== (v?.items?.length || 0)) {
-        changed = true;
-      }
-      scanHistory[k] = { ...v, items: filteredItems };
-    }
-
-    const paperPortfolio: Record<string, PaperTradePosition> = {};
-    for (const [k, p] of Object.entries((parsed.paperPortfolio || {}) as Record<string, PaperTradePosition>)) {
-      if (isMockEntity(k, p?.ticker, p?.entryPrice)) {
-        changed = true;
-      } else {
-        // Sikrer at alle felter fra Trin 22 altid er udfyldt og investedDkk er synkroniseret
-        const entryFx = typeof p.entryFxRateDkk === 'number' && p.entryFxRateDkk > 0
-          ? p.entryFxRateDkk
-          : (p.ticker?.endsWith('.CO') ? 1.0 : 6.70);
-        const shares = p.shares || 1;
-        const entryPrice = p.entryPrice || 1.0;
-        const syncInvested = Math.round(shares * entryPrice * entryFx);
-        if (p.investedDkk !== syncInvested) {
-          changed = true;
-        }
-
-        paperPortfolio[k] = {
-          ...p,
-          investedDkk: syncInvested,
-          insiderBuyPrice: typeof p.insiderBuyPrice === 'number' ? p.insiderBuyPrice : p.entryPrice,
-          entryFxRateDkk: entryFx,
-          currentFxRateDkk: typeof p.currentFxRateDkk === 'number' ? p.currentFxRateDkk : entryFx,
-          lastQuoteTime: p.lastQuoteTime || new Date().toISOString(),
-          quoteSource: p.quoteSource || 'CNBC + Yahoo Real-Time Verified',
-          insiderPnlPct: typeof p.insiderPnlPct === 'number' ? p.insiderPnlPct : 0,
-        };
-      }
-    }
-
-    const cleanedDb: DatabaseSchema = {
-      verdicts,
-      scanHistory,
-      paperPortfolio,
-    };
-
-    if (changed) {
-      saveDatabase(cleanedDb).catch((err) => console.warn('Fejl ved automatisk oprydning i db:', err));
-    }
-
-    return cleanedDb;
+    raw = await fs.promises.readFile(dbFile(), 'utf-8');
   } catch (err) {
-    console.error('Fejl ved læsning af insiderops-db.json:', err);
-    return {
-      verdicts: {},
-      scanHistory: {},
-      paperPortfolio: {},
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { verdicts: {}, scanHistory: {}, paperPortfolio: {} };
+    }
+    throw new Error(`Kunne ikke læse ${dbFile()}: ${(err as Error).message}`);
+  }
+
+  let parsed: Partial<DatabaseSchema>;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`DB-filen ${dbFile()} er korrupt (ugyldig JSON): ${(err as Error).message}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`DB-filen ${dbFile()} har ikke den forventede struktur`);
+  }
+
+  const verdicts: Record<string, SavedVerdictItem> = {};
+  for (const [k, v] of Object.entries(parsed.verdicts || {})) {
+    if (!isMockEntity(k)) verdicts[k] = v;
+  }
+
+  const scanHistory: Record<string, SavedScanItem> = {};
+  for (const [k, v] of Object.entries(parsed.scanHistory || {})) {
+    if (k === 'mock') continue;
+    scanHistory[k] = { ...v, items: (v?.items || []).filter((it) => !isMockEntity(it.transaction?.id)) };
+  }
+
+  const paperPortfolio: Record<string, PaperTradePosition> = {};
+  for (const [k, p] of Object.entries(parsed.paperPortfolio || {})) {
+    if (isMockEntity(k)) continue;
+    // ponytail: FX-fallback 6.70 og kurs-fallbacks her hører til fase 2 (valuta) – uændret i fase 1.
+    const entryFx =
+      typeof p.entryFxRateDkk === 'number' && p.entryFxRateDkk > 0
+        ? p.entryFxRateDkk
+        : p.ticker?.endsWith('.CO')
+          ? 1.0
+          : 6.7;
+    const shares = p.shares || 1;
+    const entryPrice = p.entryPrice || 1.0;
+    paperPortfolio[k] = {
+      ...p,
+      investedDkk: Math.round(shares * entryPrice * entryFx),
+      insiderBuyPrice: typeof p.insiderBuyPrice === 'number' ? p.insiderBuyPrice : p.entryPrice,
+      entryFxRateDkk: entryFx,
+      currentFxRateDkk: typeof p.currentFxRateDkk === 'number' ? p.currentFxRateDkk : entryFx,
+      lastQuoteTime: p.lastQuoteTime || new Date().toISOString(),
+      quoteSource: p.quoteSource || 'CNBC + Yahoo Real-Time Verified',
+      insiderPnlPct: typeof p.insiderPnlPct === 'number' ? p.insiderPnlPct : 0,
     };
+  }
+
+  return { verdicts, scanHistory, paperPortfolio };
+}
+
+/**
+ * Skriver atomisk: kopi af nuværende fil til .bak, unik temp-fil, rename. Fejl kastes.
+ */
+async function writeDb(db: DatabaseSchema): Promise<void> {
+  const file = dbFile();
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  try {
+    await fs.promises.copyFile(file, file.replace(/\.json$/, '.bak.json'));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  const tmp = `${file}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
+  try {
+    await fs.promises.writeFile(tmp, JSON.stringify(db, null, 2), 'utf-8');
+    await fs.promises.rename(tmp, file);
+  } catch (err) {
+    await fs.promises.rm(tmp, { force: true });
+    throw err;
   }
 }
 
-/**
- * Gemmer den opdaterede database atomisk til disk.
- */
-export async function saveDatabase(db: DatabaseSchema): Promise<void> {
-  ensureDbFile();
-  try {
-    const tempFile = `${DB_FILE}.tmp.${Date.now()}`;
-    await fs.promises.writeFile(tempFile, JSON.stringify(db, null, 2), 'utf-8');
-    await fs.promises.rename(tempFile, DB_FILE);
-  } catch (err) {
-    console.error('Fejl ved skrivning til insiderops-db.json:', err);
-  }
+// ponytail: kø i processen (på globalThis, så Next' separate route-bundles deler den).
+// Dækker ikke to processer (fx dev-server + script samtidig) – fil-lås, hvis det bliver aktuelt.
+const g = globalThis as typeof globalThis & { __insiderOpsDbQueue?: Promise<unknown> };
+
+function enqueue<T>(task: () => Promise<T>): Promise<T> {
+  const run = (g.__insiderOpsDbQueue ?? Promise.resolve()).then(task);
+  g.__insiderOpsDbQueue = run.catch(() => undefined);
+  return run;
+}
+
+/** Læser hele DB'en (serialiseret med skrivninger). Kaster ved læse- eller parse-fejl. */
+export function getDatabase(): Promise<DatabaseSchema> {
+  return enqueue(readDb);
 }
 
 /**
- * Henter alle gemte domme fra server-databasen.
+ * Eneste skrivevej: læs → fn(db) muterer → skriv, som én udelelig operation i processen.
+ * Fejler læsningen, kaldes fn ikke, og der skrives intet.
  */
+export function updateDb<T>(fn: (db: DatabaseSchema) => T | Promise<T>): Promise<T> {
+  return enqueue(async () => {
+    const db = await readDb();
+    const result = await fn(db);
+    await writeDb(db);
+    return result;
+  });
+}
+
 export async function getSavedVerdicts(): Promise<Record<string, SavedVerdictItem>> {
-  const db = await getDatabase();
-  return db.verdicts;
+  return (await getDatabase()).verdicts;
 }
 
-/**
- * Gemmer en afsagt rådsdom i server-databasen.
- */
-export async function saveVerdict(item: SavedVerdictItem): Promise<void> {
-  const db = await getDatabase();
-  db.verdicts[item.transaction.id] = item;
-  await saveDatabase(db);
+export function saveVerdict(item: SavedVerdictItem): Promise<void> {
+  return updateDb((db) => {
+    db.verdicts[item.transaction.id] = item;
+  });
 }
 
-/**
- * Sletter en rådsdom fra server-databasen ud fra transaktions-id.
- */
-export async function deleteVerdict(txId: string): Promise<boolean> {
-  const db = await getDatabase();
-  if (db.verdicts[txId]) {
+export function deleteVerdict(txId: string): Promise<boolean> {
+  return updateDb((db) => {
+    const existed = txId in db.verdicts;
     delete db.verdicts[txId];
-    await saveDatabase(db);
-    return true;
-  }
-  return false;
+    return existed;
+  });
 }
 
-/**
- * Henter seneste gemte scan-resultat for en specifik kilde (mock, live, csuite, nordic).
- */
 export async function getLatestScan(
   source: string
 ): Promise<Array<{ transaction: InsiderTransaction; result: GatekeeperResult }> | null> {
-  const db = await getDatabase();
-  const record = db.scanHistory[source];
-  if (!record || !Array.isArray(record.items) || record.items.length === 0) {
-    return null;
-  }
-  return record.items;
+  const record = (await getDatabase()).scanHistory[source];
+  return record?.items?.length ? record.items : null;
 }
 
-/**
- * Gemmer det seneste scan-resultat for en kilde.
- */
-export async function saveScan(
+export function saveScan(
   source: string,
   items: Array<{ transaction: InsiderTransaction; result: GatekeeperResult }>
 ): Promise<void> {
-  const db = await getDatabase();
-  db.scanHistory[source] = {
-    source,
-    scannedAt: new Date().toISOString(),
-    items,
-  };
-  await saveDatabase(db);
+  return updateDb((db) => {
+    db.scanHistory[source] = { source, scannedAt: new Date().toISOString(), items };
+  });
 }
 
-/**
- * Henter alle paper-trade positioner fra server-databasen.
- */
 export async function getPaperPortfolio(): Promise<Record<string, PaperTradePosition>> {
-  const db = await getDatabase();
-  return db.paperPortfolio || {};
+  return (await getDatabase()).paperPortfolio;
 }
 
-/**
- * Gemmer eller opdaterer en paper-trade position i server-databasen.
- */
-export async function savePaperTrade(pos: PaperTradePosition): Promise<void> {
-  const db = await getDatabase();
-  if (!db.paperPortfolio) {
-    db.paperPortfolio = {};
-  }
-  db.paperPortfolio[pos.id] = pos;
-  await saveDatabase(db);
+export function savePaperTrade(pos: PaperTradePosition): Promise<void> {
+  return updateDb((db) => {
+    db.paperPortfolio[pos.id] = pos;
+  });
 }
 
-/**
- * Sletter en paper-trade position fra server-databasen ud fra id.
- */
-export async function deletePaperTrade(id: string): Promise<boolean> {
-  const db = await getDatabase();
-  if (db.paperPortfolio && db.paperPortfolio[id]) {
+export function deletePaperTrade(id: string): Promise<boolean> {
+  return updateDb((db) => {
+    const existed = id in db.paperPortfolio;
     delete db.paperPortfolio[id];
-    await saveDatabase(db);
-    return true;
-  }
-  return false;
+    return existed;
+  });
 }

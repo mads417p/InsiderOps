@@ -280,6 +280,17 @@ export async function GET(request: Request) {
     const ticker = searchParams.get('ticker')?.trim().toUpperCase();
     const sourceKey = ticker ? `ticker:${ticker}` : source;
 
+    // Mock-data findes kun til udvikling og kun bag et eksplicit flag.
+    if (source === 'mock' && process.env.INSIDEROPS_DEV_MOCKS !== '1') {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Mock-data er slået fra. Sæt INSIDEROPS_DEV_MOCKS=1 i .env.local for at bruge ?source=mock under udvikling.',
+        },
+        { status: 400 }
+      );
+    }
+
     let transactions: InsiderTransaction[] = [];
     try {
       if (ticker && ticker.length > 0) {

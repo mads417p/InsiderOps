@@ -6,9 +6,8 @@
  *   npx tsx scripts/inspect-verdicts.ts <sti-til-db>    # anden fil, fx en backup
  *   npx tsx scripts/inspect-verdicts.ts --json          # rå rækker som JSON (til før/efter-sammenligning)
  *
- * Scriptet skriver ALDRIG til disk. Det kalder bevidst ikke getDatabase() fra src/lib/db.ts,
- * fordi den sletter "mock"-poster og gemmer DB'en igen. Kun isMockEntity importeres, så reglen
- * er præcis den samme som i appen.
+ * Scriptet skriver ALDRIG til disk. Det læser filen direkte (ikke via getDatabase()), så også poster,
+ * appen ville rense, kan ses. Kun isMockEntity importeres, så reglen er præcis den samme som i appen.
  *
  * Tjek pr. dom og pr. position (jf. docs/roadmap-edge.md, prompt 0, punkt 6):
  *   - ticker, score, verdict, modelsUsed, evaluatedAt
@@ -16,7 +15,7 @@
  *   - ligner judge-fallback: score præcis 70 og ingen gyldig JSON i synthesis
  *   - fundamentals mangler XBRL-tal: cash eller gæld er 0/undefined
  *   - trackRecord matcher en mock-ticker (NVCR, PLXR, MTLR, PLAN) eller mock-navne
- *   - id, entryPrice eller ticker rammes af isMockEntity
+ *   - id rammes af isMockEntity (fra fase 1 kun præfikset "mock-")
  */
 import fs from 'fs';
 import path from 'path';
@@ -31,8 +30,6 @@ const MOCK_TRACK_RECORD_NAMES = ['Sarah Jenkins', 'Marcus Hall', 'Marcus Vance',
 const TRACK_RECORD_FALLBACK_MARKERS = ['Kunne ikke hente historiske data', 'Fejl ved historisk opslag', 'Nordisk MAR'];
 // Overskrift som claude-council.ts bygger, når dommerens JSON ikke kan parses
 const JUDGE_FALLBACK_HEADLINE = /^Rådsdom for .+: .+ køb$/;
-// Id, der ikke selv rammer nogen regel; bruges til at teste ticker- og entryPrice-reglerne hver for sig
-const PROBE_ID = '__inspect_probe__';
 
 const VERDICT_SHORT: Record<string, string> = {
   'STRONG ASYMMETRY (KØB)': 'KØB',
@@ -128,15 +125,9 @@ function checkTrackRecord(item: SavedVerdictItem): string {
   return 'nej';
 }
 
-/** Tester hver input-del for sig, så man kan se HVILKEN regel der rammer. */
-function checkMockEntity(id: string, ticker?: string, entryPrice?: number): string {
-  const hits: string[] = [];
-  if (isMockEntity(id)) hits.push(`id "${id}"`);
-  if (ticker !== undefined && isMockEntity(PROBE_ID, ticker)) hits.push(`ticker ${ticker}`);
-  if (entryPrice !== undefined && isMockEntity(PROBE_ID, undefined, entryPrice)) hits.push(`entryPrice ${entryPrice}`);
-  const combined = isMockEntity(id, ticker, entryPrice);
-  if (hits.length) return `JA (${hits.join(', ')})`;
-  return combined ? 'JA (kombination)' : 'nej';
+/** Fra fase 1 matcher isMockEntity kun id-præfikset "mock-" (aldrig ticker eller kurs). */
+function checkMockEntity(id: string): string {
+  return isMockEntity(id) ? `JA (id "${id}")` : 'nej';
 }
 
 function fmtModels(item: SavedVerdictItem | undefined): string {
@@ -182,7 +173,7 @@ function verdictRow(key: string, item: SavedVerdictItem): Row {
     judgeFallback: checkJudgeFallback(item),
     xbrlMissing: checkXbrl(item),
     trackRecordMock: checkTrackRecord(item),
-    mockEntity: checkMockEntity(key, item.transaction?.ticker),
+    mockEntity: checkMockEntity(key),
     notes,
   };
 }
@@ -224,7 +215,7 @@ function positionRow(key: string, pos: PaperTradePosition, verdictsByTicker: Map
     judgeFallback: item ? checkJudgeFallback(item) : noVerdict,
     xbrlMissing: item ? checkXbrl(item) : noVerdict,
     trackRecordMock: item ? checkTrackRecord(item) : noVerdict,
-    mockEntity: checkMockEntity(pos.id ?? key, pos.ticker, pos.entryPrice),
+    mockEntity: checkMockEntity(pos.id ?? key),
     notes,
   };
 }

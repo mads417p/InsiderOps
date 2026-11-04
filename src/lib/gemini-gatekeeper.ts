@@ -1,6 +1,9 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { applyHardFilter } from '@/lib/sec-scanner';
 import { GatekeeperResult, InsiderTransaction } from '@/types/insider';
+import { UNTRUSTED_DATA_INSTRUCTION, untrusted } from '@/lib/prompt-safety';
+
+const clampScore = (n: number) => Math.min(100, Math.max(0, Math.round(n)));
 
 const DEFAULT_MODEL = 'gemini-3-flash-preview';
 let cachedGeminiFlashModel: string | null = null;
@@ -62,6 +65,7 @@ function evaluateHeuristicGatekeeper(tx: InsiderTransaction): GatekeeperResult {
     return {
       passedHardFilter: true,
       geminiPreScore: 16,
+      scoreSource: 'heuristik',
       asymmetrySignal: 'NOISE',
       quickReasoning:
         'Rule 10b5-1 automatisk handelsplan: Handlen er forudbestemt måneder i forvejen via en fast algoritme og reflekterer ingen aktuel informationsasymmetri.',
@@ -73,6 +77,7 @@ function evaluateHeuristicGatekeeper(tx: InsiderTransaction): GatekeeperResult {
     return {
       passedHardFilter: true,
       geminiPreScore: 24,
+      scoreSource: 'heuristik',
       asymmetrySignal: 'LOW',
       quickReasoning: `Kosmetisk PR-køb: Selvom beløbet er $${Math.round(tx.totalValueUsd).toLocaleString()}, forøges insiderens samlede beholdning kun med ${tx.holdingsIncreasePct}%, hvilket tyder på symbolsk signalværdi frem for reel asymmetri.`,
     };
@@ -86,7 +91,7 @@ function evaluateHeuristicGatekeeper(tx: InsiderTransaction): GatekeeperResult {
   if (hadPriceDrop) score += 10;
   if (isLargeValue) score += 5;
 
-  score = Math.min(Math.max(score, 10), 98);
+  score = clampScore(score);
 
   let asymmetrySignal: GatekeeperResult['asymmetrySignal'] = 'LOW';
   if (score >= 75) asymmetrySignal = 'HIGH';
@@ -110,8 +115,9 @@ function evaluateHeuristicGatekeeper(tx: InsiderTransaction): GatekeeperResult {
   return {
     passedHardFilter: true,
     geminiPreScore: score,
+    scoreSource: 'heuristik',
     asymmetrySignal,
-    quickReasoning,
+    quickReasoning: `Heuristik (ingen Gemini-vurdering): ${quickReasoning}`,
   };
 }
 
@@ -127,6 +133,7 @@ export async function evaluateWithGatekeeper(tx: InsiderTransaction): Promise<Ga
       passedHardFilter: false,
       hardFilterReason: hardFilter.reason,
       geminiPreScore: 0,
+      scoreSource: 'heuristik',
       asymmetrySignal: 'NOISE',
       quickReasoning: hardFilter.reason || 'Afvist af det regelbaserede hard filter.',
     };
@@ -151,7 +158,8 @@ Regler for scoring:
 3. Cluster-køb (isClusterBuy = true, flere insidere køber inden for 10 dage): Vægt meget højt.
 4. Straffe "Cosmetic / PR buys" hårdt med en lav score (<35): Hvis en direktør (f.eks. CEO) køber for et pænt beløb over $50k, men det kun øger deres beholdning med < 2%, er det et PR-stunt designet til at narre detailinvestorer.
 5. Rule 10b5-1 automatisk handelsplan (is10b51Plan = true): Hvis handlen er udført under en forudbestemt automatisk handelsplan eller nævner 10b5-1, har den 0% aktuel informationsasymmetri. Straffes NÅDESLØST med score < 20 og asymmetrySignal = 'NOISE'.
-6. quickReasoning SKAL være 1-2 knivskarpe sætninger på præcist dansk.`;
+6. quickReasoning SKAL være 1-2 knivskarpe sætninger på præcist dansk.
+${UNTRUSTED_DATA_INSTRUCTION}`;
 
     const prompt = `Evaluer følgende insider-transaktion for informationsasymmetri:
 Ticker: ${tx.ticker} (${tx.companyName})
@@ -164,7 +172,7 @@ Forøgelse af egen beholdning: +${tx.holdingsIncreasePct}%
 Cluster-køb: ${tx.isClusterBuy ? `Ja (${tx.clusterCount ?? 2} insidere)` : 'Nej'}
 Rule 10b5-1 Plan: ${tx.is10b51Plan ? 'JA (Forudbestemt automatisk algoritme/plan)' : 'NEJ (Frivilligt, skønsmæssigt køb)'}
 Kursændring seneste 30 dage: ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'Ukendt'}
-Kontekst / Noter: ${tx.contextNotes || 'Ingen yderligere noter'}`;
+Kontekst / Noter: ${tx.contextNotes ? untrusted('kontekst-noter', tx.contextNotes) : 'Ingen yderligere noter'}`;
 
     const response = await ai.models.generateContent({
       model,
@@ -205,9 +213,14 @@ Kontekst / Noter: ${tx.contextNotes || 'Ingen yderligere noter'}`;
       quickReasoning: string;
     };
 
+    if (!Number.isFinite(parsed.geminiPreScore)) {
+      return evaluateHeuristicGatekeeper(tx);
+    }
+
     return {
       passedHardFilter: true,
-      geminiPreScore: Math.round(parsed.geminiPreScore),
+      geminiPreScore: clampScore(parsed.geminiPreScore),
+      scoreSource: 'gemini',
       asymmetrySignal: parsed.asymmetrySignal,
       quickReasoning: parsed.quickReasoning,
     };
@@ -246,6 +259,7 @@ export async function evaluateBatchWithGatekeeper(
       passedHardFilter: false,
       hardFilterReason: hardFilter.reason,
       geminiPreScore: 0,
+      scoreSource: 'heuristik',
       asymmetrySignal: 'NOISE',
       quickReasoning: hardFilter.reason || 'Afvist af det regelbaserede hard filter.',
     });
@@ -298,7 +312,7 @@ export async function evaluateBatchWithGatekeeper(
           isClusterBuy: tx.isClusterBuy,
           clusterCount: tx.clusterCount ?? 1,
           recentPriceChange30dPct: tx.recentPriceChange30dPct,
-          contextNotes: tx.contextNotes || '',
+          contextNotes: tx.contextNotes ? untrusted('kontekst-noter', tx.contextNotes) : '',
         }));
 
         try {
@@ -313,7 +327,8 @@ Vægt CFO og General Counsel køb ekstremt højt (+20-30 point).
 Vægt høj holdingsIncreasePct (>15%) og isClusterBuy højt (+15 point).
 Straffe "Cosmetic/PR buys" (hvor en direktør køber for et beløb der øger beholdningen med <2%).
 Kategoriser asymmetrySignal som 'HIGH' (score >= 75), 'MEDIUM' (50-74), 'LOW' (25-49), eller 'NOISE' (< 25).
-Returner en præcis JSON-array med et element for hver transaktion med id, geminiPreScore, asymmetrySignal og 1-2 knivskarpe sætninger på dansk i quickReasoning.`,
+Returner en præcis JSON-array med et element for hver transaktion med id, geminiPreScore, asymmetrySignal og 1-2 knivskarpe sætninger på dansk i quickReasoning.
+${UNTRUSTED_DATA_INSTRUCTION}`,
               responseMimeType: 'application/json',
               responseSchema: {
                 type: Type.ARRAY,
@@ -342,10 +357,12 @@ Returner en præcis JSON-array med et element for hver transaktion med id, gemin
           }>;
 
           for (const item of parsed) {
-            if (item.id) {
+            // Ikke-numerisk score → ingen Gemini-vurdering; udfyldes som heuristik nedenfor.
+            if (item.id && Number.isFinite(item.geminiPreScore)) {
               resultMap.set(item.id, {
                 passedHardFilter: true,
-                geminiPreScore: Math.round(item.geminiPreScore),
+                geminiPreScore: clampScore(item.geminiPreScore),
+                scoreSource: 'gemini',
                 asymmetrySignal: item.asymmetrySignal,
                 quickReasoning: item.quickReasoning,
               });

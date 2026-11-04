@@ -25,7 +25,7 @@ export interface InsiderTransaction {
   isExecutiveOfficer?: boolean; // true hvis CEO/CFO/COO/Pres/VP/GC/Chief/Counsel
   clusterPeers?: string[]; // Med-købere i samme selskab inden for samme tidsvindue
   exchange?: string; // f.eks. 'NASDAQ', 'NYSE', 'CPH (Nasdaq Copenhagen)', 'OTC'
-  isTradableInDK?: boolean; // Om aktien er verificeret købbar på standard danske mæglerplatforme (Nordnet/Saxo)
+  isTradableInDK?: boolean; // true = verificeret købbar på Nordnet/Saxo, false = afvist, undefined = ikke verificeret (data mangler)
   tradabilityReason?: string; // Begrundelse for handelbarhed eller afvisningsårsag
   avgDailyDollarVolume?: number; // Gennemsnitlig daglig handelsvolumen i USD
   marketCapUsd?: number;
@@ -44,7 +44,8 @@ export type FundamentalHealthBadge =
   | 'SOLID_RUNWAY'
   | 'SHORT_SQUEEZE_SETUP'
   | 'DILUTION_RISK'
-  | 'NEUTRAL';
+  | 'NEUTRAL'
+  | 'UNKNOWN'; // data mangler – må aldrig tolkes som et signal
 
 export interface CompanyFundamentals {
   cashAndEquivalentsUsd?: number; // Kontanter + kortfristede værdipapirer i USD
@@ -55,8 +56,9 @@ export interface CompanyFundamentals {
   isCashFlowPositive?: boolean;
   shortPercentOfFloat?: number; // Procent af free float der er shortet, f.eks. 14.5
   daysToCover?: number; // Short ratio / dage til at dække shorts
-  nextEarningsDate?: string; // ISO dato for næste kvartalsregnskab
-  daysUntilEarnings?: number; // Antal dage til/fra regnskab
+  nextEarningsDate?: string; // ISO dato for NÆSTE kvartalsregnskab (aldrig i fortiden; undefined = ukendt)
+  nextEarningsDateEstimated?: boolean; // true hvis datoen er et estimat (Nasdaq/Zacks), ikke bekræftet af selskabet
+  daysUntilEarnings?: number; // Antal dage til regnskab (aldrig negativ)
   peRatio?: number | null;
   priceToBook?: number | null;
   fundamentalHealthBadge: FundamentalHealthBadge;
@@ -153,7 +155,8 @@ export type TrackRecordReputation =
   | 'SMART_MONEY_SNIPER'
   | 'CREDIBLE_BUYER'
   | 'FIRST_TIME_OR_RARE'
-  | 'EARLY_OR_BAGHOLDER';
+  | 'EARLY_OR_BAGHOLDER'
+  | 'UNKNOWN'; // opslag fejlede eller ikke-US ticker – mangler data
 
 export interface NotablePastTrade {
   date: string;
@@ -179,6 +182,7 @@ export interface GatekeeperResult {
   passedHardFilter: boolean;
   hardFilterReason?: string;
   geminiPreScore: number; // 0-100
+  scoreSource: 'gemini' | 'heuristik'; // heuristiske scorer må ikke starte auto-køen
   asymmetrySignal: AsymmetrySignal;
   quickReasoning: string;
 }
@@ -201,6 +205,13 @@ export interface CouncilModelsUsed {
   judgeTier?: 'opus' | 'sonnet';
 }
 
+export interface CouncilTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+}
+
 export interface CouncilVerdict {
   asymmetryScore: number; // 1-100
   verdict: CouncilVerdictType;
@@ -208,8 +219,12 @@ export interface CouncilVerdict {
   synthesis: string;
   reports: CouncilReports;
   timestamp: string;
-  judgeThinking?: string;
+  judgeThinking?: string; // kun det resumé, API'et faktisk returnerer
   modelsUsed?: CouncilModelsUsed;
+  promptVersion?: string; // PROMPT_VERSION i claude-council.ts da dommen blev afsagt
+  usage?: { specialists: CouncilTokenUsage; judge: CouncilTokenUsage };
+  validated?: boolean; // true = dommerens output bestod skema-validering (fase 1); ældre domme mangler feltet
+  legacyThinkingRemoved?: boolean; // opdigtet judgeThinking fjernet fra ældre dom (migration 4.11.2026)
   evaluatedAt?: string; // ISO tidsstempel for hvornår Rådet afsagde dommen
   priceAtEvaluation?: number; // aktiens markedskurs da dommen blev afsagt
   previousScore?: number; // hvis aktien bliver gen-vurderet, gem den forrige asymmetryScore så vi kan vise udviklingen, f.eks. 81 -> 85

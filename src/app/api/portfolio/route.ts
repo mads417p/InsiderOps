@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getPaperPortfolio, savePaperTrade, deletePaperTrade } from '@/lib/db';
+import { getPaperPortfolio, savePaperTrade, deletePaperTrade, updateDb } from '@/lib/db';
 import { fetchVerifiedLiveQuote, fetchLiveFxRates, getFxRateToDkk } from '@/lib/live-quote';
 import { PaperTradePosition, PortfolioSummary } from '@/types/insider';
 
@@ -167,6 +167,7 @@ export async function GET(request: Request) {
     if (!noRefresh && positions.length > 0) {
       const openPositions = positions.filter((p) => p.status === 'OPEN');
       const fxRates = await fetchLiveFxRates();
+      const refreshed: PaperTradePosition[] = [];
 
       await Promise.all(
         openPositions.map(async (pos) => {
@@ -252,13 +253,23 @@ export async function GET(request: Request) {
                 pos.status = 'TARGET_HIT';
               }
 
-              await savePaperTrade(pos);
+              refreshed.push(pos);
             }
           } catch (err) {
             console.warn(`Kunne ikke opdatere live kurs for ${pos.ticker}:`, err);
           }
         })
       );
+
+      // Alle opdateringer i én skrivning. Slettede positioner genopstår ikke.
+      // ponytail: en PATCH midt i kurshentningen (få sekunder) kan overskrives af refresh – merge pr. felt, hvis det bliver et problem.
+      if (refreshed.length > 0) {
+        await updateDb((db) => {
+          for (const pos of refreshed) {
+            if (db.paperPortfolio[pos.id]) db.paperPortfolio[pos.id] = pos;
+          }
+        });
+      }
     } else if (positions.length > 0) {
       // Sikr at benchmark og Alpha altid er beregnet, selv uden full refresh
       for (const pos of positions) {
@@ -428,8 +439,57 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const portfolioRecord = await getPaperPortfolio();
-    const pos = portfolioRecord[id];
+    // Hele read-modify-write sker i én updateDb, så samtidige skrivninger ikke overskriver hinanden.
+    const pos = await updateDb((db) => {
+      const pos = db.paperPortfolio[id];
+      if (!pos) return null;
+
+      // 1. Opdater parametre hvis angivet
+      if (body.tradeType !== undefined) {
+        pos.tradeType = body.tradeType === 'REAL_NORDNET' ? 'REAL_NORDNET' : 'PAPER';
+      }
+
+      if (body.entryPrice !== undefined && Number(body.entryPrice) > 0) {
+        pos.entryPrice = Number(body.entryPrice);
+      }
+
+      if (body.shares !== undefined && Number(body.shares) > 0) {
+        pos.shares = Number(body.shares);
+      }
+
+      if (body.stopLossPrice !== undefined) {
+        pos.stopLossPrice = Number(body.stopLossPrice);
+      }
+
+      if (body.targetPrice !== undefined) {
+        pos.targetPrice = Number(body.targetPrice);
+      }
+
+      // 2. Genberegn investering og P&L baseret på de nye tal
+      const entryFx = pos.entryFxRateDkk || 6.70;
+      const currentFx = pos.currentFxRateDkk || entryFx;
+
+      pos.investedDkk = Math.round(pos.shares * pos.entryPrice * entryFx);
+      pos.pnlPct = Number((((pos.currentPrice - pos.entryPrice) / pos.entryPrice) * 100).toFixed(2));
+      pos.pnlDkk = Math.round(
+        pos.shares * (pos.currentPrice * currentFx - pos.entryPrice * entryFx)
+      );
+
+      // Genberegn Alpha hvis benchmark er kendt
+      if (pos.benchmarkReturnPct !== undefined) {
+        pos.alphaPct = Number((pos.pnlPct - pos.benchmarkReturnPct).toFixed(2));
+      }
+
+      // Tjek stop-loss / target
+      if (pos.stopLossPrice > 0 && pos.currentPrice <= pos.stopLossPrice) {
+        pos.status = 'STOPPED_OUT';
+      } else if (pos.targetPrice > 0 && pos.currentPrice >= pos.targetPrice) {
+        pos.status = 'TARGET_HIT';
+      } else if (pos.status === 'STOPPED_OUT' || pos.status === 'TARGET_HIT') {
+        pos.status = 'OPEN';
+      }
+      return pos;
+    });
 
     if (!pos) {
       return NextResponse.json(
@@ -437,53 +497,6 @@ export async function PATCH(request: Request) {
         { status: 404 }
       );
     }
-
-    // 1. Opdater parametre hvis angivet
-    if (body.tradeType !== undefined) {
-      pos.tradeType = body.tradeType === 'REAL_NORDNET' ? 'REAL_NORDNET' : 'PAPER';
-    }
-
-    if (body.entryPrice !== undefined && Number(body.entryPrice) > 0) {
-      pos.entryPrice = Number(body.entryPrice);
-    }
-
-    if (body.shares !== undefined && Number(body.shares) > 0) {
-      pos.shares = Number(body.shares);
-    }
-
-    if (body.stopLossPrice !== undefined) {
-      pos.stopLossPrice = Number(body.stopLossPrice);
-    }
-
-    if (body.targetPrice !== undefined) {
-      pos.targetPrice = Number(body.targetPrice);
-    }
-
-    // 2. Genberegn investering og P&L baseret på de nye tal
-    const entryFx = pos.entryFxRateDkk || 6.70;
-    const currentFx = pos.currentFxRateDkk || entryFx;
-
-    pos.investedDkk = Math.round(pos.shares * pos.entryPrice * entryFx);
-    pos.pnlPct = Number((((pos.currentPrice - pos.entryPrice) / pos.entryPrice) * 100).toFixed(2));
-    pos.pnlDkk = Math.round(
-      pos.shares * (pos.currentPrice * currentFx - pos.entryPrice * entryFx)
-    );
-
-    // Genberegn Alpha hvis benchmark er kendt
-    if (pos.benchmarkReturnPct !== undefined) {
-      pos.alphaPct = Number((pos.pnlPct - pos.benchmarkReturnPct).toFixed(2));
-    }
-
-    // Tjek stop-loss / target
-    if (pos.stopLossPrice > 0 && pos.currentPrice <= pos.stopLossPrice) {
-      pos.status = 'STOPPED_OUT';
-    } else if (pos.targetPrice > 0 && pos.currentPrice >= pos.targetPrice) {
-      pos.status = 'TARGET_HIT';
-    } else if (pos.status === 'STOPPED_OUT' || pos.status === 'TARGET_HIT') {
-      pos.status = 'OPEN';
-    }
-
-    await savePaperTrade(pos);
 
     const updatedRecord = await getPaperPortfolio();
     const updatedPositions = Object.values(updatedRecord);

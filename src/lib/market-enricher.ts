@@ -184,12 +184,21 @@ export async function fetchMarketPrices(
   }
 }
 
+const NORDIC_VENUES: Record<string, string> = {
+  CO: 'CPH (Nasdaq Copenhagen)',
+  ST: 'STO (Nasdaq Stockholm)',
+  HE: 'HEL (Nasdaq Helsinki)',
+  OL: 'OSL (Oslo Børs)',
+};
+const NORDIC_CURRENCY: Record<string, string> = { CO: 'DKK', ST: 'SEK', HE: 'EUR', OL: 'NOK' };
+
 /**
- * Verificerer om en aktie er handelbar for danske detailinvestorer via platforme som Nordnet og Saxo Bank.
- * Tjekker:
- * 1. Børs-whitelist: Kun NASDAQ, NYSE og Nasdaq Nordic (Copenhagen, Stockholm, Oslo). Afviser OTC / Pink Sheets.
- * 2. Instrument-type & EU PRIIPs/KID: Afviser lukkede amerikanske fonde (CEF), trusts og ETF'er, der mangler KID.
- * 3. Minimumskurs & Likviditet: Kurs >= $2.00 (eller >= 10 DKK) og gennemsnitlig daglig omsætning >= $500.000 USD.
+ * Verificerer om en aktie er handelbar for danske detailinvestorer via Nordnet og Saxo Bank.
+ * 1. Børs: eksplicit liste – NASDAQ, NYSE, NYSE American, Cboe (fra Yahoo-metadata) og .CO/.ST/.HE/.OL. Alt andet afvises.
+ * 2. Instrument og EU PRIIPs/KID: kun EQUITY; US closed-end funds/trusts afvises.
+ * 3. Minimumskurs og likviditet: kurs >= $2 (10 DKK), gns. daglig omsætning >= 500.000.
+ * Kendte afvisninger giver false. Mangler børs, instrumenttype, kurs eller volumen, er resultatet undefined
+ * ("Ikke verificeret – data mangler") – aldrig "Verificeret" uden data.
  */
 export function verifyDkTradability(
   tx: InsiderTransaction,
@@ -204,52 +213,28 @@ export function verifyDkTradability(
     longName?: string;
   }
 ): {
-  isTradableInDK: boolean;
+  isTradableInDK?: boolean;
   tradabilityReason: string;
-  exchange: string;
-  avgDailyDollarVolume: number;
+  exchange?: string;
+  avgDailyDollarVolume?: number;
 } {
-  const currentPrice = meta?.currentPrice || tx.currentMarketPrice || tx.pricePerShare || 0;
-  const avgDailyDollarVolume = meta?.avgDailyDollarVolume || tx.avgDailyDollarVolume || 0;
-  const exchangeRaw = (meta?.exchangeName || tx.exchange || '').toUpperCase();
+  const nordic = /.(CO|ST|HE|OL)$/i.exec(tx.ticker.trim())?.[1]?.toUpperCase();
+  // Markedskurs – aldrig insiderens købskurs som stand-in.
+  const currentPrice = meta?.currentPrice || tx.currentMarketPrice || undefined;
+  // ponytail: volumen er i lokal valuta for nordiske aktier, men sammenlignes med 500.000 – valuta rettes i fase 2.
+  const avgDailyDollarVolume = meta?.avgDailyDollarVolume || tx.avgDailyDollarVolume || undefined;
+  const exchangeRaw = (meta?.exchangeName || '').toUpperCase();
   const fullExchange = (meta?.fullExchangeName || '').toUpperCase();
-  const instrument = (meta?.instrumentType || 'EQUITY').toUpperCase();
-  const currency = (meta?.currency || (tx.ticker.includes('.CO') ? 'DKK' : 'USD')).toUpperCase();
+  const instrument = meta?.instrumentType?.toUpperCase();
+  const currency = (meta?.currency || (nordic ? NORDIC_CURRENCY[nordic] : 'USD')).toUpperCase();
   const compName = (tx.companyName || '').toLowerCase();
 
-  // 1. Børs-tjek (Godkendte hovedbørser vs. OTC / Pink Sheets)
-  let exchangeFormatted = 'NASDAQ';
-  if (
-    exchangeRaw === 'NMS' ||
-    exchangeRaw === 'NGM' ||
-    exchangeRaw === 'NCM' ||
-    fullExchange.includes('NASDAQ') ||
-    exchangeRaw.includes('NASDAQ')
-  ) {
-    exchangeFormatted = 'NASDAQ';
+  // 1. Børs: eksplicit allowlist
+  let exchange: string | undefined;
+  if (nordic) {
+    exchange = NORDIC_VENUES[nordic];
   } else if (
-    exchangeRaw === 'NYQ' ||
-    exchangeRaw === 'ASE' ||
-    fullExchange.includes('NYSE') ||
-    exchangeRaw.includes('NYSE')
-  ) {
-    exchangeFormatted = 'NYSE';
-  } else if (
-    exchangeRaw === 'CPH' ||
-    fullExchange.includes('COPENHAGEN') ||
-    tx.ticker.includes('.CO')
-  ) {
-    exchangeFormatted = 'CPH (Nasdaq Copenhagen)';
-  } else if (
-    exchangeRaw === 'STO' ||
-    exchangeRaw === 'OSL' ||
-    exchangeRaw === 'HEX' ||
-    fullExchange.includes('STOCKHOLM') ||
-    fullExchange.includes('OSLO')
-  ) {
-    exchangeFormatted = 'Nasdaq Nordic';
-  } else if (
-    ['PNK', 'OTC', 'OBB', 'GREY', 'PINX'].includes(exchangeRaw) ||
+    ['PNK', 'OTC', 'OBB', 'GREY', 'PINX', 'OQB', 'OQX'].includes(exchangeRaw) ||
     fullExchange.includes('OTC') ||
     fullExchange.includes('PINK')
   ) {
@@ -259,16 +244,29 @@ export function verifyDkTradability(
       exchange: 'OTC',
       avgDailyDollarVolume,
     };
-  } else {
-    exchangeFormatted = exchangeRaw || 'US Main Market';
+  } else if (['NMS', 'NGM', 'NCM', 'NAS'].includes(exchangeRaw) || fullExchange.includes('NASDAQ')) {
+    exchange = 'NASDAQ';
+  } else if (exchangeRaw === 'ASE' || fullExchange.includes('NYSE AMERICAN') || fullExchange.includes('NYSE MKT')) {
+    exchange = 'NYSE American';
+  } else if (exchangeRaw === 'NYQ' || fullExchange === 'NYSE') {
+    exchange = 'NYSE';
+  } else if (['BTS', 'BATS', 'CBOE'].includes(exchangeRaw) || fullExchange.includes('CBOE') || fullExchange.includes('BATS')) {
+    exchange = 'Cboe';
+  } else if (exchangeRaw || fullExchange) {
+    return {
+      isTradableInDK: false,
+      tradabilityReason: `AFVIST: Børsen "${meta?.fullExchangeName || meta?.exchangeName}" er ikke på listen over godkendte børser`,
+      exchange: meta?.fullExchangeName || meta?.exchangeName,
+      avgDailyDollarVolume,
+    };
   }
 
   // 2. Instrument-tjek & EU PRIIPs / KID blokering (US Closed-End Funds & Trusts)
-  if (instrument !== 'EQUITY') {
+  if (instrument && instrument !== 'EQUITY') {
     return {
       isTradableInDK: false,
       tradabilityReason: `AFVIST: US Fond / ${instrument} (Blokeret i EU/DK pga. PRIIPs/KID reglerne)`,
-      exchange: exchangeFormatted,
+      exchange,
       avgDailyDollarVolume,
     };
   }
@@ -283,46 +281,57 @@ export function verifyDkTradability(
     return {
       isTradableInDK: false,
       tradabilityReason: 'AFVIST: US Closed-End Fund / Trust (Blokeret i EU/DK pga. PRIIPs/KID reglerne)',
-      exchange: exchangeFormatted,
+      exchange,
       avgDailyDollarVolume,
     };
   }
 
-  // 3. Minimumskurs & Likviditet
+  // 3. Minimumskurs & Likviditet (kun når tallene er kendt)
   const minPrice = currency === 'DKK' ? 10.0 : 2.0;
-  if (currentPrice > 0 && currentPrice < minPrice) {
+  if (currentPrice !== undefined && currentPrice < minPrice) {
     const formattedPrice = currency === 'DKK' ? `${currentPrice} DKK` : `$${currentPrice}`;
     const formattedMin = currency === 'DKK' ? '10 DKK' : '$2.00';
     return {
       isTradableInDK: false,
       tradabilityReason: `AFVIST: Penny Stock (Kurs ${formattedPrice} er under minimumskravet på ${formattedMin})`,
-      exchange: exchangeFormatted,
+      exchange,
       avgDailyDollarVolume,
     };
   }
 
-  if (avgDailyDollarVolume > 0 && avgDailyDollarVolume < 500000) {
+  if (avgDailyDollarVolume !== undefined && avgDailyDollarVolume < 500000) {
     return {
       isTradableInDK: false,
       tradabilityReason: `AFVIST: Illikvid aktie (Gns. daglig omsætning $${Math.round(
         avgDailyDollarVolume
       ).toLocaleString()} er under $500.000/dag)`,
-      exchange: exchangeFormatted,
+      exchange,
       avgDailyDollarVolume,
     };
   }
 
-  const volFormatted =
-    avgDailyDollarVolume >= 1000000
-      ? `$${(avgDailyDollarVolume / 1000000).toFixed(1)}M/dag`
-      : avgDailyDollarVolume > 0
-      ? `$${Math.round(avgDailyDollarVolume / 1000)}k/dag`
-      : 'Ukendt';
+  const missing = [
+    !exchange && 'børs',
+    !instrument && 'instrumenttype',
+    currentPrice === undefined && 'kurs',
+    avgDailyDollarVolume === undefined && 'volumen',
+  ].filter(Boolean);
+  if (missing.length > 0) {
+    return {
+      isTradableInDK: undefined,
+      tradabilityReason: `Ikke verificeret – data mangler (${missing.join(', ')})`,
+      exchange,
+      avgDailyDollarVolume,
+    };
+  }
+
+  const vol = avgDailyDollarVolume as number;
+  const volFormatted = vol >= 1000000 ? `$${(vol / 1000000).toFixed(1)}M/dag` : `$${Math.round(vol / 1000)}k/dag`;
 
   return {
     isTradableInDK: true,
-    tradabilityReason: `Verificeret: ${exchangeFormatted} • Likviditet ${volFormatted} • Handelbar på Nordnet / Saxo`,
-    exchange: exchangeFormatted,
+    tradabilityReason: `Verificeret: ${exchange} • Likviditet ${volFormatted} • Handelbar på Nordnet / Saxo`,
+    exchange,
     avgDailyDollarVolume,
   };
 }
@@ -450,12 +459,12 @@ export async function enrichTransactionWithMarketData(
       longName: prices?.longName,
     });
 
-    tx.exchange = tradability.exchange;
+    tx.exchange = tradability.exchange ?? tx.exchange;
     tx.isTradableInDK = tradability.isTradableInDK;
     tx.tradabilityReason = tradability.tradabilityReason;
     tx.avgDailyDollarVolume = tradability.avgDailyDollarVolume;
 
-    if (!tradability.isTradableInDK) {
+    if (tradability.isTradableInDK === false) {
       notesParts.push(`⚠️ HANDELBARHED ADVARSEL (DK): ${tradability.tradabilityReason}`);
     } else {
       notesParts.push(`DK Mægler-Status: ${tradability.tradabilityReason}`);
