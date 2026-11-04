@@ -599,7 +599,8 @@ ${verdict.judgeThinking}
       const res = await fetch('/api/council', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transaction: tx, judgeTier: targetTier, forceRefresh }),
+        // Kun id: serveren henter transaktionen fra den gemte scan/dom og stoler ikke på klientens data.
+        body: JSON.stringify({ id: tx.id, judgeTier: targetTier, forceRefresh }),
       });
       if (!res.ok) throw new Error(await readCouncilError(res));
       const data = await res.json();
@@ -699,7 +700,7 @@ ${verdict.judgeThinking}
         id: tx.id,
         ticker: tx.ticker,
         companyName: tx.companyName,
-        exchange: tx.exchange || 'NASDAQ',
+        exchange: tx.exchange,
         insiderName: tx.insiderName,
         insiderTitle: tx.insiderTitle,
         // Ingen standardscore: uden en afsagt dom afviser serveren positionen.
@@ -869,7 +870,7 @@ ${verdict.judgeThinking}
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            transaction: tx,
+            id: tx.id,
             judgeTier,
             forceRefresh: hasOldVerdict,
           }),
@@ -948,7 +949,7 @@ ${verdict.judgeThinking}
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            transaction: tx,
+            id: tx.id,
             judgeTier,
             forceRefresh: false,
           }),

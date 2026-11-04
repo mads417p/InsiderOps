@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { conveneCouncil, CouncilError } from '@/lib/claude-council';
-import { fetchSecForm4Footnotes } from '@/lib/sec-scanner';
+import { applyHardFilter, fetchSecForm4Footnotes } from '@/lib/sec-scanner';
+import { councilPostSchema, idSchema, parseJson } from '@/lib/api-schemas';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { fetchVerifiedLiveQuote } from '@/lib/live-quote';
 import { fetchInsiderTrackRecord } from '@/lib/track-record';
 import { fetchCompanyFundamentals } from '@/lib/fundamentals';
-import { getSavedVerdicts, saveVerdict, deleteVerdict } from '@/lib/db';
+import { getDatabase, getSavedVerdicts, saveVerdict, deleteVerdict, findTransactionForCouncil } from '@/lib/db';
 import { InsiderTransaction } from '@/types/insider';
 
 export async function GET() {
@@ -29,13 +30,14 @@ export async function GET() {
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
-    if (!id) {
+    const parsedId = idSchema.safeParse(searchParams.get('id'));
+    if (!parsedId.success) {
       return NextResponse.json(
-        { success: false, error: 'Mangler id parameter' },
+        { success: false, error: 'Mangler eller ugyldigt id parameter' },
         { status: 400 }
       );
     }
+    const id = parsedId.data;
     const deleted = await deleteVerdict(id);
     return NextResponse.json({
       success: true,
@@ -53,33 +55,28 @@ export async function DELETE(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const tx = body.transaction as InsiderTransaction | undefined;
-    const judgeTier = (body.judgeTier === 'sonnet' ? 'sonnet' : 'opus') as 'opus' | 'sonnet';
-    const forceRefresh = Boolean(body.forceRefresh);
+    const parsed = await parseJson(request, councilPostSchema);
+    if (!parsed.ok) {
+      return NextResponse.json({ success: false, error: parsed.error }, { status: 400 });
+    }
+    const judgeTier = parsed.data.judgeTier ?? 'opus';
+    const forceRefresh = Boolean(parsed.data.forceRefresh);
 
-    if (!tx || !tx.ticker || !tx.insiderName) {
+    // Transaktionen hentes server-side (seneste scan, ellers tidligere dom) – klientens body stoles ikke på.
+    const db = await getDatabase();
+    const tx: InsiderTransaction | null = findTransactionForCouncil(db, parsed.data.id);
+    if (!tx) {
       return NextResponse.json(
-        { success: false, error: 'Ugyldig transaktionsdata modtaget' },
-        { status: 400 }
+        { success: false, error: `Transaktionen ${parsed.data.id} findes ikke i en gemt scan eller dom – scan igen først` },
+        { status: 404 }
       );
     }
 
-    // Tjek om der findes en tidligere afsagt dom for at gemme previousScore ved gen-vurdering
-    let previousScore: number | undefined;
-    try {
-      const existingVerdicts = await getSavedVerdicts();
-      const existingItem =
-        existingVerdicts[tx.id] ||
-        Object.values(existingVerdicts).find(
-          (v) => v.transaction.ticker.toUpperCase() === tx.ticker.toUpperCase()
-        );
-      if (existingItem?.verdict?.asymmetryScore) {
-        previousScore = existingItem.verdict.asymmetryScore;
-      }
-    } catch (dbReadErr) {
-      console.warn('Kunne ikke læse eksisterende domme for previousScore:', dbReadErr);
-    }
+    // Tidligere dom (samme id eller ticker) → previousScore ved gen-vurdering
+    const existingItem = Object.hasOwn(db.verdicts, tx.id)
+      ? db.verdicts[tx.id]
+      : Object.values(db.verdicts).find((v) => v.transaction.ticker.toUpperCase() === tx.ticker.toUpperCase());
+    const previousScore: number | undefined = existingItem?.verdict?.asymmetryScore || undefined;
 
     // Ved forceRefresh eller manglende markedsdata: Hent spritnye live-kurser, ATR og teknisk kontekst
     if (forceRefresh || tx.currentMarketPrice === undefined || tx.recentPriceChange30dPct === undefined) {
@@ -161,6 +158,15 @@ export async function POST(request: Request) {
 
     if (enrichmentTasks.length > 0) {
       await Promise.all(enrichmentTasks);
+    }
+
+    // Hard-filter (kode P, ≥ $50k, handelbarhed) på de friske data FØR noget LLM-kald – ingen penge på støj.
+    const hardFilter = applyHardFilter(tx);
+    if (!hardFilter.passed) {
+      return NextResponse.json(
+        { success: false, error: hardFilter.reason || 'Afvist af hard-filteret', reason: 'HARD_FILTER', transaction: tx },
+        { status: 422 }
+      );
     }
 
     // Fejler rådet, svares der med fejlstatus, og der gemmes intet.

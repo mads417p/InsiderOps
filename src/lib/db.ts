@@ -164,10 +164,23 @@ export function saveVerdict(item: SavedVerdictItem): Promise<void> {
 
 export function deleteVerdict(txId: string): Promise<boolean> {
   return updateDb((db) => {
-    const existed = txId in db.verdicts;
-    delete db.verdicts[txId];
+    const existed = Object.hasOwn(db.verdicts, txId);
+    if (existed) delete db.verdicts[txId];
     return existed;
   });
+}
+
+/**
+ * Transaktionen bag et råds-kald findes server-side efter id: først i de gemte scans (nyeste først),
+ * ellers i en tidligere dom. Klientens egne transaktionsdata bruges aldrig. Returnerer en kopi.
+ */
+export function findTransactionForCouncil(db: DatabaseSchema, id: string): InsiderTransaction | null {
+  const scans = Object.values(db.scanHistory).sort((a, b) => (b.scannedAt || '').localeCompare(a.scannedAt || ''));
+  for (const scan of scans) {
+    const hit = scan.items?.find((it) => it.transaction?.id === id);
+    if (hit) return structuredClone(hit.transaction);
+  }
+  return Object.hasOwn(db.verdicts, id) ? structuredClone(db.verdicts[id].transaction) : null;
 }
 
 /** Seneste gemte scan for en kilde (med tidsstempel), eller null hvis der ingen er. */
@@ -198,8 +211,8 @@ export function savePaperTrade(pos: PaperTradePosition): Promise<void> {
 
 export function deletePaperTrade(id: string): Promise<boolean> {
   return updateDb((db) => {
-    const existed = id in db.paperPortfolio;
-    delete db.paperPortfolio[id];
+    const existed = Object.hasOwn(db.paperPortfolio, id);
+    if (existed) delete db.paperPortfolio[id];
     return existed;
   });
 }

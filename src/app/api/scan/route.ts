@@ -11,12 +11,17 @@ import { fetchNordicInsiderTransactions } from '@/lib/nordic-scanner';
 import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { saveScan, getLatestScan } from '@/lib/db';
+import { parseJson, scanPostSchema } from '@/lib/api-schemas';
 import { GatekeeperResult, InsiderTransaction } from '@/types/insider';
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const transactions: InsiderTransaction[] = body.transactions || [];
+    const parsed = await parseJson(request, scanPostSchema);
+    if (!parsed.ok) {
+      return NextResponse.json({ success: false, error: parsed.error }, { status: 400 });
+    }
+    // Kun markedsdata genberiges; intet gemmes, og ingen LLM-kald.
+    const transactions = parsed.data.transactions as unknown as InsiderTransaction[];
 
     const enriched = await Promise.all(
       transactions.map((tx) => enrichTransactionWithMarketData({ ...tx }))

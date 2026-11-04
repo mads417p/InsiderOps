@@ -10,6 +10,7 @@ import {
   tradeTypeOf,
 } from '@/lib/portfolio';
 import { PaperTradePosition } from '@/types/insider';
+import { idSchema, parseJson, portfolioPatchSchema, portfolioPostSchema } from '@/lib/api-schemas';
 
 /** Live SPY-kurs eller null – aldrig en hårdkodet reserve (755 gav før permanent forkert alpha). */
 async function fetchSpyPrice(): Promise<number | null> {
@@ -82,24 +83,21 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-
-    if (!body.ticker) {
-      return NextResponse.json({ success: false, error: 'Mangler påkrævet ticker felt' }, { status: 400 });
+    // zod: asymmetryScore er påkrævet (ingen standard 85), tal skal være endelige og priser positive.
+    const parsed = await parseJson(request, portfolioPostSchema);
+    if (!parsed.ok) {
+      return NextResponse.json({ success: false, error: parsed.error }, { status: 400 });
     }
-    // Ingen standardscore: en position uden en afsagt dom kan ikke oprettes.
-    if (typeof body.asymmetryScore !== 'number' || !Number.isFinite(body.asymmetryScore)) {
+    const body = parsed.data;
+    const insiderBuyPrice = body.insiderBuyPrice;
+    if (body.id && Object.hasOwn(await getPaperPortfolio(), body.id)) {
       return NextResponse.json(
-        { success: false, error: 'Mangler asymmetryScore fra en afsagt dom – positionen er ikke oprettet' },
-        { status: 400 }
+        { success: false, error: `Positionen ${body.id} findes allerede – den overskrives ikke` },
+        { status: 409 }
       );
     }
-    const insiderBuyPrice = Number(body.insiderBuyPrice);
-    if (!(insiderBuyPrice > 0)) {
-      return NextResponse.json({ success: false, error: 'Mangler insiderens købskurs' }, { status: 400 });
-    }
 
-    const ticker = String(body.ticker).toUpperCase().trim();
+    const ticker = body.ticker.toUpperCase();
     const [liveQuote, spyPrice, fxRates] = await Promise.all([
       fetchVerifiedLiveQuote(ticker),
       fetchSpyPrice(),
@@ -123,9 +121,9 @@ export async function POST(request: Request) {
     }
 
     const entryPrice = liveQuote.price;
-    let shares = Number(body.shares);
+    let shares = body.shares ?? 0;
     if (!(shares > 0)) {
-      const investedDkk = Number(body.investedDkk);
+      const investedDkk = body.investedDkk ?? 0;
       if (!(investedDkk > 0)) {
         return NextResponse.json({ success: false, error: 'Angiv antal aktier eller beløb i DKK' }, { status: 400 });
       }
@@ -155,8 +153,8 @@ export async function POST(request: Request) {
       insiderPnlPct: Number((((entryPrice - insiderBuyPrice) / insiderBuyPrice) * 100).toFixed(2)),
       shares,
       investedDkk: Math.round(shares * entryPrice * currentFxRateDkk),
-      stopLossPrice: Number(body.stopLossPrice) > 0 ? Number(body.stopLossPrice) : 0,
-      targetPrice: Number(body.targetPrice) > 0 ? Number(body.targetPrice) : 0,
+      stopLossPrice: body.stopLossPrice ?? 0,
+      targetPrice: body.targetPrice ?? 0,
       pnlPct: 0,
       pnlDkk: 0,
       status: 'OPEN',
@@ -188,13 +186,14 @@ export async function POST(request: Request) {
  */
 export async function PATCH(request: Request) {
   try {
-    const body = await request.json();
-    const id = body.id;
-    if (!id) {
-      return NextResponse.json({ success: false, error: 'Mangler position id parameter' }, { status: 400 });
+    const parsed = await parseJson(request, portfolioPatchSchema);
+    if (!parsed.ok) {
+      return NextResponse.json({ success: false, error: parsed.error }, { status: 400 });
     }
+    const body = parsed.data;
+    const id = body.id;
 
-    if (body.action === 'close') {
+    if ('action' in body && body.action === 'close') {
       const existing = await getPaperPortfolio();
       if (!Object.hasOwn(existing, id)) {
         return NextResponse.json({ success: false, error: 'Position ikke fundet i porteføljen' }, { status: 404 });
@@ -219,16 +218,18 @@ export async function PATCH(request: Request) {
       return respondWithPortfolio({ position: closed });
     }
 
+    const edit = body as Exclude<typeof body, { action: 'close' }>; // zod har valideret tal og enum
+
     // Hele read-modify-write sker i én updateDb, så samtidige skrivninger ikke overskriver hinanden.
     const pos = await updateDb((db) => {
       if (!Object.hasOwn(db.paperPortfolio, id)) return null;
       const pos = db.paperPortfolio[id];
 
-      if (body.tradeType !== undefined) pos.tradeType = body.tradeType === 'REAL_NORDNET' ? 'REAL_NORDNET' : 'PAPER';
-      if (Number(body.entryPrice) > 0) pos.entryPrice = Number(body.entryPrice);
-      if (Number(body.shares) > 0) pos.shares = Number(body.shares);
-      if (body.stopLossPrice !== undefined && Number(body.stopLossPrice) >= 0) pos.stopLossPrice = Number(body.stopLossPrice);
-      if (body.targetPrice !== undefined && Number(body.targetPrice) >= 0) pos.targetPrice = Number(body.targetPrice);
+      if (edit.tradeType !== undefined) pos.tradeType = edit.tradeType;
+      if (edit.entryPrice !== undefined) pos.entryPrice = edit.entryPrice;
+      if (edit.shares !== undefined) pos.shares = edit.shares;
+      if (edit.stopLossPrice !== undefined) pos.stopLossPrice = edit.stopLossPrice;
+      if (edit.targetPrice !== undefined) pos.targetPrice = edit.targetPrice;
 
       // Genberegn investering og P&L kun med gemte, målte valutakurser.
       if (pos.entryFxRateDkk > 0 && pos.currentFxRateDkk > 0) {
@@ -268,11 +269,11 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
-    if (!id) {
-      return NextResponse.json({ success: false, error: 'Mangler id parameter' }, { status: 400 });
+    const parsedId = idSchema.safeParse(searchParams.get('id'));
+    if (!parsedId.success) {
+      return NextResponse.json({ success: false, error: 'Mangler eller ugyldigt id parameter' }, { status: 400 });
     }
-    const deleted = await deletePaperTrade(id);
+    const deleted = await deletePaperTrade(parsedId.data);
     return respondWithPortfolio({ deleted });
   } catch (error) {
     console.error('Fejl i DELETE /api/portfolio:', error);
