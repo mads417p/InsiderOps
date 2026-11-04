@@ -217,6 +217,14 @@ export interface InsiderTrackRecord extends TrackRecordStats {
   insiderOnly?: TrackRecordStats & { unmeasuredBuysCount: number }; // samme person som den aktuelle insider
 }
 
+/** En række, scan-pipelinen afviste, med årsag (vises under "Vis afvist støj"). */
+export interface RejectedRow {
+  id: string;
+  ticker: string;
+  insiderName: string;
+  reason: string;
+}
+
 export type AsymmetrySignal = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';
 
 export interface GatekeeperResult {

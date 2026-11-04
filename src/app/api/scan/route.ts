@@ -109,7 +109,7 @@ export async function GET(request: Request) {
     // 2. Fælles pipeline: kode P → handelsdato/navn → dedup → berigelse → hard-filter → én række pr. ticker.
     const built = await buildScanRows(raw, { enrich: source !== 'mock' });
     const rows = built.rows;
-    const rejected = [...sourceRejected, ...built.rejected];
+    let rejected = [...sourceRejected, ...built.rejected];
     // C-suite-visningen: kun executives eller ægte clusters.
     const transactions = source === 'csuite' && !ticker ? rows.filter((tx) => tx.isExecutiveOfficer || tx.isClusterBuy) : rows;
 
@@ -134,12 +134,13 @@ export async function GET(request: Request) {
         if (aPassed !== bPassed) return aPassed ? -1 : 1;
         return b.result.geminiPreScore - a.result.geminiPreScore;
       });
-      await saveScan(sourceKey, items);
+      await saveScan(sourceKey, items, rejected);
     } else if (errors.length > 0) {
       // Alle kilder uden rækker og mindst én fejl: vis seneste gemte scan, tydeligt mærket som forældet.
       const cached = await getLatestScan(sourceKey);
       if (cached) {
         items = cached.items;
+        rejected = cached.rejected ?? [];
         scannedAt = cached.scannedAt;
         stale = true;
       }

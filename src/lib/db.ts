@@ -6,6 +6,7 @@ import {
   GatekeeperResult,
   InsiderTransaction,
   PaperTradePosition,
+  RejectedRow,
 } from '@/types/insider';
 
 export interface SavedVerdictItem {
@@ -21,6 +22,7 @@ export interface SavedScanItem {
     transaction: InsiderTransaction;
     result: GatekeeperResult;
   }>;
+  rejected?: RejectedRow[]; // afviste rækker med årsag; mangler i scans fra før fase 2.5
 }
 
 export interface DatabaseSchema {
@@ -192,10 +194,11 @@ export async function getLatestScan(source: string): Promise<SavedScanItem | nul
 
 export function saveScan(
   source: string,
-  items: Array<{ transaction: InsiderTransaction; result: GatekeeperResult }>
+  items: Array<{ transaction: InsiderTransaction; result: GatekeeperResult }>,
+  rejected: RejectedRow[] = []
 ): Promise<void> {
   return updateDb((db) => {
-    db.scanHistory[source] = { source, scannedAt: new Date().toISOString(), items };
+    db.scanHistory[source] = { source, scannedAt: new Date().toISOString(), items, rejected };
   });
 }
 

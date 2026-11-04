@@ -1,4 +1,4 @@
-import { InsiderTransaction, TransactionCode } from '@/types/insider';
+import { InsiderTransaction, RejectedRow, TransactionCode } from '@/types/insider';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { assertSecUrl, secFetch } from '@/lib/sec-client';
 
@@ -166,13 +166,15 @@ function mergeSameTrade(a: InsiderTransaction, b: InsiderTransaction): InsiderTr
  * Nøgle: accession-nummer + reporting owner CIK; uden dem ticker + fuldt navn + handelsdato + antal + kurs.
  * To personer med samme dato og antal aktier er derfor to købere.
  */
+export const tradeKey = (tx: InsiderTransaction) =>
+  tx.accessionNo && tx.ownerCik
+    ? `acc:${tx.accessionNo}:${tx.ownerCik}`
+    : `raw:${tx.ticker.toUpperCase().trim()}:${normalizeName(tx.insiderName)}:${tx.tradeDate}:${tx.shares}:${tx.pricePerShare}`;
+
 export function dedupTrades(rows: InsiderTransaction[]): InsiderTransaction[] {
   const byKey = new Map<string, InsiderTransaction>();
   for (const tx of rows) {
-    const key =
-      tx.accessionNo && tx.ownerCik
-        ? `acc:${tx.accessionNo}:${tx.ownerCik}`
-        : `raw:${tx.ticker.toUpperCase().trim()}:${normalizeName(tx.insiderName)}:${tx.tradeDate}:${tx.shares}:${tx.pricePerShare}`;
+    const key = tradeKey(tx);
     const prev = byKey.get(key);
     byKey.set(key, prev ? mergeSameTrade(prev, tx) : { ...tx });
   }
@@ -265,12 +267,7 @@ export function rollUpByTicker(rows: InsiderTransaction[]): InsiderTransaction[]
   return out;
 }
 
-export interface RejectedRow {
-  id: string;
-  ticker: string;
-  insiderName: string;
-  reason: string;
-}
+export type { RejectedRow };
 
 /**
  * Fælles scan-pipeline for alle kilder:
@@ -282,8 +279,13 @@ export async function buildScanRows(
   opts: { enrich?: boolean } = {}
 ): Promise<{ rows: InsiderTransaction[]; rejected: RejectedRow[] }> {
   const rejected: RejectedRow[] = [];
-  const reject = (tx: InsiderTransaction, reason: string) =>
+  const seen = new Set<string>(); // samme handel fra to kilder (OpenInsider + EDGAR) afvises og tælles én gang
+  const reject = (tx: InsiderTransaction, reason: string) => {
+    const key = tradeKey(tx);
+    if (seen.has(key)) return;
+    seen.add(key);
     rejected.push({ id: tx.id, ticker: tx.ticker, insiderName: tx.insiderName, reason });
+  };
 
   const candidates = raw.filter((tx) => {
     const hf = applyHardFilter(tx); // kode P og beløb – handelbarhed er endnu ikke kendt

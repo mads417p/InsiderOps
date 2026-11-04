@@ -42,10 +42,12 @@ import {
   InsiderTransaction,
   PaperTradePosition,
   PortfolioSummary,
+  RejectedRow,
   TradeType,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
-import { isModelScore } from '@/lib/ui-labels';
+import { collectRejected, isModelScore } from '@/lib/ui-labels';
+import { RejectedNoisePanel } from '@/components/RejectedNoisePanel';
 import { latestValidatedVerdict } from '@/lib/verdicts';
 import { PositionVerdict } from '@/components/PositionVerdict';
 import { currencyForTicker, type LiveFxRates } from '@/lib/live-quote';
@@ -79,6 +81,7 @@ interface ScanResponse {
   stale?: boolean; // true = live-hentning fejlede, items er den seneste gemte scan
   errors?: Array<{ source: string; error: string }>;
   rejectedCount?: number;
+  rejected?: RejectedRow[];
   error?: string;
 }
 
@@ -152,14 +155,14 @@ export default function Dashboard() {
   const [activeTickerQuery, setActiveTickerQuery] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'radar' | 'watchlist' | 'portfolio'>('radar');
 
-  const [hideNoise, setHideNoise] = useState<boolean>(false);
+  const [showRejected, setShowRejected] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   // Rådsfejl vises for brugeren – der findes ingen simuleret eller fallback-dom.
   const [councilError, setCouncilError] = useState<string | null>(null);
   const [items, setItems] = useState<ScanItem[]>([]);
   // Rækker afvist allerede i scan-pipelinen (kode, beløb, handelbarhed, Norden) – de er ikke i items.
-  const [scanRejectedCount, setScanRejectedCount] = useState<number>(0);
+  const [scanRejected, setScanRejected] = useState<RejectedRow[]>([]);
   const [apiKeys, setApiKeys] = useState<ScanResponse['apiKeysConfigured']>({
     gemini: false,
     anthropic: false,
@@ -508,7 +511,7 @@ ${verdict.judgeThinking}
         const data: ScanResponse = await res.json().catch(() => ({}) as ScanResponse);
         if (!res.ok) throw new Error(data.error || `HTTP-fejl ${res.status}`);
         setItems(data.items || []);
-        setScanRejectedCount(data.stale ? 0 : data.rejectedCount ?? 0);
+        setScanRejected(data.rejected ?? []);
         setApiKeys(data.apiKeysConfigured || { gemini: false, anthropic: false });
         setGatekeeperUsage(data.gatekeeperUsage ?? null);
 
@@ -1014,7 +1017,8 @@ ${verdict.judgeThinking}
 
   // KPI Beregninger
   const totalScanned = items.length;
-  const hardFilterRejected = items.filter((i) => !i.result.passedHardFilter).length;
+  // Alle afviste: pipelinens rejected-liste + items, der ikke bestod hard-filteret (ældre gemte scans).
+  const rejectedRows = collectRejected(scanRejected, items);
   const highAsymmetryCount = items.filter((i) => i.result.geminiPreScore >= 75).length;
   const savedVerdictItems = Object.values(verdictHistory).sort(
     (a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore
@@ -1075,9 +1079,8 @@ ${verdict.judgeThinking}
     );
   };
 
-  const baseFiltered = hideNoise
-    ? items.filter((i) => i.result.passedHardFilter)
-    : items;
+  // Afviste rækker vises i panelet "Vis afvist støj", ikke i tabellen.
+  const baseFiltered = items.filter((i) => i.result.passedHardFilter);
 
   const filteredItems = baseFiltered.filter((i) => {
     // 1. Regions-filter (Client-side)
@@ -1274,7 +1277,7 @@ ${verdict.judgeThinking}
               <Filter className="w-3.5 h-3.5 text-rose-400" />
             </div>
             <div className="mt-2 text-2xl font-mono font-bold text-rose-400">
-              {loading ? '-' : hardFilterRejected + scanRejectedCount}
+              {loading ? '-' : rejectedRows.length}
             </div>
             <div className="text-[11px] text-slate-500 mt-1">0 tokens brugt på støj (afvist før scoring)</div>
           </div>
@@ -1397,23 +1400,25 @@ ${verdict.judgeThinking}
 
           {activeTab === 'radar' && (
             <button
-              onClick={() => setHideNoise(!hideNoise)}
+              onClick={() => setShowRejected(!showRejected)}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 transition-colors text-xs font-mono"
             >
-              {hideNoise ? (
+              {showRejected ? (
                 <>
-                  <Eye className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Vis afvist støj ({hardFilterRejected})</span>
+                  <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Skjul afvist støj ({rejectedRows.length})</span>
                 </>
               ) : (
                 <>
-                  <EyeOff className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Skjul afvist støj ({hardFilterRejected})</span>
+                  <Eye className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Vis afvist støj ({rejectedRows.length})</span>
                 </>
               )}
             </button>
           )}
         </div>
+
+        {activeTab === 'radar' && showRejected && <RejectedNoisePanel rows={rejectedRows} />}
 
         {/* Error message */}
         {error && (
