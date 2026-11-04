@@ -8,7 +8,8 @@ const validPost = { ticker: 'ACN', asymmetryScore: 81, insiderBuyPrice: 245.98, 
 describe('zod på mutationer (audit P2)', () => {
   it('portfolio-POST: score påkrævet, ingen NaN eller negative priser', () => {
     expect(portfolioPostSchema.safeParse(validPost).success).toBe(true);
-    const { asymmetryScore: _omit, ...noScore } = validPost;
+    const noScore: Partial<typeof validPost> = { ...validPost };
+    delete noScore.asymmetryScore;
     expect(portfolioPostSchema.safeParse(noScore).success).toBe(false); // før: standard 85
     expect(portfolioPostSchema.safeParse({ ...validPost, stopLossPrice: -5 }).success).toBe(false);
     expect(portfolioPostSchema.safeParse({ ...validPost, insiderBuyPrice: Number.NaN }).success).toBe(false);
