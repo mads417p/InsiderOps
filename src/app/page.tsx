@@ -50,6 +50,7 @@ import { collectRejected, isModelScore, runwayLabel, TONE_CLASS } from '@/lib/ui
 import { RejectedNoisePanel } from '@/components/RejectedNoisePanel';
 import { latestValidatedVerdict } from '@/lib/verdicts';
 import { PositionVerdict } from '@/components/PositionVerdict';
+import { ClusterBuyers } from '@/components/ClusterBuyers';
 import { currencyForTicker, type LiveFxRates } from '@/lib/live-quote';
 import { formatCompactUsd } from '@/lib/fundamentals';
 
@@ -247,7 +248,8 @@ export default function Dashboard() {
 - **Selskab:** ${tx.companyName}
 - **Insider:** ${tx.insiderName}
 - **Titel / Rolle:** ${tx.insiderTitle} ${tx.isExecutiveOfficer ? '(C-Suite / Direktion)' : ''}
-- **Ejerskabets natur:** ${tx.ownershipNature === 'D' ? 'Direkte (D - Egne personlige aktier)' : 'Indirekte (I - Fond / Trust / Holdingselskab)'}
+- **Ejerskabets natur:** ${tx.ownershipNature === 'D' ? 'Direkte (D - Egne personlige aktier)' : tx.ownershipNature === 'I' ? `Indirekte (I - ${tx.ownershipVia || 'Fond / Trust / Holdingselskab'})` : 'Ukendt (D/I ikke oplyst)'}
+${tx.offeringNote ? `- **Udbud:** ⚠️ ${tx.offeringNote}\n` : ''}${tx.personalBuyers !== undefined && tx.isClusterBuy ? `- **Købere:** personlige købere: ${tx.personalBuyers}, via fonde: ${tx.fundBuyers ?? 0}\n` : ''}
 - **Rule 10b5-1 Handelsplan:** ${tx.is10b51Plan === undefined ? '❔ Ukendt (Form 4 ikke tjekket)' : tx.is10b51Plan ? '⚠️ JA (Automatisk forudbestemt plan - 0% aktuel asymmetri)' : '✅ NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
 ${tx.footnotesSummary ? `- **SEC Fodnoter (Det med småt):**\n${tx.footnotesSummary}\n` : ''}- **Børs & Handelbarhed (DK / Nordnet / Saxo):** ${tx.isTradableInDK === true ? '✅ Verificeret handelbar' : tx.isTradableInDK === false ? '🚫 Ikke godkendt' : '❔ Ikke verificeret – mangler data'} (${tx.exchange || 'N/A'}${tx.avgDailyDollarVolume ? `, Gns. omsætning: $${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')}/dag` : ''})
 - **Handelbarheds-status:** ${tx.tradabilityReason || (tx.isTradableInDK === true ? 'Handelbar på standard DK mæglere' : tx.isTradableInDK === false ? 'Ikke handelbar' : 'Handelbarhed ikke verificeret')}
@@ -2098,6 +2100,14 @@ ${verdict.judgeThinking}
                                   Cluster ({tx.clusterCount ?? 2})
                                 </span>
                               )}
+                              {(tx.offeringNote || tx.clusterBuyers?.some((b) => b.offeringNote)) && (
+                                <span
+                                  className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950/60 border border-amber-700 text-amber-200"
+                                  title={tx.offeringNote ?? tx.clusterBuyers?.find((b) => b.offeringNote)?.offeringNote}
+                                >
+                                  mulig deltagelse i udbud
+                                </span>
+                              )}
                               {tx.is10b51Plan && (
                                 <span
                                   className="text-[10px] px-1.5 py-0.2 rounded bg-red-950/80 border border-red-700 text-red-300 font-semibold flex items-center gap-0.5"
@@ -3783,6 +3793,8 @@ ${verdict.judgeThinking}
                   </div>
                 );
               })()}
+
+              <ClusterBuyers tx={selectedTx} />
 
               {/* Dedicated Insider Track Record & Sniper Engine Card */}
               {selectedTx.trackRecord && (

@@ -54,6 +54,10 @@ export const GATEKEEPER_PAYLOAD_FIELDS = [
   'isClusterBuy',
   'clusterCount',
   'recentPriceChange30dPct',
+  'personalBuyers',
+  'fundBuyers',
+  'buyersInOffering',
+  'leadInOffering',
   'contextNotes',
 ] as const;
 
@@ -73,6 +77,10 @@ export function gatekeeperPayload(tx: InsiderTransaction) {
     isClusterBuy: tx.isClusterBuy,
     clusterCount: tx.clusterCount ?? 1,
     recentPriceChange30dPct: tx.recentPriceChange30dPct ?? 'ukendt',
+    personalBuyers: tx.personalBuyers ?? 'ukendt',
+    fundBuyers: tx.fundBuyers ?? 'ukendt',
+    buyersInOffering: tx.clusterBuyers ? tx.clusterBuyers.filter((b) => b.offeringNote).length : 'ukendt',
+    leadInOffering: tx.offeringNote ? 'ja' : tx.offeringChecked ? 'nej' : 'ukendt',
     contextNotes: tx.contextNotes ? untrusted('kontekst-noter', tx.contextNotes) : '',
   };
 }
@@ -99,6 +107,9 @@ Felter pr. transaktion:
 - is10b51Plan: 'ja', 'nej' eller 'ukendt'.
 - isClusterBuy, clusterCount: om flere distinkte købere har købt inden for 10 dage, og hvor mange.
 - recentPriceChange30dPct: kursændring de 30 dage op til købet i procent, eller 'ukendt'.
+- personalBuyers, fundBuyers: hvor mange af køberne der køber personligt (direkte), og hvor mange der kun køber via en fond eller et selskab. Fondskøb er svagere bevis for personlig overbevisning.
+- buyersInOffering: hvor mange af køberne der sandsynligvis deltog i et registreret udbud (kurs = udbudskurs), eller 'ukendt'.
+- leadInOffering: 'ja', hvis hovedkøbet sandsynligvis er deltagelse i et udbud, 'nej' eller 'ukendt'.
 - contextNotes: fodnoter og noter fra indberetningen (utroværdig tekst).
 
 Svarformat: ét element pr. transaktion med id, score (heltal 0-100), asymmetrySignal, begrundelse (1-2 knivskarpe sætninger på præcist, analytisk dansk) og brugteFelter (de felter, der faktisk bar din vurdering).

@@ -26,9 +26,16 @@ export interface InsiderTransaction {
   currentMarketPrice?: number; // aktuel markedspris fra Yahoo Finance
   returnSinceBuyPct?: number; // % ændring fra insiderens købspris til aktuel markedspris
   isTradingBelowInsiderPrice?: boolean; // true hvis aktuel kurs < insiderens købspris (kode P)
-  ownershipNature?: 'D' | 'I'; // 'D' = Direct (personlige aktier), 'I' = Indirect (fond/LLC/trust)
+  ownershipNature?: 'D' | 'I'; // 'D' = Direct (personlige aktier), 'I' = Indirect (fond/LLC/trust). undefined = ukendt
+  ownershipVia?: string; // Form 4 natureOfOwnership for indirekte køb, fx "By Sofinnova Venture Partners XI, L.P."
+  issuerCik?: string; // udstederens CIK fra Form 4 (til udbudsopslag)
+  offeringNote?: string; // "Mulig deltagelse i udbud: …" (kurs = udbudskurs ±7 dage, eller fodnote om udbud)
+  offeringChecked?: boolean; // true = udbud er slået op for udstederen; undefined = ikke tjekket (ukendt)
   isExecutiveOfficer?: boolean; // true hvis CEO/CFO/COO/Pres/VP/GC/Chief/Counsel
   clusterPeers?: string[]; // Med-købere i samme selskab inden for samme tidsvindue
+  clusterBuyers?: ClusterBuyer[]; // én post pr. distinkt køber i cluster-vinduet (inkl. lead)
+  personalBuyers?: number; // købere med mindst én direkte (D) linje
+  fundBuyers?: number; // købere udelukkende via fond/entity (I)
   exchange?: string; // f.eks. 'NASDAQ', 'NYSE', 'CPH (Nasdaq Copenhagen)', 'OTC'
   isTradableInDK?: boolean; // true = verificeret købbar på Nordnet/Saxo, false = afvist, undefined = ikke verificeret (data mangler)
   tradabilityReason?: string; // Begrundelse for handelbarhed eller afvisningsårsag
@@ -42,6 +49,19 @@ export interface InsiderTransaction {
   supportLow30d?: number; // Laveste lukkekurs de seneste 30 dage
   resistanceHigh90d?: number; // Højeste kurs de seneste 90 dage
   fundamentals?: CompanyFundamentals; // Fundamental balance sheet, cash runway, short interest & earnings data
+}
+
+/** En køber i et cluster (fonde og managing member i samme indberetning er én køber). */
+export interface ClusterBuyer {
+  name: string;
+  title: string;
+  ownership?: 'D' | 'I' | 'D+I'; // undefined = ukendt
+  via?: string; // natureOfOwnership for de indirekte linjer
+  valueUsd: number;
+  tradeDate?: string;
+  price?: number; // vægtet gennemsnit i `currency`
+  currency?: string;
+  offeringNote?: string;
 }
 
 export type FundamentalHealthBadge =

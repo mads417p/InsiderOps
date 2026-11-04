@@ -12,7 +12,7 @@ import { UNTRUSTED_DATA_INSTRUCTION, untrusted } from '@/lib/prompt-safety';
 import { gatekeeperModelLabel } from '@/lib/claude-gatekeeper';
 
 /** Bump ved enhver ændring af prompts eller skema, så domme kan spores til den prompt, der lavede dem. */
-export const PROMPT_VERSION = 'fase1-2026-11-04';
+export const PROMPT_VERSION = 'fase2-5-2026-11-04'; // + D/I ukendt, udbudsdeltagelse, personlige/fonds-købere
 
 const VERDICTS: readonly CouncilVerdictType[] = [
   'STRONG ASYMMETRY (KØB)',
@@ -219,14 +219,15 @@ TICKER: ${tx.ticker} (${tx.companyName})
 INSIDER: ${tx.insiderName}
 ROLLE / TITEL: ${tx.insiderTitle}
 C-SUITE DIREKTØR: ${tx.isExecutiveOfficer ? 'JA (C-Suite / Executive Officer)' : 'NEJ (Menig Bestyrelse eller 10% Fond)'}
-EJERSKABETS NATUR: ${tx.ownershipNature === 'I' ? 'INDIREKTE (I - Via Fond / LLC / Trust / Holding)' : 'DIREKTE (D - Egne personlige aktier)'}
+EJERSKABETS NATUR: ${tx.ownershipNature === 'I' ? `INDIREKTE (I - Via Fond / LLC / Trust / Holding${tx.ownershipVia ? `: ${tx.ownershipVia}` : ''})` : tx.ownershipNature === 'D' ? 'DIREKTE (D - Egne personlige aktier)' : 'UKENDT (D/I ikke oplyst)'}
+UDBUDSDELTAGELSE: ${tx.offeringNote ? `${tx.offeringNote} – sandsynligvis IKKE et markedskøb` : tx.offeringChecked ? 'Ingen registreret udbudskurs matcher købet' : 'Ikke tjekket'}
 RULE 10b5-1 HANDELSPLAN: ${tx.is10b51Plan === undefined ? 'UKENDT (Form 4 ikke tjekket)' : tx.is10b51Plan ? 'JA (Forudbestemt automatisk handelsplan - 0% aktuel asymmetri/skøn)' : 'NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
 ${tx.footnotesSummary ? `SEC FORM 4 FODNOTER / DET MED SMÅT:\n${untrusted('sec-form4-fodnoter', tx.footnotesSummary)}\n` : ''}TRANSAKTIONSTYPE: Kode ${tx.transactionCode} (Åbent markedskøb)
 ANTAL AKTIER: ${tx.shares.toLocaleString()} stk a ${tx.pricePerShare} ${txCur}
 TOTAL HANDELSVÆRDI: ${tx.totalValueLocal !== undefined ? `${Math.round(tx.totalValueLocal).toLocaleString()} ${txCur} (ca. $${Math.round(tx.totalValueUsd).toLocaleString()} USD)` : `$${Math.round(tx.totalValueUsd).toLocaleString()} USD`}
 BEHOLDNING EFTER KØB: ${tx.sharesOwnedFollowing !== undefined ? `${tx.sharesOwnedFollowing.toLocaleString()} aktier` : 'ikke oplyst'}
 FORØGELSE AF EGEN BEHOLDNING: ${tx.holdingsIncreasePct !== undefined ? `+${tx.holdingsIncreasePct}%` : 'ukendt'}
-CLUSTER-KØB: ${tx.isClusterBuy ? `JA (${tx.clusterCount ?? 2} uafhængige personer)` : 'NEJ'}
+CLUSTER-KØB: ${tx.isClusterBuy ? `JA (${tx.clusterCount ?? 2} uafhængige købere${tx.personalBuyers !== undefined ? `; personlige købere: ${tx.personalBuyers}, via fonde: ${tx.fundBuyers ?? 0}` : ''})` : 'NEJ'}
 ${
   tx.clusterPeers && tx.clusterPeers.length > 0
     ? `MED-KØBERE I SAMME AKTIE (CLUSTER PEERS):\n${tx.clusterPeers.map((p) => `  • ${p}`).join('\n')}`

@@ -1,4 +1,5 @@
-import { InsiderTransaction, RejectedRow, TransactionCode } from '@/types/insider';
+import { ClusterBuyer, InsiderTransaction, RejectedRow, TransactionCode } from '@/types/insider';
+import { getOfferingsNear, isOfferingFootnote, matchOffering, offeringNote } from '@/lib/offering-check';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { assertSecUrl, secFetch } from '@/lib/sec-client';
 
@@ -97,37 +98,24 @@ export function detectOwnershipNature(
   rawNature?: string,
   insiderName?: string,
   rawHtml?: string
-): 'D' | 'I' {
+): 'D' | 'I' | undefined {
   if (rawNature === 'D' || rawNature === 'I') return rawNature;
 
   if (rawHtml) {
-    if (rawHtml.toLowerCase().includes('direct shares')) return 'D';
+    // 'indirect shares' først – "direct shares" er en delstreng af den.
     if (rawHtml.toLowerCase().includes('indirect shares')) return 'I';
+    if (rawHtml.toLowerCase().includes('direct shares')) return 'D';
   }
 
-  if (insiderName) {
-    const n = insiderName.toLowerCase();
-    if (
-      n.includes(' llc') ||
-      n.includes(' lp') ||
-      n.includes(' l.p.') ||
-      n.includes(' fund') ||
-      n.includes(' trust') ||
-      n.includes(' capital') ||
-      n.includes(' partners') ||
-      n.includes(' holdings') ||
-      n.includes(' investments') ||
-      n.includes(' group') ||
-      n.includes(' management') ||
-      n.includes(' corp') ||
-      n.includes(' inc') ||
-      n.includes(' bank')
-    ) {
-      return 'I';
-    }
-  }
+  if (insiderName && isEntityName(insiderName)) return 'I';
 
-  return 'D';
+  return undefined; // ukendt – aldrig et gæt på 'D'
+}
+
+/** Navnet er en fond/entity (LLC, L.P., trust …), ikke en person. */
+export function isEntityName(name: string): boolean {
+  const n = ` ${name.toLowerCase()}`;
+  return [' llc', ' lp', ' l.p.', ' fund', ' trust', ' capital', ' partners', ' holdings', ' investments', ' group', ' management', ' corp', ' inc', ' bank', ' ventures', ' spc'].some((w) => n.includes(w));
 }
 
 /** Normaliseret fuldt navn til sammenligning: NFKC, små bogstaver, æøå bevares, ingen afkortning. */
@@ -207,6 +195,37 @@ function buyerKeys(rows: InsiderTransaction[]): Map<InsiderTransaction, string> 
 
 const priceLabel = (tx: InsiderTransaction) => (tx.currency && tx.currency !== 'USD' ? `${tx.currency} ` : '$');
 
+/** Én post pr. distinkt køber (samme nøgler som cluster-tællingen). Beløb tælles én gang pr. indberetning. */
+function buildClusterBuyers(rows: InsiderTransaction[], keys: Map<InsiderTransaction, string>): ClusterBuyer[] {
+  const byBuyer = new Map<string, InsiderTransaction[]>();
+  for (const t of rows) byBuyer.set(keys.get(t)!, [...(byBuyer.get(keys.get(t)!) ?? []), t]);
+  return [...byBuyer.values()]
+    .map((ts) => {
+      const perTrade = new Map<string, InsiderTransaction>();
+      for (const t of ts) {
+        const k = t.accessionNo ? `acc:${t.accessionNo}` : `id:${t.id}`;
+        if ((perTrade.get(k)?.totalValueUsd ?? -1) < t.totalValueUsd) perTrade.set(k, t);
+      }
+      const trades = [...perTrade.values()];
+      const valueUsd = trades.reduce((a, t) => a + (t.totalValueUsd || 0), 0);
+      const shares = trades.reduce((a, t) => a + (t.shares || 0), 0);
+      const kinds = new Set(ts.map((t) => t.ownershipNature).filter(Boolean));
+      const person = ts.find((t) => !isEntityName(t.insiderName)) ?? ts[0];
+      return {
+        name: person.insiderName,
+        title: person.insiderTitle,
+        ownership: kinds.size === 2 ? ('D+I' as const) : (([...kinds][0] as 'D' | 'I' | undefined) ?? undefined),
+        via: ts.find((t) => t.ownershipVia)?.ownershipVia,
+        valueUsd,
+        tradeDate: ts.map((t) => t.tradeDate).filter(Boolean).sort().pop(),
+        price: shares > 0 ? Number((trades.reduce((a, t) => a + t.shares * t.pricePerShare, 0) / shares).toFixed(4)) : undefined,
+        currency: person.currency,
+        offeringNote: ts.find((t) => t.offeringNote)?.offeringNote,
+      };
+    })
+    .sort((a, b) => b.valueUsd - a.valueUsd);
+}
+
 /**
  * Cluster roll-up: præcis én række pr. ticker for alle kilder.
  * Forudsætning: rækkerne er kode P, har bestået hard-filteret og har en handelsdato (se buildScanRows).
@@ -253,6 +272,12 @@ export function rollUpByTicker(rows: InsiderTransaction[]): InsiderTransaction[]
           `${t.insiderName} (${t.insiderTitle}): $${Math.round(t.totalValueUsd).toLocaleString('en-US')} (${t.shares.toLocaleString('en-US')} aktier á ${priceLabel(t)}${t.pricePerShare}) den ${t.tradeDate}`
       );
 
+    lead.clusterBuyers = buildClusterBuyers(inWindow, keys);
+    // Personlig = mindst én direkte linje fra en person (ikke en fond, der selv indberetter). Fond = resten med kendt D/I.
+    const isFund = (b: ClusterBuyer) => b.ownership === 'I' || (b.ownership !== undefined && isEntityName(b.name));
+    lead.personalBuyers = lead.clusterBuyers.filter((b) => b.ownership !== undefined && !isFund(b)).length;
+    lead.fundBuyers = lead.clusterBuyers.filter(isFund).length;
+
     const bestName = group.find((t) => t.companyName && t.companyName !== t.ticker)?.companyName;
     if (bestName && (!lead.companyName || lead.companyName === lead.ticker)) lead.companyName = bestName;
 
@@ -268,6 +293,64 @@ export function rollUpByTicker(rows: InsiderTransaction[]): InsiderTransaction[]
 }
 
 export type { RejectedRow };
+
+const isUsSecRow = (tx: InsiderTransaction) =>
+  (!tx.currency || tx.currency === 'USD') && /^https:\/\/www\.sec\.gov\/Archives\/edgar\/data\//i.test(tx.secFilingUrl);
+
+/**
+ * Pr. US-række: D/I og "via" fra Form 4-linjerne, og om købet matcher et registreret udbud
+ * (refereret fodnote om udbud, eller kurs = 424B-udbudskurs ±7 dage). Fejl → felterne forbliver
+ * ukendte (logges); der gættes aldrig.
+ */
+export async function annotateForm4Details(rows: InsiderTransaction[]): Promise<void> {
+  const us = rows.filter(isUsSecRow);
+  const linesByRow = new Map<InsiderTransaction, Form4PurchaseLine[]>();
+
+  await Promise.all(
+    us.map(async (tx) => {
+      try {
+        const xml = await fetchForm4Xml(tx.secFilingUrl);
+        if (!xml) return;
+        tx.issuerCik ??= xml.match(/<issuerCik>\s*0*(\d+)\s*<\/issuerCik>/i)?.[1];
+        const lines = parseForm4PurchaseLines(xml);
+        if (lines.length === 0) return;
+        linesByRow.set(tx, lines);
+        const { ownership, via } = ownershipFromLines(lines);
+        if (ownership) tx.ownershipNature = ownership;
+        if (via) tx.ownershipVia = via;
+        const fn = lines.flatMap((l) => l.footnotes).find(isOfferingFootnote);
+        if (fn) tx.offeringNote = `Mulig deltagelse i udbud (fodnote: "${fn.slice(0, 160)}${fn.length > 160 ? '…' : ''}")`;
+      } catch (err) {
+        console.warn(`Form 4-detaljer for ${tx.ticker} (${tx.insiderName}) kunne ikke hentes:`, err instanceof Error ? err.message : err);
+      }
+    })
+  );
+
+  // Udbudsopslag én gang pr. udsteder, kun for prospekter nær købenes datoer.
+  const buysOf = (tx: InsiderTransaction): Array<{ tradeDate?: string; price: number }> =>
+    linesByRow.get(tx) ?? [{ tradeDate: tx.tradeDate, price: tx.pricePerShare }];
+  const byIssuer = new Map<string, InsiderTransaction[]>();
+  for (const tx of us) {
+    if (!tx.issuerCik) tx.issuerCik = (await getCikForTicker(tx.ticker).catch(() => null))?.cik;
+    if (tx.issuerCik) byIssuer.set(tx.issuerCik, [...(byIssuer.get(tx.issuerCik) ?? []), tx]);
+  }
+  await Promise.all(
+    [...byIssuer].map(async ([cik, txs]) => {
+      try {
+        const dates = txs.flatMap(buysOf).map((b) => b.tradeDate ?? '').filter(Boolean);
+        const offerings = await getOfferingsNear(cik, dates);
+        for (const tx of txs) {
+          tx.offeringChecked = true;
+          if (tx.offeringNote) continue;
+          const hit = buysOf(tx).map((l) => matchOffering({ tradeDate: l.tradeDate ?? tx.tradeDate, price: l.price }, offerings)).find(Boolean);
+          if (hit) tx.offeringNote = offeringNote(hit);
+        }
+      } catch (err) {
+        console.warn(`Udbudsopslag for CIK ${cik} fejlede – udbudsdeltagelse er ukendt:`, err instanceof Error ? err.message : err);
+      }
+    })
+  );
+}
 
 /**
  * Fælles scan-pipeline for alle kilder:
@@ -306,7 +389,10 @@ export async function buildScanRows(
 
   const unique = dedupTrades(candidates);
   if (opts.enrich !== false) {
-    await Promise.allSettled(unique.map((tx) => enrichTransactionWithMarketData(tx)));
+    await Promise.allSettled([
+      ...unique.map((tx) => enrichTransactionWithMarketData(tx)),
+      annotateForm4Details(unique), // D/I pr. linje og udbudsdeltagelse (SEC, 8 req/s)
+    ]);
   }
 
   const tradable = unique.filter((tx) => {
@@ -646,6 +732,55 @@ export function detect10b51(xml: string, code: 'P' | 'S' = 'P'): boolean {
   return [...refIds].some((id) => isPlanFootnote(footnotes.get(id) ?? ''));
 }
 
+/** Én købslinje (kode P, A) i en Form 4 med ejerskab og de fodnoter, linjen selv refererer til. */
+export interface Form4PurchaseLine {
+  tradeDate?: string;
+  shares: number;
+  price: number;
+  ownership?: 'D' | 'I'; // directOrIndirectOwnership; undefined = ikke angivet
+  via?: string; // natureOfOwnership, fx "By Sofinnova Venture Partners XI, L.P."
+  footnotes: string[]; // teksten i de refererede fodnoter
+}
+
+const xmlValue = (block: string, tag: string) =>
+  block.match(new RegExp(`<${tag}>\\s*<value>\\s*([^<]*?)\\s*</value>`, 'i'))?.[1];
+
+const decodeXml = (s: string) =>
+  s.replace(/&quot;/g, '"').replace(/&apos;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+
+/** P-linjerne pr. linje (ikke aggregeret), så kurs, dato og D/I bevares for udbudstjek og cluster-købere. */
+export function parseForm4PurchaseLines(xml: string): Form4PurchaseLine[] {
+  const footnotes = new Map<string, string>();
+  for (const m of xml.matchAll(/<footnote\s+id=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)<\/footnote>/gi)) {
+    footnotes.set(m[1], decodeXml(m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()));
+  }
+  const lines: Form4PurchaseLine[] = [];
+  for (const m of xml.matchAll(/<nonDerivativeTransaction>([\s\S]*?)<\/nonDerivativeTransaction>/gi)) {
+    const b = m[1];
+    const code = b.match(/<transactionCode>\s*([A-Za-z])\s*<\/transactionCode>/i)?.[1]?.toUpperCase();
+    if (code !== 'P' || xmlValue(b, 'transactionAcquiredDisposedCode')?.toUpperCase() !== 'A') continue;
+    const di = xmlValue(b, 'directOrIndirectOwnership')?.toUpperCase();
+    const via = xmlValue(b, 'natureOfOwnership');
+    lines.push({
+      tradeDate: xmlValue(b, 'transactionDate')?.slice(0, 10),
+      shares: parseFloat(xmlValue(b, 'transactionShares') || '0') || 0,
+      price: parseFloat(xmlValue(b, 'transactionPricePerShare') || '0') || 0,
+      ownership: di === 'D' || di === 'I' ? di : undefined,
+      via: via ? decodeXml(via) : undefined,
+      footnotes: [...b.matchAll(/<footnoteId\s+id=["']?([^"'\s/>]+)/gi)].map((r) => footnotes.get(r[1]) ?? '').filter(Boolean),
+    });
+  }
+  return lines;
+}
+
+/** Rækkens D/I ud fra P-linjerne: én direkte linje gør købet personligt; kun indirekte = 'I'; intet angivet = ukendt. */
+export function ownershipFromLines(lines: Form4PurchaseLine[]): { ownership?: 'D' | 'I'; via?: string } {
+  const via = lines.find((l) => l.ownership === 'I' && l.via)?.via;
+  if (lines.some((l) => l.ownership === 'D')) return { ownership: 'D', via };
+  if (lines.some((l) => l.ownership === 'I')) return { ownership: 'I', via };
+  return {};
+}
+
 interface ParsedSubTransaction {
   code: TransactionCode;
   isAcquisition: boolean;
@@ -791,6 +926,7 @@ async function parseForm4Entry(
     if (!xmlResponse.ok) return null;
 
     const xml = await xmlResponse.text();
+    rememberForm4Xml(rawXmlUrl, xml);
 
     // Udtræk selskabs- og ejer-info
     const tickerFromXml = xml.match(/<issuerTradingSymbol>\s*(.*?)\s*<\/issuerTradingSymbol>/i)?.[1]?.trim();
@@ -824,10 +960,9 @@ async function parseForm4Entry(
     const tradeDate =
       aggregated.tradeDate || xml.match(/<periodOfReport>\s*(\d{4}-\d{2}-\d{2})\s*<\/periodOfReport>/i)?.[1];
 
-    const ownershipVal = xml
-      .match(/<directOrIndirectOwnership>\s*<value>\s*([DI])\s*<\/value>/i)?.[1]
-      ?.toUpperCase();
-    const ownershipNature: 'D' | 'I' = ownershipVal === 'I' ? 'I' : 'D';
+    // D/I fra P-linjerne (ikke første match i dokumentet, der kan være en beholdning eller et salg).
+    const { ownership: ownershipNature, via: ownershipVia } = ownershipFromLines(parseForm4PurchaseLines(xml));
+    const issuerCik = xml.match(/<issuerCik>\s*0*(\d+)\s*<\/issuerCik>/i)?.[1];
     const isExecutiveOfficer =
       isExecutiveTitle(insiderTitle) || /<isOfficer>\s*(1|true)\s*<\/isOfficer>/i.test(xml);
 
@@ -864,6 +999,8 @@ async function parseForm4Entry(
       isClusterBuy: false,
       clusterCount: 1,
       ownershipNature,
+      ownershipVia,
+      issuerCik,
       isExecutiveOfficer,
       is10b51Plan,
       footnotesSummary: footnotesSummary || undefined,
@@ -1023,8 +1160,9 @@ export function parseOpenInsiderTable(html: string, idPrefix: string): InsiderTr
     const valueNum = parseFloat((colValue !== -1 ? cellText(td[colValue]) : '').replace(/[+\-$,\s]/g, ''));
     const totalValueUsd = Number.isFinite(valueNum) && valueNum > 0 ? valueNum : shares * pricePerShare;
 
+    // Foreløbig D/I; Form 4-XML'en afgør det pr. linje i annotateForm4Details.
     const ownershipHint = td[colInsider]?.match(/title="([^"]*)"/i)?.[1] || '';
-    const ownershipNature: 'D' | 'I' = /indirect shares/i.test(ownershipHint)
+    const ownershipNature = /indirect shares/i.test(ownershipHint)
       ? 'I'
       : /direct shares/i.test(ownershipHint)
       ? 'D'
@@ -1119,36 +1257,51 @@ export async function scanTickerSecForm4s(ticker: string): Promise<InsiderTransa
  * Henter og udtrækker de juridiske fodnoter (<footnotes>) fra en Form 4 filing via SEC EDGAR.
  * Stripper automatisk eventuelle XSLT-stylesheets (/xslF345.../) for at hente den rå XML.
  */
+// Form 4-XML ændres aldrig efter indlevering. ponytail: simpel FIFO med loft; LRU, hvis scans bliver store.
+const form4XmlCache = new Map<string, string>();
+function rememberForm4Xml(url: string, xml: string) {
+  form4XmlCache.set(url.replace(/\/xsl[^\/]+\//i, '/'), xml);
+  if (form4XmlCache.size > 500) form4XmlCache.delete(form4XmlCache.keys().next().value!);
+}
+
+/**
+ * Rå Form 4-XML fra en sec.gov-URL (xsl-visning, index-side eller selve XML'en). null ved fejl.
+ * SSRF-værn: kun https://www.sec.gov accepteres (kaster ellers).
+ */
+export async function fetchForm4Xml(secUrl: string, timeoutMs = 6000): Promise<string | null> {
+  assertSecUrl(secUrl, ['www.sec.gov']);
+  const cleanUrl = secUrl.replace(/\/xsl[^\/]+\//i, '/');
+  const cached = form4XmlCache.get(cleanUrl);
+  if (cached) return cached;
+
+  const res = await secFetch(cleanUrl, { accept: 'application/xml, text/xml, text/html, */*', timeoutMs, allowedHosts: ['www.sec.gov'] });
+  if (!res.ok) return null;
+  let text = await res.text();
+
+  // Hvis det var et index-dokument i stedet for direkte XML, find XML-linket
+  if (!/<ownershipDocument>/i.test(text)) {
+    const xmlMatch = text.match(/href=["'](\/Archives\/edgar\/data\/[^"']+\.xml)["']/i);
+    if (!xmlMatch) return null;
+    const rawXmlUrl = 'https://www.sec.gov' + xmlMatch[1].replace(/\/xsl[^\/]+\//i, '/');
+    const xmlRes = await secFetch(rawXmlUrl, { accept: 'application/xml, text/xml', timeoutMs, allowedHosts: ['www.sec.gov'] });
+    if (!xmlRes.ok) return null;
+    text = await xmlRes.text();
+  }
+  if (!/<ownershipDocument>/i.test(text)) return null;
+  rememberForm4Xml(cleanUrl, text);
+  return text;
+}
+
 export async function fetchSecForm4Footnotes(
   secUrl?: string
 ): Promise<{ footnotes: string[]; is10b51Plan?: boolean }> {
   if (!secUrl) return { footnotes: [] };
   // SSRF-værn: URL'en kan komme fra en klient – kun https://www.sec.gov accepteres (kaster ellers).
   assertSecUrl(secUrl, ['www.sec.gov']);
-  const cleanUrl = secUrl.replace(/\/xsl[^\/]+\//i, '/');
 
   try {
-    const res = await secFetch(cleanUrl, {
-      accept: 'application/xml, text/xml, text/html, */*',
-      timeoutMs: 6000,
-      allowedHosts: ['www.sec.gov'],
-    });
-
-    if (!res.ok) return { footnotes: [] };
-
-    let text = await res.text();
-
-    // Hvis det var et index-dokument i stedet for direkte XML, find XML-linket
-    if (cleanUrl.endsWith('.htm') || cleanUrl.endsWith('.html') || !cleanUrl.endsWith('.xml')) {
-      const xmlMatch = text.match(/href=["'](\/Archives\/edgar\/data\/[^"']+\.xml)["']/i);
-      if (xmlMatch) {
-        const rawXmlUrl = 'https://www.sec.gov' + xmlMatch[1].replace(/\/xsl[^\/]+\//i, '/');
-        const xmlRes = await secFetch(rawXmlUrl, { accept: 'application/xml, text/xml', allowedHosts: ['www.sec.gov'] });
-        if (xmlRes.ok) {
-          text = await xmlRes.text();
-        }
-      }
-    }
+    const text = await fetchForm4Xml(secUrl);
+    if (!text) return { footnotes: [] };
 
     const is10b51Plan = /<ownershipDocument>/i.test(text) ? detect10b51(text) : undefined;
     const footnotesBlock = text.match(/<footnotes>([\s\S]*?)<\/footnotes>/i);
