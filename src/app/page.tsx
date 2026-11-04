@@ -256,9 +256,10 @@ ${clusterPeersStr}
 ${
   tx.trackRecord && tx.trackRecord.reputation !== 'UNKNOWN'
     ? `- **Status & Omdømme:** ${tx.trackRecord.reputationLabel}
-- **Tidligere registrerede køb (3-4 år):** ${tx.trackRecord.historicalBuysCount} handler
+- **Målte køb (selskabet, 4 år, afkast efter 6 mdr.):** ${tx.trackRecord.historicalBuysCount} handler (+${tx.trackRecord.unmeasuredBuysCount ?? 0} for nye til at måle)
 - **Historisk Win-Rate:** ${tx.trackRecord.winRatePct}%
-- **Gennemsnitligt historisk afkast:** ${tx.trackRecord.avgReturnPct > 0 ? '+' : ''}${tx.trackRecord.avgReturnPct}%
+- **Gennemsnitligt afkast efter 6 mdr.:** ${tx.trackRecord.avgReturnPct > 0 ? '+' : ''}${tx.trackRecord.avgReturnPct}%
+- **Insiderens egne målte køb:** ${tx.trackRecord.insiderOnly ? `${tx.trackRecord.insiderOnly.historicalBuysCount} (win rate ${tx.trackRecord.insiderOnly.winRatePct}%, gns. ${tx.trackRecord.insiderOnly.avgReturnPct}%)` : 'ikke opgjort'}
 ${
   tx.trackRecord.notablePastTrades.length > 0
     ? `\n### Udvalgte tidligere handler i aktien:\n` +
@@ -3719,7 +3720,7 @@ ${verdict.judgeThinking}
                   {selectedTx.trackRecord.reputation !== 'UNKNOWN' && (
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-mono text-center">
                     <div className="p-2.5 rounded bg-slate-950/60 border border-slate-800/80">
-                      <div className="text-[10px] text-slate-400 uppercase">Tidligere Åbne Køb (3-4 år)</div>
+                      <div className="text-[10px] text-slate-400 uppercase">Målte køb (afkast efter 6 mdr.)</div>
                       <div className="text-lg font-bold text-slate-100 mt-0.5">
                         {selectedTx.trackRecord.historicalBuysCount}
                         <span className="text-xs text-slate-500 font-normal ml-1">handler</span>
@@ -3757,6 +3758,17 @@ ${verdict.judgeThinking}
                       </div>
                     </div>
                   </div>
+                  )}
+
+                  {/* Selskabets historik ovenfor; insiderens egen historik og ikke-målte køb her */}
+                  {selectedTx.trackRecord.horizonTradingDays !== undefined && (
+                    <div className="text-[11px] font-mono text-slate-300">
+                      {selectedTx.insiderName} selv:{' '}
+                      {selectedTx.trackRecord.insiderOnly && selectedTx.trackRecord.insiderOnly.historicalBuysCount > 0
+                        ? `${selectedTx.trackRecord.insiderOnly.historicalBuysCount} målte køb, ${selectedTx.trackRecord.insiderOnly.winRatePct}% win rate, gns. ${selectedTx.trackRecord.insiderOnly.avgReturnPct > 0 ? '+' : ''}${selectedTx.trackRecord.insiderOnly.avgReturnPct}%`
+                        : 'ingen målte køb'}
+                      {' • '}Ikke målt (yngre end 6 mdr.): {selectedTx.trackRecord.unmeasuredBuysCount ?? 0}
+                    </div>
                   )}
 
                   {/* Notable Past Trades List */}

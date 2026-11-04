@@ -172,13 +172,20 @@ export interface NotablePastTrade {
   returnPct: number;
 }
 
-export interface InsiderTrackRecord {
-  historicalBuysCount: number;
+export interface TrackRecordStats {
+  historicalBuysCount: number; // antal MÅLTE køb (ældre end horisonten)
   winRatePct: number;
-  avgReturnPct: number;
+  avgReturnPct: number; // gns. afkast over horisonten (ikke til dagens kurs)
+}
+
+export interface InsiderTrackRecord extends TrackRecordStats {
+  // Felterne på øverste niveau er selskabets historik (alle insidere).
   reputation: TrackRecordReputation;
   reputationLabel: string;
-  notablePastTrades: NotablePastTrade[];
+  notablePastTrades: NotablePastTrade[]; // returnPct = afkast efter horisonten
+  horizonTradingDays?: number; // fast måle-horisont (126 handelsdage ≈ 6 mdr.); mangler i domme fra før fase 2
+  unmeasuredBuysCount?: number; // køb yngre end horisonten – ikke målt
+  insiderOnly?: TrackRecordStats & { unmeasuredBuysCount: number }; // samme person som den aktuelle insider
 }
 
 export type AsymmetrySignal = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';
