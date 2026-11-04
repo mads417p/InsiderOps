@@ -66,6 +66,34 @@ describe('db.ts', () => {
     expect(fs.existsSync(file())).toBe(true);
   });
 
+  it('rename prøves igen ved EPERM (Windows-lås) og lykkes', async () => {
+    seed(empty);
+    const realRename = fs.promises.rename;
+    let calls = 0;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (a, b) => {
+      if (++calls <= 2) throw Object.assign(new Error('låst'), { code: 'EPERM' });
+      return realRename(a, b);
+    });
+    await updateDb((db) => {
+      db.verdicts.a = item('a');
+    });
+    expect(calls).toBe(3);
+    expect(Object.keys(JSON.parse(fs.readFileSync(file(), 'utf-8')).verdicts)).toEqual(['a']);
+  });
+
+  it('rename der bliver ved med at fejle, kaster efter retries og efterlader ingen temp-fil', async () => {
+    seed(empty);
+    const spy = vi.spyOn(fs.promises, 'rename').mockRejectedValue(Object.assign(new Error('låst'), { code: 'EBUSY' }));
+    await expect(
+      updateDb((db) => {
+        db.verdicts.a = item('a');
+      })
+    ).rejects.toThrow(/låst/);
+    expect(spy).toHaveBeenCalledTimes(10);
+    expect(fs.readdirSync(path.join(dir, 'data')).some((f) => f.includes('.tmp.'))).toBe(false);
+    expect(fs.readFileSync(file(), 'utf-8')).toBe(empty);
+  }, 10_000);
+
   it('isMockEntity matcher kun id-præfikset "mock-"', () => {
     expect(isMockEntity('mock-cfo-cluster-buy')).toBe(true);
     expect(isMockEntity('pos-rapp-cfo')).toBe(false);

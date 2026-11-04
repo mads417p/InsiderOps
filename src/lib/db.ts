@@ -117,10 +117,28 @@ async function writeDb(db: DatabaseSchema): Promise<void> {
   const tmp = `${file}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
   try {
     await fs.promises.writeFile(tmp, JSON.stringify(db, null, 2), 'utf-8');
-    await fs.promises.rename(tmp, file);
+    await renameWithRetry(tmp, file);
   } catch (err) {
     await fs.promises.rm(tmp, { force: true });
     throw err;
+  }
+}
+
+const RETRYABLE_RENAME = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+/**
+ * Windows: antivirus, indeksering eller en anden læser kan holde filen kortvarigt, så rename fejler med
+ * EPERM/EBUSY/EACCES. Prøv igen med stigende backoff (10 forsøg, ca. 2 s i alt) som graceful-fs, og kast derefter.
+ */
+export async function renameWithRetry(from: string, to: string, attempts = 10): Promise<void> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fs.promises.rename(from, to);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      if (i >= attempts || !RETRYABLE_RENAME.has(code)) throw err;
+      await new Promise((r) => setTimeout(r, 40 * i)); // 40+80+…+360 ms ≈ 1,8 s
+    }
   }
 }
 
