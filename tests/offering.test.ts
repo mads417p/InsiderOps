@@ -8,6 +8,7 @@ import {
   rollUpByTicker,
 } from '@/lib/sec-scanner';
 import type { InsiderTransaction } from '@/types/insider';
+import { excludeOfferingBuys } from '@/lib/track-record';
 
 // Uddrag af RAPP's prospekter (SEC EDGAR, hentet 4.11.2026).
 const RAPP_424B5 = `<p>We are offering 8,333,334 shares of our common stock … at a public offering price of $21.00 per share, and, in lieu of
@@ -148,5 +149,19 @@ describe('annotateForm4Details mod SEC (fetch stubbet)', () => {
     await annotateForm4Details([tx]);
     expect(tx).toMatchObject({ ownershipNature: 'I', ownershipVia: 'By Sofinnova Venture Partners XI, L.P.', issuerCik: '2012593', offeringChecked: true });
     expect(tx.offeringNote).toMatch(/424B5 2026-10-30 til \$21\.00/);
+  });
+});
+
+describe('track record udelader køb i IPO/udbud (fase 2.5, 5c)', () => {
+  it('Healy-fondenes IPO-køb 10.6.2024 á $17,00 udelades; markedskøb beholdes', () => {
+    const ipo = offering({ form: '424B4', filingDate: '2024-06-07', price: 17 });
+    const buys = [
+      { date: '2024-06-10', insiderName: 'Healy James', price: 17, valueUsd: 10_000_000 },
+      { date: '2024-06-10', insiderName: 'Third Rock Ventures', price: 17, valueUsd: 15_000_000 },
+      { date: '2025-03-04', insiderName: 'Ignelzi Troy A.', price: 9.8, valueUsd: 120_000 },
+    ];
+    const { kept, excluded } = excludeOfferingBuys(buys, [ipo]);
+    expect(excluded.map((b) => b.insiderName)).toEqual(['Healy James', 'Third Rock Ventures']);
+    expect(kept.map((b) => b.insiderName)).toEqual(['Ignelzi Troy A.']);
   });
 });

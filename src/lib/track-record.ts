@@ -1,5 +1,6 @@
 import { InsiderTransaction, InsiderTrackRecord, NotablePastTrade, TrackRecordReputation } from '@/types/insider';
-import { fetchOpenInsiderHtml, normalizeName, parseOpenInsiderTable } from '@/lib/sec-scanner';
+import { fetchOpenInsiderHtml, getCikForTicker, normalizeName, parseOpenInsiderTable } from '@/lib/sec-scanner';
+import { getOfferingsNear, matchOffering, type Offering } from '@/lib/offering-check';
 
 /** Fast måle-horisont: ca. 6 måneder. Køb, der er yngre end horisonten, kan ikke måles og udelades. */
 export const HORIZON_TRADING_DAYS = 126;
@@ -104,6 +105,14 @@ export function classifyReputation(
   return { reputation: 'CREDIBLE_BUYER', reputationLabel: `📈 Kredibel køber (${fmt})` };
 }
 
+/** Deler tidligere køb i markedskøb og køb, der matcher et registreret udbud (samme kurs, ±7 dage). */
+export function excludeOfferingBuys(buys: PastBuy[], offerings: Offering[]): { kept: PastBuy[]; excluded: PastBuy[] } {
+  const kept: PastBuy[] = [];
+  const excluded: PastBuy[] = [];
+  for (const b of buys) (matchOffering({ tradeDate: b.date, price: b.price }, offerings) ? excluded : kept).push(b);
+  return { kept, excluded };
+}
+
 /** Byg track record ud fra tidligere køb og kurshistorik (ren funktion – testbar uden netværk). */
 export function buildTrackRecord(tx: InsiderTransaction, allBuys: PastBuy[], history: PriceHistory): InsiderTrackRecord {
   const refDate = (tx.tradeDate || tx.filedAt || new Date().toISOString()).slice(0, 10);
@@ -170,12 +179,13 @@ export async function fetchInsiderTrackRecord(tx: InsiderTransaction): Promise<I
 
   try {
     const [html, history] = await Promise.all([
-      fetchOpenInsiderHtml(`s=${encodeURIComponent(cleanTicker)}&o=&pl=&ph=&ll=&lh=&fd=1461&fdr=&td=0&tdr=&xp=1&vl=10&vh=&sortcol=0&cnt=500&page=1`),
+      // 4 år × 500 rækker tager ca. 8 s hos OpenInsider (målt 4.11.2026) – standardloftet på 8 s gav UNKNOWN.
+      fetchOpenInsiderHtml(`s=${encodeURIComponent(cleanTicker)}&o=&pl=&ph=&ll=&lh=&fd=1461&fdr=&td=0&tdr=&xp=1&vl=10&vh=&sortcol=0&cnt=500&page=1`, 20_000),
       fetchPriceHistory(cleanTicker),
     ]);
     // Kaster ved ulæselig side (parse-fejl → UNKNOWN). En gyldig side uden tabel = 0 køb.
     const rows = parseOpenInsiderTable(html, 'tr');
-    const buys: PastBuy[] = rows
+    let buys: PastBuy[] = rows
       .filter((r) => r.transactionCode === 'P' && r.tradeDate && r.ticker.toUpperCase() === cleanTicker)
       .map((r) => ({
         date: r.tradeDate!,
@@ -185,7 +195,21 @@ export async function fetchInsiderTrackRecord(tx: InsiderTransaction): Promise<I
         price: r.pricePerShare,
         valueUsd: r.totalValueUsd,
       }));
-    return buildTrackRecord(tx, buys, history);
+
+    // Køb i en IPO eller et udbud (kurs = udbudskurs) er ikke markedskøb (RAPP: IPO-dagen 10.6.2024 til $17,00).
+    let excludedOfferingBuys: number | undefined;
+    try {
+      const cik = tx.issuerCik ?? (await getCikForTicker(cleanTicker))?.cik;
+      if (cik) {
+        const split = excludeOfferingBuys(buys, await getOfferingsNear(cik, buys.map((b) => b.date)));
+        buys = split.kept;
+        excludedOfferingBuys = split.excluded.length;
+      }
+    } catch (err) {
+      // Udbud ukendt: købene beholdes (intet gæt), og excludedOfferingBuys forbliver undefined.
+      console.warn(`Udbudstjek af track record for ${cleanTicker} fejlede:`, (err as Error).message);
+    }
+    return { ...buildTrackRecord(tx, buys, history), excludedOfferingBuys };
   } catch (err) {
     console.warn(`Track record for ${cleanTicker} kunne ikke beregnes:`, (err as Error).message);
     return unknownRecord(`opslag eller parsing fejlede (${(err as Error).message})`);

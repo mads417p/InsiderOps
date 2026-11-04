@@ -273,7 +273,7 @@ ${clusterPeersStr}
 ${
   tx.trackRecord && tx.trackRecord.reputation !== 'UNKNOWN'
     ? `- **Status & Omdømme:** ${tx.trackRecord.reputationLabel}
-- **Målte køb (selskabet, 4 år, afkast efter 6 mdr.):** ${tx.trackRecord.historicalBuysCount} handler (+${tx.trackRecord.unmeasuredBuysCount ?? 0} for nye til at måle)
+- **Målte køb (selskabet, 4 år, afkast efter 6 mdr.):** ${tx.trackRecord.historicalBuysCount} handler (+${tx.trackRecord.unmeasuredBuysCount ?? 0} for nye til at måle${tx.trackRecord.excludedOfferingBuys ? `; ${tx.trackRecord.excludedOfferingBuys} køb i udbud/IPO udeladt` : ''})
 - **Historisk Win-Rate:** ${tx.trackRecord.winRatePct}%
 - **Gennemsnitligt afkast efter 6 mdr.:** ${tx.trackRecord.avgReturnPct > 0 ? '+' : ''}${tx.trackRecord.avgReturnPct}%
 - **Insiderens egne målte køb:** ${tx.trackRecord.insiderOnly ? `${tx.trackRecord.insiderOnly.historicalBuysCount} (win rate ${tx.trackRecord.insiderOnly.winRatePct}%, gns. ${tx.trackRecord.insiderOnly.avgReturnPct}%)` : 'ikke opgjort'}
@@ -3878,6 +3878,10 @@ ${verdict.judgeThinking}
                         ? `${selectedTx.trackRecord.insiderOnly.historicalBuysCount} målte køb, ${selectedTx.trackRecord.insiderOnly.winRatePct}% win rate, gns. ${selectedTx.trackRecord.insiderOnly.avgReturnPct > 0 ? '+' : ''}${selectedTx.trackRecord.insiderOnly.avgReturnPct}%`
                         : 'ingen målte køb'}
                       {' • '}Ikke målt (yngre end 6 mdr.): {selectedTx.trackRecord.unmeasuredBuysCount ?? 0}
+                      {' • '}
+                      {selectedTx.trackRecord.excludedOfferingBuys === undefined
+                        ? <span className="text-slate-500">udbud/IPO ikke tjekket</span>
+                        : `${selectedTx.trackRecord.excludedOfferingBuys} køb i udbud/IPO udeladt`}
                     </div>
                   )}
 

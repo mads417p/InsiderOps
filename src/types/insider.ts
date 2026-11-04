@@ -235,6 +235,7 @@ export interface InsiderTrackRecord extends TrackRecordStats {
   horizonTradingDays?: number; // fast måle-horisont (126 handelsdage ≈ 6 mdr.); mangler i domme fra før fase 2
   unmeasuredBuysCount?: number; // køb yngre end horisonten – ikke målt
   insiderOnly?: TrackRecordStats & { unmeasuredBuysCount: number }; // samme person som den aktuelle insider
+  excludedOfferingBuys?: number; // køb i IPO/udbud (kurs = udbudskurs), udeladt som markedskøb; undefined = ikke tjekket
 }
 
 /** En række, scan-pipelinen afviste, med årsag (vises under "Vis afvist støj"). */
