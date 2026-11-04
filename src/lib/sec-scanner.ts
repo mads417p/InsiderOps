@@ -610,6 +610,37 @@ export function getMockTransactions(): InsiderTransaction[] {
   ];
 }
 
+// Rule 10b5-1 i en fodnote – men ikke når den negeres ("not made pursuant to a Rule 10b5-1 plan").
+const PLAN_FOOTNOTE_RE = /10b5-?1|rule\s*10b5|pre-?arranged|automatic\s*(?:purchase|trading)|trading\s+plan/i;
+const PLAN_NEGATION_RE =
+  /\bnot\s+(?:been\s+)?(?:made\s+|effected\s+|executed\s+|entered\s+into\s+|done\s+)?(?:pursuant\s+to|under|in\s+accordance\s+with)\b/i;
+
+export function isPlanFootnote(text: string): boolean {
+  return PLAN_FOOTNOTE_RE.test(text) && !PLAN_NEGATION_RE.test(text);
+}
+
+/**
+ * Rule 10b5-1 for købslinjerne i en Form 4: afkrydsningsfeltet <aff10b5One>, eller en fodnote, som en
+ * P-linje refererer til via <footnoteId>. Fodnoter til andre linjer (fx et salg) tæller ikke,
+ * og negationer ("not pursuant to") giver false.
+ */
+export function detect10b51(xml: string): boolean {
+  if (/<aff10b5One>\s*(1|true)\s*<\/aff10b5One>/i.test(xml)) return true;
+
+  const footnotes = new Map<string, string>();
+  for (const m of xml.matchAll(/<footnote\s+id=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)<\/footnote>/gi)) {
+    footnotes.set(m[1], m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+  }
+
+  const refIds = new Set<string>();
+  for (const block of xml.matchAll(/<nonDerivativeTransaction>([\s\S]*?)<\/nonDerivativeTransaction>/gi)) {
+    const code = block[1].match(/<transactionCode>\s*([A-Za-z])\s*<\/transactionCode>/i)?.[1]?.toUpperCase();
+    if (code !== 'P') continue;
+    for (const ref of block[1].matchAll(/<footnoteId\s+id=["']?([^"'\s/>]+)/gi)) refIds.add(ref[1]);
+  }
+  return [...refIds].some((id) => isPlanFootnote(footnotes.get(id) ?? ''));
+}
+
 interface ParsedSubTransaction {
   code: TransactionCode;
   isAcquisition: boolean;
@@ -795,8 +826,8 @@ async function parseForm4Entry(
     const isExecutiveOfficer =
       isExecutiveTitle(insiderTitle) || /<isOfficer>\s*(1|true)\s*<\/isOfficer>/i.test(xml);
 
-    // Tjek om handlen er eksekveret under en Rule 10b5-1 automatisk handelsplan
-    const aff10b5One = /<aff10b5One>\s*(1|true)\s*<\/aff10b5One>/i.test(xml);
+    // Rule 10b5-1: afkrydsningsfeltet eller en fodnote, som købslinjerne selv refererer til
+    const is10b51Plan = detect10b51(xml);
 
     // Udtræk alle fodnoter fra <footnotes> sektionen
     const footnoteMatches = [...xml.matchAll(/<footnote\s+id=["']?([^"'>]+)["']?>([\s\S]*?)<\/footnote>/gi)];
@@ -804,10 +835,6 @@ async function parseForm4Entry(
       .map((m) => `[${m[1]}] ${m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()}`)
       .join('\n');
 
-    const has10b51InFootnotes = /10b5-?1|rule\s*10b5|pre-arranged|automatic\s*(?:purchase|trading)/i.test(
-      `${footnotesSummary} ${xml}`
-    );
-    const is10b51Plan = aff10b5One || has10b51InFootnotes;
 
     const transaction: InsiderTransaction = {
       id:
@@ -1022,7 +1049,7 @@ export function parseOpenInsiderTable(html: string, idPrefix: string): InsiderTr
       clusterCount: 1,
       ownershipNature,
       isExecutiveOfficer: isExecutiveTitle(insiderTitle),
-      is10b51Plan: /10b5-?1/i.test(rowHtml),
+      is10b51Plan: undefined, // OpenInsider viser hverken fodnoter eller 10b5-1-feltet → ukendt (afgøres fra Form 4 i rådet)
       secFilingUrl: secFilingUrl || 'https://www.sec.gov',
     });
   }
@@ -1087,8 +1114,10 @@ export async function scanTickerSecForm4s(ticker: string): Promise<InsiderTransa
  * Henter og udtrækker de juridiske fodnoter (<footnotes>) fra en Form 4 filing via SEC EDGAR.
  * Stripper automatisk eventuelle XSLT-stylesheets (/xslF345.../) for at hente den rå XML.
  */
-export async function fetchSecForm4Footnotes(secUrl?: string): Promise<string[]> {
-  if (!secUrl) return [];
+export async function fetchSecForm4Footnotes(
+  secUrl?: string
+): Promise<{ footnotes: string[]; is10b51Plan?: boolean }> {
+  if (!secUrl) return { footnotes: [] };
   // SSRF-værn: URL'en kan komme fra en klient – kun https://www.sec.gov accepteres (kaster ellers).
   assertSecUrl(secUrl, ['www.sec.gov']);
   const cleanUrl = secUrl.replace(/\/xsl[^\/]+\//i, '/');
@@ -1100,7 +1129,7 @@ export async function fetchSecForm4Footnotes(secUrl?: string): Promise<string[]>
       allowedHosts: ['www.sec.gov'],
     });
 
-    if (!res.ok) return [];
+    if (!res.ok) return { footnotes: [] };
 
     let text = await res.text();
 
@@ -1116,13 +1145,14 @@ export async function fetchSecForm4Footnotes(secUrl?: string): Promise<string[]>
       }
     }
 
+    const is10b51Plan = /<ownershipDocument>/i.test(text) ? detect10b51(text) : undefined;
     const footnotesBlock = text.match(/<footnotes>([\s\S]*?)<\/footnotes>/i);
     if (!footnotesBlock) {
-      return [];
+      return { footnotes: [], is10b51Plan };
     }
 
     const matches = [...footnotesBlock[1].matchAll(/<footnote id=["']([^"']+)["']>([\s\S]*?)<\/footnote>/gi)];
-    return matches
+    const footnotes = matches
       .map((m) => {
         const id = m[1];
         const cleanText = m[2]
@@ -1137,9 +1167,10 @@ export async function fetchSecForm4Footnotes(secUrl?: string): Promise<string[]>
         return `[${id}] ${cleanText}`;
       })
       .filter((fn) => fn.length > 5);
+    return { footnotes, is10b51Plan };
   } catch (err) {
     console.warn(`Kunne ikke hente SEC fodnoter fra ${secUrl}:`, err);
-    return [];
+    return { footnotes: [] };
   }
 }
 

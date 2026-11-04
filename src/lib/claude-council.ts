@@ -215,7 +215,7 @@ INSIDER: ${tx.insiderName}
 ROLLE / TITEL: ${tx.insiderTitle}
 C-SUITE DIREKTØR: ${tx.isExecutiveOfficer ? 'JA (C-Suite / Executive Officer)' : 'NEJ (Menig Bestyrelse eller 10% Fond)'}
 EJERSKABETS NATUR: ${tx.ownershipNature === 'I' ? 'INDIREKTE (I - Via Fond / LLC / Trust / Holding)' : 'DIREKTE (D - Egne personlige aktier)'}
-RULE 10b5-1 HANDELSPLAN: ${tx.is10b51Plan ? 'JA (Forudbestemt automatisk handelsplan - 0% aktuel asymmetri/skøn)' : 'NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
+RULE 10b5-1 HANDELSPLAN: ${tx.is10b51Plan === undefined ? 'UKENDT (Form 4 ikke tjekket)' : tx.is10b51Plan ? 'JA (Forudbestemt automatisk handelsplan - 0% aktuel asymmetri/skøn)' : 'NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
 ${tx.footnotesSummary ? `SEC FORM 4 FODNOTER / DET MED SMÅT:\n${untrusted('sec-form4-fodnoter', tx.footnotesSummary)}\n` : ''}TRANSAKTIONSTYPE: Kode ${tx.transactionCode} (Åbent markedskøb)
 ANTAL AKTIER: ${tx.shares.toLocaleString()} stk a $${tx.pricePerShare} USD
 TOTAL HANDELSVÆRDI: $${Math.round(tx.totalValueUsd).toLocaleString()} USD

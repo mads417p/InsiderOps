@@ -228,7 +228,7 @@ export default function Dashboard() {
 - **Insider:** ${tx.insiderName}
 - **Titel / Rolle:** ${tx.insiderTitle} ${tx.isExecutiveOfficer ? '(C-Suite / Direktion)' : ''}
 - **Ejerskabets natur:** ${tx.ownershipNature === 'D' ? 'Direkte (D - Egne personlige aktier)' : 'Indirekte (I - Fond / Trust / Holdingselskab)'}
-- **Rule 10b5-1 Handelsplan:** ${tx.is10b51Plan ? '⚠️ JA (Automatisk forudbestemt plan - 0% aktuel asymmetri)' : '✅ NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
+- **Rule 10b5-1 Handelsplan:** ${tx.is10b51Plan === undefined ? '❔ Ukendt (Form 4 ikke tjekket)' : tx.is10b51Plan ? '⚠️ JA (Automatisk forudbestemt plan - 0% aktuel asymmetri)' : '✅ NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
 ${tx.footnotesSummary ? `- **SEC Fodnoter (Det med småt):**\n${tx.footnotesSummary}\n` : ''}- **Børs & Handelbarhed (DK / Nordnet / Saxo):** ${tx.isTradableInDK === true ? '✅ Verificeret handelbar' : tx.isTradableInDK === false ? '🚫 Ikke godkendt' : '❔ Ikke verificeret – mangler data'} (${tx.exchange || 'N/A'}${tx.avgDailyDollarVolume ? `, Gns. omsætning: $${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')}/dag` : ''})
 - **Handelbarheds-status:** ${tx.tradabilityReason || (tx.isTradableInDK !== false ? 'Handelbar på standard DK mæglere' : 'Ikke verificeret')}
 - **Transaktionstype:** Kode ${tx.transactionCode} (Åbent markedskøb)

@@ -114,18 +114,15 @@ export async function POST(request: Request) {
       enrichmentTasks.push(
         (async () => {
           try {
-            const footnotes = await fetchSecForm4Footnotes(tx.secFilingUrl);
+            const { footnotes, is10b51Plan } = await fetchSecForm4Footnotes(tx.secFilingUrl);
+            // 10b5-1 afgøres af Form 4 selv: afkrydsningsfelt eller fodnote refereret fra købslinjerne.
+            if (is10b51Plan !== undefined) tx.is10b51Plan = is10b51Plan;
             if (footnotes.length > 0) {
               tx.footnotesSummary = footnotes.join('\n\n');
               const footnoteSection = `SEC Form 4 Fodnoter (Det med småt):\n${tx.footnotesSummary}`;
               tx.contextNotes = tx.contextNotes
                 ? `${tx.contextNotes}\n\n${footnoteSection}`
                 : footnoteSection;
-
-              // Tjek om fodnoterne nævner Rule 10b5-1 automatisk handelsplan
-              if (/10b5-1|rule 10b5-1|pre-arranged|automatic purchase|trading plan/i.test(tx.footnotesSummary)) {
-                tx.is10b51Plan = true;
-              }
             }
           } catch (fnErr) {
             console.warn('Kunne ikke hente SEC fodnoter:', fnErr);

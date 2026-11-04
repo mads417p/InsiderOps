@@ -171,7 +171,7 @@ Samlet værdi: $${Math.round(tx.totalValueUsd).toLocaleString()} USD
 Holdings efter køb: ${tx.sharesOwnedFollowing !== undefined ? `${tx.sharesOwnedFollowing.toLocaleString()} aktier` : 'ikke oplyst'}
 Forøgelse af egen beholdning: ${tx.holdingsIncreasePct !== undefined ? `+${tx.holdingsIncreasePct}%` : 'ukendt'}
 Cluster-køb: ${tx.isClusterBuy ? `Ja (${tx.clusterCount ?? 2} insidere)` : 'Nej'}
-Rule 10b5-1 Plan: ${tx.is10b51Plan ? 'JA (Forudbestemt automatisk algoritme/plan)' : 'NEJ (Frivilligt, skønsmæssigt køb)'}
+Rule 10b5-1 Plan: ${tx.is10b51Plan === undefined ? 'UKENDT (ikke tjekket i Form 4)' : tx.is10b51Plan ? 'JA (Forudbestemt automatisk algoritme/plan)' : 'NEJ (Frivilligt, skønsmæssigt køb)'}
 Kursændring seneste 30 dage: ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'Ukendt'}
 Kontekst / Noter: ${tx.contextNotes ? untrusted('kontekst-noter', tx.contextNotes) : 'Ingen yderligere noter'}`;
 
@@ -309,7 +309,8 @@ export async function evaluateBatchWithGatekeeper(
           shares: tx.shares,
           pricePerShare: tx.pricePerShare,
           totalValueUsd: Math.round(tx.totalValueUsd),
-          holdingsIncreasePct: tx.holdingsIncreasePct,
+          holdingsIncreasePct: tx.holdingsIncreasePct ?? 'ukendt',
+          is10b51Plan: tx.is10b51Plan === undefined ? 'ukendt' : tx.is10b51Plan ? 'ja' : 'nej',
           isClusterBuy: tx.isClusterBuy,
           clusterCount: tx.clusterCount ?? 1,
           recentPriceChange30dPct: tx.recentPriceChange30dPct,
@@ -327,6 +328,7 @@ ${JSON.stringify(batchPayload, null, 2)}`,
 Vægt CFO og General Counsel køb ekstremt højt (+20-30 point).
 Vægt høj holdingsIncreasePct (>15%) og isClusterBuy højt (+15 point).
 Straffe "Cosmetic/PR buys" (hvor en direktør køber for et beløb der øger beholdningen med <2%).
+is10b51Plan = 'ja': købet er forudplanlagt under en Rule 10b5-1-plan og har ingen aktuel informationsasymmetri – giv score < 20 og asymmetrySignal 'NOISE'. 'ukendt': ingen straf, men ingen bonus for timing. holdingsIncreasePct = 'ukendt' må hverken belønnes eller straffes.
 Kategoriser asymmetrySignal som 'HIGH' (score >= 75), 'MEDIUM' (50-74), 'LOW' (25-49), eller 'NOISE' (< 25).
 Returner en præcis JSON-array med et element for hver transaktion med id, geminiPreScore, asymmetrySignal og 1-2 knivskarpe sætninger på dansk i quickReasoning.
 ${UNTRUSTED_DATA_INSTRUCTION}`,
