@@ -78,7 +78,9 @@ interface ScanResponse {
   count: number;
   items: ScanItem[];
   gatekeeperUsage?: GatekeeperUsage | null;
-  scannedAt?: string;
+  scannedAt?: string | null;
+  saved?: boolean; // true = ?latest=1: seneste gemte scan, ingen ny scan kørt
+  ledger?: { inserted: number; seen: number; scored: number } | { error: string } | null;
   stale?: boolean; // true = live-hentning fejlede, items er den seneste gemte scan
   errors?: Array<{ source: string; error: string }>;
   rejectedCount?: number;
@@ -169,6 +171,7 @@ export default function Dashboard() {
     anthropic: false,
   });
   const [gatekeeperUsage, setGatekeeperUsage] = useState<GatekeeperUsage | null>(null);
+  const [scannedAt, setScannedAt] = useState<string | null>(null);
 
   // Paper-Trading Portfolio State
   const [paperPortfolio, setPaperPortfolio] = useState<Record<string, PaperTradePosition>>({});
@@ -500,14 +503,15 @@ ${verdict.judgeThinking}
   const fetchScan = useCallback(
     async (
       selectedSource: 'unified' | 'csuite' | 'live' | 'nordic' | 'mock',
-      tickerQuery?: string | null
+      tickerQuery?: string | null,
+      opts: { latest?: boolean } = {}
     ) => {
       setLoading(true);
       setError(null);
       try {
-        const url = tickerQuery
-          ? `/api/scan?ticker=${encodeURIComponent(tickerQuery)}`
-          : `/api/scan?source=${selectedSource}`;
+        const url =
+          (tickerQuery ? `/api/scan?ticker=${encodeURIComponent(tickerQuery)}` : `/api/scan?source=${selectedSource}`) +
+          (opts.latest ? '&latest=1' : '');
 
         const res = await fetch(url);
         const data: ScanResponse = await res.json().catch(() => ({}) as ScanResponse);
@@ -516,16 +520,23 @@ ${verdict.judgeThinking}
         setScanRejected(data.rejected ?? []);
         setApiKeys(data.apiKeysConfigured || { gemini: false, anthropic: false });
         setGatekeeperUsage(data.gatekeeperUsage ?? null);
+        setScannedAt(data.scannedAt ?? null);
 
         // Fejl og forældede data vises som det, de er – aldrig som "ingen signaler".
         const notes: string[] = [];
+        if (data.saved && !data.scannedAt) {
+          notes.push('Ingen gemt scan for denne kilde endnu – tryk "Scan Nu" for at hente signaler.');
+        }
+        if (data.ledger && 'error' in data.ledger) {
+          notes.push(`Signal-ledgeren blev IKKE opdateret: ${data.ledger.error}`);
+        }
         if (data.stale) {
-          notes.push(`Viser gemt scan fra ${formatDateTimeDk(data.scannedAt)} – live-hentningen fejlede (forældede data).`);
+          notes.push(`Viser gemt scan fra ${formatDateTimeDk(data.scannedAt ?? undefined)} – live-hentningen fejlede (forældede data).`);
         }
         if (data.errors?.length) {
           notes.push(`Kilder der fejlede: ${data.errors.map((e) => `${e.source}: ${e.error}`).join(' • ')}`);
         }
-        if (!data.stale && data.items.length === 0) {
+        if (!data.stale && !data.saved && data.items.length === 0) {
           notes.push(
             tickerQuery
               ? `Ingen åbne markedskøb (kode P) hos SEC for '${tickerQuery}', der består filtrene (${data.rejectedCount ?? 0} afvist).`
@@ -543,9 +554,10 @@ ${verdict.judgeThinking}
     []
   );
 
+  // Indlæsning (og hot-reload) viser seneste gemte scan – en ny scan kører kun ved "Scan Nu" (fase 3).
   useEffect(() => {
     if (!activeTickerQuery) {
-      fetchScan(source, null);
+      fetchScan(source, null, { latest: true });
     }
   }, [fetchScan, source, activeTickerQuery]);
 
@@ -562,7 +574,7 @@ ${verdict.judgeThinking}
   const handleResetSearch = () => {
     setSearchTicker('');
     setActiveTickerQuery(null);
-    fetchScan(source, null);
+    fetchScan(source, null, { latest: true });
   };
 
   const handleSelectCapitalFrame = (amt: number) => {
@@ -1216,6 +1228,9 @@ ${verdict.judgeThinking}
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-cyan-400' : ''}`} />
               Scan Nu
             </button>
+            <span className="text-[10px] font-mono text-slate-500" title="Tidspunkt for den viste scan">
+              {scannedAt ? `Scannet ${formatDateTimeDk(scannedAt)}` : 'Ingen gemt scan'}
+            </span>
 
             {/* 1. Send Valgte til Rådet Button */}
             <button

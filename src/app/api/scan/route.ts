@@ -47,6 +47,16 @@ export async function POST(request: Request) {
   }
 }
 
+function apiKeysConfigured() {
+  const geminiKey = process.env.GEMINI_API_KEY;
+  return {
+    gemini: Boolean(geminiKey && geminiKey.trim() !== '' && !geminiKey.includes('your-')),
+    anthropic: anthropicKeyConfigured(),
+    gatekeeperProvider: gatekeeperProvider(),
+    gatekeeperModel: gatekeeperModelLabel(),
+  };
+}
+
 type SourceTask = { name: string; run: () => Promise<InsiderTransaction[]> };
 
 /**
@@ -91,6 +101,26 @@ export async function GET(request: Request) {
         },
         { status: 400 }
       );
+    }
+
+    // ?latest=1: seneste gemte scan for kilden – ingen live-kald og ingen LLM (sidens indlæsning, fase 3).
+    if (searchParams.get('latest') === '1') {
+      const saved = await getLatestScan(sourceKey);
+      return NextResponse.json({
+        success: true,
+        source: sourceKey,
+        ticker: ticker || null,
+        apiKeysConfigured: apiKeysConfigured(),
+        saved: true,
+        scannedAt: saved?.scannedAt ?? null,
+        stale: false,
+        errors: [],
+        count: saved?.items.length ?? 0,
+        items: saved?.items ?? [],
+        gatekeeperUsage: null,
+        rejectedCount: saved?.rejected?.length ?? 0,
+        rejected: saved?.rejected ?? [],
+      });
     }
 
     // 1. Hent alle kilder parallelt. En fejlet kilde vises som fejl – aldrig som "ingen signaler".
@@ -170,19 +200,11 @@ export async function GET(request: Request) {
       }
     }
 
-    const geminiKey = process.env.GEMINI_API_KEY;
-    const apiKeysConfigured = {
-      gemini: Boolean(geminiKey && geminiKey.trim() !== '' && !geminiKey.includes('your-')),
-      anthropic: anthropicKeyConfigured(),
-      gatekeeperProvider: gatekeeperProvider(),
-      gatekeeperModel: gatekeeperModelLabel(),
-    };
-
     return NextResponse.json({
       success: true,
       source: ticker ? `ticker:${ticker}` : source,
       ticker: ticker || null,
-      apiKeysConfigured,
+      apiKeysConfigured: apiKeysConfigured(),
       scannedAt,
       stale,
       errors,
