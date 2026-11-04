@@ -624,7 +624,7 @@ export function isPlanFootnote(text: string): boolean {
  * P-linje refererer til via <footnoteId>. Fodnoter til andre linjer (fx et salg) tæller ikke,
  * og negationer ("not pursuant to") giver false.
  */
-export function detect10b51(xml: string): boolean {
+export function detect10b51(xml: string, code: 'P' | 'S' = 'P'): boolean {
   if (/<aff10b5One>\s*(1|true)\s*<\/aff10b5One>/i.test(xml)) return true;
 
   const footnotes = new Map<string, string>();
@@ -634,8 +634,8 @@ export function detect10b51(xml: string): boolean {
 
   const refIds = new Set<string>();
   for (const block of xml.matchAll(/<nonDerivativeTransaction>([\s\S]*?)<\/nonDerivativeTransaction>/gi)) {
-    const code = block[1].match(/<transactionCode>\s*([A-Za-z])\s*<\/transactionCode>/i)?.[1]?.toUpperCase();
-    if (code !== 'P') continue;
+    const lineCode = block[1].match(/<transactionCode>\s*([A-Za-z])\s*<\/transactionCode>/i)?.[1]?.toUpperCase();
+    if (lineCode !== code) continue;
     for (const ref of block[1].matchAll(/<footnoteId\s+id=["']?([^"'\s/>]+)/gi)) refIds.add(ref[1]);
   }
   return [...refIds].some((id) => isPlanFootnote(footnotes.get(id) ?? ''));

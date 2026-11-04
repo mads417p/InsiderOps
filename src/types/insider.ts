@@ -102,8 +102,26 @@ export type PaperTradeStatus = 'OPEN' | 'STOPPED_OUT' | 'TARGET_HIT' | 'CLOSED_M
 
 export type TradeType = 'PAPER' | 'REAL_NORDNET';
 
+export type ExitSaleKind = 'DISCRETIONARY' | 'PLAN_10B5_1' | 'TEN_PCT_OWNER' | 'UNKNOWN';
+
+export interface ExitSale {
+  name: string;
+  title: string;
+  date: string; // handelsdato
+  valueUsd: number;
+  kind: ExitSaleKind; // 10b5-1-salg og 10 %-ejere udløser ikke alarm; UNKNOWN gør (forsigtighed)
+}
+
+/** NOT_CHECKED og NO_SALES er to forskellige tilstande: "ikke tjekket" er aldrig "0 salg". */
+export type ExitRadarStatus = 'NOT_CHECKED' | 'NO_SALES' | 'SALES_FOUND' | 'ERROR' | 'UNSUPPORTED';
+
 export interface InsiderExitWarning {
-  hasExit: boolean;
+  status?: ExitRadarStatus; // mangler i positioner fra før fase 2 (= NOT_CHECKED)
+  hasExit: boolean; // true = alarm (forbliver true, når første alarm er givet)
+  checkedAt?: string;
+  sales?: ExitSale[]; // salg siden openedAt ved seneste tjek
+  firstAlertAt?: string; // første alarm gemmes permanent
+  firstAlert?: ExitSale;
   sellerName?: string;
   sellerTitle?: string;
   saleDate?: string;
@@ -136,24 +154,34 @@ export interface PaperTradePosition {
   pnlDkk: number;
   status: PaperTradeStatus;
   tradeType?: TradeType; // 'PAPER' | 'REAL_NORDNET'
+  entryUsdDkk?: number; // USD/DKK ved entry – til SPY's afkast i DKK
   benchmarkTicker?: string; // default 'SPY'
-  benchmarkEntryPrice?: number; // S&P 500 SPY kurs da positionen blev åbnet
+  benchmarkEntryPrice?: number; // SPY-kurs ved entry (USD). undefined = ukendt → alpha "N/A"
   benchmarkCurrentPrice?: number; // aktuel SPY live kurs
-  benchmarkReturnPct?: number; // ((benchmarkCurrentPrice - benchmarkEntryPrice) / benchmarkEntryPrice) * 100
-  alphaPct?: number; // pnlPct - benchmarkReturnPct
+  benchmarkReturnPct?: number | null; // SPY's afkast i DKK i samme periode. null = kan ikke beregnes
+  alphaPct?: number | null; // positionens DKK-afkast minus SPY's DKK-afkast. null = "N/A"
   insiderExitWarning?: InsiderExitWarning;
+  priceAlert?: 'STOP' | 'TARGET'; // kun REAL_NORDNET: advarsel – status ændres aldrig automatisk
+  exitPrice?: number; // lukning: kurs i aktiens valuta
+  exitFx?: number; // lukning: valutakurs til DKK
+  closedAt?: string;
+  realizedPnlDkk?: number;
+  realizedPnlPct?: number;
 }
 
 export interface PortfolioSummary {
-  totalInvestedDkk: number;
-  totalCurrentValueDkk: number;
-  totalPnlDkk: number;
-  totalPnlPct: number;
-  winRatePct: number;
+  tradeType: TradeType;
+  totalInvestedDkk: number; // åbne positioner
+  totalCurrentValueDkk: number; // åbne positioner til aktuel kurs
+  unrealizedPnlDkk: number;
+  realizedPnlDkk: number; // lukkede positioner
+  totalPnlDkk: number; // urealiseret + realiseret
+  totalPnlPct: number; // totalPnlDkk i forhold til al investeret kapital (åbne + lukkede)
+  winRatePct: number | null; // kun lukkede positioner; null = ingen lukkede endnu
   openCount: number;
   closedCount: number;
-  avgAlphaPct?: number; // porteføljens vægtede Alpha mod S&P 500
-  benchmarkReturnPct?: number; // S&P 500 afkast i samme periode
+  avgAlphaPct: number | null; // vægtet DKK-alpha for åbne positioner med kendt benchmark
+  benchmarkReturnPct: number | null; // SPY i DKK i samme perioder (vægtet)
 }
 
 export type TrackRecordReputation =

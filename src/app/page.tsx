@@ -41,6 +41,7 @@ import {
   InsiderTransaction,
   PaperTradePosition,
   PortfolioSummary,
+  TradeType,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
 import { currencyForTicker, type LiveFxRates } from '@/lib/live-quote';
@@ -157,7 +158,8 @@ export default function Dashboard() {
 
   // Paper-Trading Portfolio State
   const [paperPortfolio, setPaperPortfolio] = useState<Record<string, PaperTradePosition>>({});
-  const [portfolioSummary, setPortfolioSummary] = useState<PortfolioSummary | null>(null);
+  // Én opsummering pr. handelstype – PAPER og REAL_NORDNET blandes aldrig i KPI'erne.
+  const [portfolioSummaries, setPortfolioSummaries] = useState<Partial<Record<TradeType, PortfolioSummary>>>({});
   // Live FX fra /api/portfolio – uden den laver trade-planneren ingen plan (ingen hårdkodede kurser).
   const [fxRates, setFxRates] = useState<LiveFxRates | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState<boolean>(false);
@@ -473,7 +475,7 @@ ${verdict.judgeThinking}
             }
           });
           setPaperPortfolio(map);
-          if (data.summary) setPortfolioSummary(data.summary);
+          if (data.summaries) setPortfolioSummaries(data.summaries);
           if (data.fxRates) setFxRates(data.fxRates);
         }
       })
@@ -700,10 +702,10 @@ ${verdict.judgeThinking}
         exchange: tx.exchange || 'NASDAQ',
         insiderName: tx.insiderName,
         insiderTitle: tx.insiderTitle,
-        asymmetryScore: scoreOverride || activeVerdict?.asymmetryScore || 85,
+        // Ingen standardscore: uden en afsagt dom afviser serveren positionen.
+        asymmetryScore: scoreOverride ?? activeVerdict?.asymmetryScore,
         insiderBuyPrice: tx.pricePerShare,
-        entryPrice: tx.currentMarketPrice || tx.pricePerShare || 1.0,
-        currentPrice: tx.currentMarketPrice || tx.pricePerShare || 1.0,
+        // Entry-kursen låses server-side til en verificeret live kurs.
         shares: plan.totalShares,
         investedDkk: plan.recommendedAllocationDkk,
         stopLossPrice: plan.stopLossPrice,
@@ -714,13 +716,13 @@ ${verdict.judgeThinking}
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(posPayload),
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.position) {
-          setPaperPortfolio((prev) => ({ ...prev, [data.position.id]: data.position }));
-          if (data.summary) setPortfolioSummary(data.summary);
-          if (data.fxRates) setFxRates(data.fxRates);
-        }
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.position) {
+        setPaperPortfolio((prev) => ({ ...prev, [data.position.id]: data.position }));
+        if (data.summaries) setPortfolioSummaries(data.summaries);
+        if (data.fxRates) setFxRates(data.fxRates);
+      } else {
+        alert(`Positionen blev ikke oprettet: ${data.error || `HTTP ${res.status}`}`);
       }
     } catch (e) {
       console.error('Fejl ved oprettelse af paper-trade:', e);
@@ -741,7 +743,7 @@ ${verdict.judgeThinking}
             map[p.id] = p;
           });
           setPaperPortfolio(map);
-          if (data.summary) setPortfolioSummary(data.summary);
+          if (data.summaries) setPortfolioSummaries(data.summaries);
           if (data.fxRates) setFxRates(data.fxRates);
         }
       }
@@ -752,18 +754,21 @@ ${verdict.judgeThinking}
     }
   };
 
+  // Lukning sletter ikke: positionen får CLOSED_MANUAL med exit-kurs, exit-FX og realiseret P&L.
   const handleClosePaperTrade = async (id: string) => {
     try {
-      const res = await fetch(`/api/portfolio?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
-      if (res.ok) {
-        const data = await res.json();
-        setPaperPortfolio((prev) => {
-          const copy = { ...prev };
-          delete copy[id];
-          return copy;
-        });
-        if (data.summary) setPortfolioSummary(data.summary);
-          if (data.fxRates) setFxRates(data.fxRates);
+      const res = await fetch('/api/portfolio', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action: 'close' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.position) {
+        setPaperPortfolio((prev) => ({ ...prev, [id]: data.position }));
+        if (data.summaries) setPortfolioSummaries(data.summaries);
+        if (data.fxRates) setFxRates(data.fxRates);
+      } else {
+        alert(`Positionen blev ikke lukket: ${data.error || `HTTP ${res.status}`}`);
       }
     } catch (e) {
       console.error('Fejl ved lukning af paper-trade position:', e);
@@ -803,7 +808,7 @@ ${verdict.judgeThinking}
           map[p.id] = p;
         });
         setPaperPortfolio(map);
-        if (data.summary) setPortfolioSummary(data.summary);
+        if (data.summaries) setPortfolioSummaries(data.summaries);
           if (data.fxRates) setFxRates(data.fxRates);
         setEditingPosId(null);
       }
@@ -2604,7 +2609,16 @@ ${verdict.judgeThinking}
         {/* TAB 3: PAPER PORTEFØLJE & LIVE P&L */}
         {activeTab === 'portfolio' && (
           <div className="space-y-6">
-            {/* Top Portfolio KPI-Bar */}
+            {/* Top Portfolio KPI-Bar – én række pr. handelstype (PAPER altid, REAL_NORDNET når der er positioner) */}
+            {(['PAPER', 'REAL_NORDNET'] as const)
+              .filter((t) => t === 'PAPER' || (portfolioSummaries[t] && portfolioSummaries[t]!.openCount + portfolioSummaries[t]!.closedCount > 0))
+              .map((kpiType, kpiIdx) => {
+                const portfolioSummary = portfolioSummaries[kpiType];
+                return (
+            <div key={kpiType} className="space-y-1.5">
+            <div className="text-[11px] font-mono font-bold text-slate-400 uppercase">
+              {kpiType === 'PAPER' ? '🧪 Paper-trades' : '🏦 Rigtige Nordnet-positioner'}
+            </div>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
               {/* Card 1: Samlet Investeret */}
               <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg space-y-1">
@@ -2637,7 +2651,7 @@ ${verdict.judgeThinking}
               {/* Card 3: Samlet P&L */}
               <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg space-y-1">
                 <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-                  <span>UREALISERET P&L</span>
+                  <span>P&L (REAL. + UREAL.)</span>
                   {(portfolioSummary?.totalPnlDkk || 0) >= 0 ? (
                     <TrendingUp className="w-4 h-4 text-emerald-400" />
                   ) : (
@@ -2668,17 +2682,23 @@ ${verdict.judgeThinking}
                   <span>ALPHA VS. S&P 500</span>
                   <Flame className="w-4 h-4 text-amber-400" />
                 </div>
-                <div
-                  className={`text-2xl font-mono font-bold ${
-                    (portfolioSummary?.avgAlphaPct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                  }`}
-                >
-                  {(portfolioSummary?.avgAlphaPct || 0) >= 0 ? '+' : ''}
-                  {portfolioSummary?.avgAlphaPct || 0}% Alpha
-                </div>
+                {typeof portfolioSummary?.avgAlphaPct === 'number' ? (
+                  <div
+                    className={`text-2xl font-mono font-bold ${
+                      portfolioSummary.avgAlphaPct >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                    }`}
+                  >
+                    {portfolioSummary.avgAlphaPct >= 0 ? '+' : ''}
+                    {portfolioSummary.avgAlphaPct}% Alpha
+                  </div>
+                ) : (
+                  <div className="text-2xl font-mono font-bold text-slate-500">N/A</div>
+                )}
                 <div className="text-[11px] text-slate-500 font-mono">
-                  SPY i perioden: {(portfolioSummary?.benchmarkReturnPct || 0) >= 0 ? '+' : ''}
-                  {portfolioSummary?.benchmarkReturnPct || 0}%
+                  SPY i DKK i perioden:{' '}
+                  {typeof portfolioSummary?.benchmarkReturnPct === 'number'
+                    ? `${portfolioSummary.benchmarkReturnPct >= 0 ? '+' : ''}${portfolioSummary.benchmarkReturnPct}%`
+                    : 'N/A'}
                 </div>
               </div>
 
@@ -2686,13 +2706,17 @@ ${verdict.judgeThinking}
               <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-                    <span>WIN-RATE (% I PLUS)</span>
+                    <span>WIN-RATE (LUKKEDE)</span>
                     <Target className="w-4 h-4 text-amber-400" />
                   </div>
                   <div className="text-2xl font-mono font-bold text-amber-300 mt-1">
-                    {portfolioSummary?.winRatePct || 0}%
+                    {typeof portfolioSummary?.winRatePct === 'number' ? `${portfolioSummary.winRatePct}%` : 'N/A'}
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono">
+                    {portfolioSummary?.closedCount ?? 0} lukkede • realiseret {(portfolioSummary?.realizedPnlDkk ?? 0).toLocaleString('da-DK')} DKK
                   </div>
                 </div>
+                {kpiIdx === 0 && (
                 <button
                   onClick={handleRefreshPortfolioLivePnl}
                   disabled={portfolioRefreshing}
@@ -2701,8 +2725,12 @@ ${verdict.judgeThinking}
                   <RefreshCw className={`w-3.5 h-3.5 ${portfolioRefreshing ? 'animate-spin' : ''}`} />
                   <span>{portfolioRefreshing ? 'Henter kurser & radar...' : 'Opdatér Live P&L'}</span>
                 </button>
+                )}
               </div>
             </div>
+            </div>
+                );
+              })}
 
             {/* Position List / Cards */}
             {Object.keys(paperPortfolio).length === 0 ? (
@@ -2801,6 +2829,15 @@ ${verdict.judgeThinking}
                               : 'LUKKET'}
                           </span>
 
+                          {pos.priceAlert && (
+                            <span
+                              className="px-2 py-0.5 rounded text-[10px] font-mono font-bold border bg-amber-950/80 border-amber-500 text-amber-200"
+                              title="Rigtig position: status ændres ikke automatisk – handl selv på Nordnet"
+                            >
+                              {pos.priceAlert === 'STOP' ? '⚠️ KURSEN ER UNDER DIT STOP' : '⚠️ KURSMÅL NÅET – OVERVEJ SALG'}
+                            </span>
+                          )}
+
                           <button
                             onClick={() => (editingPosId === pos.id ? setEditingPosId(null) : handleStartEdit(pos))}
                             className="px-2.5 py-1 rounded bg-slate-800 hover:bg-cyan-950 hover:text-cyan-300 hover:border-cyan-700 border border-slate-700 text-slate-300 text-xs font-mono transition-colors flex items-center gap-1"
@@ -2855,18 +2892,17 @@ ${verdict.judgeThinking}
                               <span className="text-slate-400 flex items-center gap-0.5">
                                 <Zap className="w-3 h-3 text-amber-400" /> Alpha:
                               </span>
-                              <span
-                                className={`font-bold ${
-                                  (pos.alphaPct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                                }`}
-                              >
-                                {(pos.alphaPct || 0) >= 0 ? '+' : ''}
-                                {pos.alphaPct || 0}%
-                                <span className="text-[10px] font-normal text-slate-400 ml-1">
-                                  (SPY: {(pos.benchmarkReturnPct || 0) >= 0 ? '+' : ''}
-                                  {pos.benchmarkReturnPct || 0}%)
+                              {typeof pos.alphaPct === 'number' ? (
+                                <span className={`font-bold ${pos.alphaPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {pos.alphaPct >= 0 ? '+' : ''}
+                                  {pos.alphaPct}%
+                                  <span className="text-[10px] font-normal text-slate-400 ml-1">
+                                    (SPY i DKK: {typeof pos.benchmarkReturnPct === 'number' ? `${pos.benchmarkReturnPct >= 0 ? '+' : ''}${pos.benchmarkReturnPct}%` : 'N/A'})
+                                  </span>
                                 </span>
-                              </span>
+                              ) : (
+                                <span className="font-bold text-slate-500" title="SPY-kurs eller USD/DKK ved entry mangler">N/A</span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -2950,12 +2986,35 @@ ${verdict.judgeThinking}
                           </span>
                         </div>
                       ) : (
-                        <div className="px-3 py-1.5 rounded bg-slate-950/50 border border-slate-800/80 flex items-center justify-between text-[11px] font-mono text-slate-400">
-                          <div className="flex items-center gap-1.5 text-emerald-400">
-                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>🛡️ Exit-Radar: 0 insider-salg (Kode S) siden din entry</span>
-                          </div>
-                          <span className="text-[10px] text-slate-500">OpenInsider & SEC Verificeret</span>
+                        // "Ikke tjekket", fejl og "0 salg" er forskellige tilstande – kun NO_SALES er grøn.
+                        <div className="px-3 py-1.5 rounded bg-slate-950/50 border border-slate-800/80 flex items-center justify-between text-[11px] font-mono text-slate-400 gap-2">
+                          {pos.insiderExitWarning?.status === 'NO_SALES' ? (
+                            <div className="flex items-center gap-1.5 text-emerald-400">
+                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>🛡️ Exit-Radar: {pos.insiderExitWarning.message}</span>
+                            </div>
+                          ) : pos.insiderExitWarning?.status === 'SALES_FOUND' ? (
+                            <div className="flex items-center gap-1.5 text-slate-300">
+                              <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
+                              <span>Exit-Radar: kun planlagte salg/10 %-ejere – {pos.insiderExitWarning.message}</span>
+                            </div>
+                          ) : pos.insiderExitWarning?.status === 'ERROR' ? (
+                            <div className="flex items-center gap-1.5 text-rose-300">
+                              <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                              <span>{pos.insiderExitWarning.message}</span>
+                            </div>
+                          ) : pos.insiderExitWarning?.status === 'UNSUPPORTED' ? (
+                            <div className="flex items-center gap-1.5 text-slate-400">
+                              <span>Exit-Radar: {pos.insiderExitWarning.message}</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 text-amber-300">
+                              <span>Exit-Radar: ikke tjekket endnu – tryk &quot;Opdatér Live P&amp;L&quot;</span>
+                            </div>
+                          )}
+                          {pos.insiderExitWarning?.checkedAt && (
+                            <span className="text-[10px] text-slate-500 shrink-0">Tjekket {formatDateTimeDk(pos.insiderExitWarning.checkedAt)}</span>
+                          )}
                         </div>
                       )}
 
