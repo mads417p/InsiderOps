@@ -1,9 +1,33 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { FinishReason, GoogleGenAI, ThinkingLevel, Type, type ThinkingConfig } from '@google/genai';
 import { applyHardFilter } from '@/lib/sec-scanner';
 import { GatekeeperResult, InsiderTransaction } from '@/types/insider';
 import { UNTRUSTED_DATA_INSTRUCTION, untrusted } from '@/lib/prompt-safety';
 
 const clampScore = (n: number) => Math.min(100, Math.max(0, Math.round(n)));
+
+// Batch-scoring: få tickers pr. kald og lav thinking, så svaret ikke afskæres.
+// Thinking-tokens tæller med i maxOutputTokens; med 12 tickers og 4096 tokens blev JSON'en klippet midt i en streng.
+export const GATEKEEPER_CHUNK_SIZE = 5;
+const GATEKEEPER_MAX_OUTPUT_TOKENS = 8192;
+
+type BatchItem = { id: string; geminiPreScore: number; asymmetrySignal: GatekeeperResult['asymmetrySignal']; quickReasoning: string };
+
+/** Parser batch-svaret. Ugyldig eller afskåret JSON kaster med en tydelig fejl (logges af kalderen). */
+export function parseGatekeeperBatch(text: string | undefined): BatchItem[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text || '');
+  } catch (err) {
+    throw new Error(`Gemini-svaret er ikke gyldig JSON (sandsynligvis afskåret): ${(err as Error).message}`);
+  }
+  if (!Array.isArray(parsed)) throw new Error('Gemini-svaret er ikke et JSON-array');
+  return parsed as BatchItem[];
+}
+
+/** Lav thinking: Gemini 3 bruger thinkingLevel, 2.x bruger thinkingBudget (0 = slået fra). */
+export function lowThinkingConfig(model: string): ThinkingConfig {
+  return /gemini-2\./.test(model) ? { thinkingBudget: 0 } : { thinkingLevel: ThinkingLevel.LOW };
+}
 
 const DEFAULT_MODEL = 'gemini-3-flash-preview';
 let cachedGeminiFlashModel: string | null = null;
@@ -287,15 +311,14 @@ export async function evaluateBatchWithGatekeeper(
     }));
   }
 
-  // 2. Kør Gemini batch-kald opdelt i chunks af max 12 transaktioner med 4096 output tokens
+  // 2. Kør Gemini batch-kald i små chunks (afskårne svar logges som fejl og falder til heuristik)
   try {
     const ai = new GoogleGenAI({ apiKey });
     const model = await resolveGeminiFlashModel(ai);
 
-    const CHUNK_SIZE = 12;
     const chunks: Array<typeof candidatesToScore> = [];
-    for (let i = 0; i < candidatesToScore.length; i += CHUNK_SIZE) {
-      chunks.push(candidatesToScore.slice(i, i + CHUNK_SIZE));
+    for (let i = 0; i < candidatesToScore.length; i += GATEKEEPER_CHUNK_SIZE) {
+      chunks.push(candidatesToScore.slice(i, i + GATEKEEPER_CHUNK_SIZE));
     }
 
     await Promise.allSettled(
@@ -323,7 +346,8 @@ export async function evaluateBatchWithGatekeeper(
             contents: `Du er InsiderOps Gatekeeper. Evaluer hver af følgende ${batchPayload.length} godkendte insider-transaktioner:
 ${JSON.stringify(batchPayload, null, 2)}`,
             config: {
-              maxOutputTokens: 4096,
+              maxOutputTokens: GATEKEEPER_MAX_OUTPUT_TOKENS,
+              thinkingConfig: lowThinkingConfig(model),
               systemInstruction: `Du er Gatekeeper for en kvantitativ investeringsfond. Vurder graden af sandsynlig informationsasymmetri på en skala fra 0-100 for hver transaktion.
 Vægt CFO og General Counsel køb ekstremt højt (+20-30 point).
 Vægt høj holdingsIncreasePct (>15%) og isClusterBuy højt (+15 point).
@@ -352,12 +376,13 @@ ${UNTRUSTED_DATA_INSTRUCTION}`,
             },
           });
 
-          const parsed = JSON.parse(response.text || '[]') as Array<{
-            id: string;
-            geminiPreScore: number;
-            asymmetrySignal: GatekeeperResult['asymmetrySignal'];
-            quickReasoning: string;
-          }>;
+          const finishReason = response.candidates?.[0]?.finishReason;
+          if (finishReason === FinishReason.MAX_TOKENS) {
+            throw new Error(
+              `Gemini-svaret blev afskåret (finishReason MAX_TOKENS, ${chunk.length} tickers, usage ${JSON.stringify(response.usageMetadata ?? {})})`
+            );
+          }
+          const parsed = parseGatekeeperBatch(response.text);
 
           for (const item of parsed) {
             // Ikke-numerisk score → ingen Gemini-vurdering; udfyldes som heuristik nedenfor.
@@ -372,7 +397,11 @@ ${UNTRUSTED_DATA_INSTRUCTION}`,
             }
           }
         } catch (chunkErr) {
-          console.warn('Chunk evaluering i Gemini Gatekeeper fejlede, falder tilbage til heuristik for denne chunk:', chunkErr);
+          // Fejl, ikke advarsel: rækkerne får scoreSource 'heuristik' og kan ikke starte auto-køen.
+          console.error(
+            `Gemini Gatekeeper fejlede for ${chunk.map(({ tx }) => tx.ticker).join(', ')} – heuristisk score bruges:`,
+            chunkErr instanceof Error ? chunkErr.message : chunkErr
+          );
         }
       })
     );
