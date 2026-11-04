@@ -62,8 +62,9 @@ export async function fetchInsiderTrackRecord(
     const currentPrice = tx.currentMarketPrice || tx.pricePerShare;
     if (!currentPrice) return unknownRecord('ingen kurs at måle tidligere køb mod');
 
-    // Fastlæg reference-dato for den aktuelle transaktion (filingDate eller i dag)
-    const txFilingTime = tx.filingDate ? new Date(tx.filingDate).getTime() : Date.now();
+    // Fastlæg reference-dato for den aktuelle transaktion (handelsdato, ellers indberetning, ellers i dag)
+    const refDate = tx.tradeDate || tx.filedAt;
+    const txFilingTime = refDate ? new Date(refDate.slice(0, 10)).getTime() : Date.now();
     // 14 dages margin: ekskluder handler der er foretaget som del af den aktuelle klynge
     const clusterCutoffTime = txFilingTime - 14 * 24 * 60 * 60 * 1000;
 

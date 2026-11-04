@@ -1,6 +1,5 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { InsiderTransaction, TransactionCode } from '@/types/insider';
-import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { isExecutiveTitle, isValidInsiderName } from '@/lib/sec-scanner';
 import { resolveGeminiFlashModel } from '@/lib/gemini-gatekeeper';
 import { UNTRUSTED_DATA_INSTRUCTION, untrusted } from '@/lib/prompt-safety';
@@ -351,6 +350,10 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
 
     const seenDisclosures = new Set<string>();
 
+    if (responses.every((r) => r.status === 'rejected')) {
+      throw new Error('Nasdaq Nordic: alle feeds fejlede');
+    }
+
     for (const r of responses) {
       if (r.status === 'fulfilled' && r.value?.results?.item) {
         const items = r.value.results.item;
@@ -450,9 +453,8 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
         priorShares > 0 ? parseFloat(((parsed.shares / priorShares) * 100).toFixed(1)) : 25.0;
 
       const isExecutive = isExecutiveTitle(parsed.insiderTitle);
-      const filingDate = item.ann.releaseTime
-        ? item.ann.releaseTime.split(' ')[0]
-        : new Date().toISOString().split('T')[0];
+      // Meddelelsens offentliggørelse (fx "2026-11-04 14:44:25 +0000"). Handelsdatoen kendes ikke her.
+      const filedAt = item.ann.releaseTime?.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) \+0000$/, '$1T$2Z');
 
       const currSymbol = parsed.currency;
       let exchangeLabel = 'CPH (Nasdaq Copenhagen)';
@@ -470,7 +472,7 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
 
       const tx: InsiderTransaction = {
         id: `nordic-${item.ann.disclosureId || Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        filingDate,
+        filedAt,
         ticker,
         companyName: item.company,
         insiderName: parsed.insiderName,
@@ -499,32 +501,10 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
       parsedTransactions.push(tx);
     }
 
-    // Cluster detektering for nordiske handler i samme ticker
-    const byTicker = new Map<string, InsiderTransaction[]>();
-    for (const tx of parsedTransactions) {
-      if (!byTicker.has(tx.ticker)) byTicker.set(tx.ticker, []);
-      byTicker.get(tx.ticker)!.push(tx);
-    }
-    for (const [, list] of byTicker) {
-      if (list.length > 1) {
-        for (const tx of list) {
-          tx.isClusterBuy = true;
-          tx.clusterCount = list.length;
-        }
-      }
-    }
-
-    // live transaktioner - streng separation: ingen mock-transaktioner i live-feedet!
-    const finalTransactions = parsedTransactions;
-
-    // Berig med live markedskurser fra Yahoo Finance (.CO, .ST og .HE)
-    await Promise.allSettled(
-      finalTransactions.map((tx) => enrichTransactionWithMarketData(tx))
-    );
-
-    return finalTransactions;
+    // Clustering, berigelse og roll-up sker samlet i buildScanRows (scan-ruten).
+    return parsedTransactions;
   } catch (err) {
-    console.warn('Uventet fejl i fetchNordicInsiderTransactions:', err);
-    return [];
+    console.error('Fejl i fetchNordicInsiderTransactions:', err);
+    throw err;
   }
 }

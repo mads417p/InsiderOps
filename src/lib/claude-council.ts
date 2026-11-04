@@ -219,8 +219,8 @@ RULE 10b5-1 HANDELSPLAN: ${tx.is10b51Plan ? 'JA (Forudbestemt automatisk handels
 ${tx.footnotesSummary ? `SEC FORM 4 FODNOTER / DET MED SMÅT:\n${untrusted('sec-form4-fodnoter', tx.footnotesSummary)}\n` : ''}TRANSAKTIONSTYPE: Kode ${tx.transactionCode} (Åbent markedskøb)
 ANTAL AKTIER: ${tx.shares.toLocaleString()} stk a $${tx.pricePerShare} USD
 TOTAL HANDELSVÆRDI: $${Math.round(tx.totalValueUsd).toLocaleString()} USD
-BEHOLDNING EFTER KØB: ${tx.sharesOwnedFollowing.toLocaleString()} aktier
-FORØGELSE AF EGEN BEHOLDNING: +${tx.holdingsIncreasePct}%
+BEHOLDNING EFTER KØB: ${tx.sharesOwnedFollowing !== undefined ? `${tx.sharesOwnedFollowing.toLocaleString()} aktier` : 'ikke oplyst'}
+FORØGELSE AF EGEN BEHOLDNING: ${tx.holdingsIncreasePct !== undefined ? `+${tx.holdingsIncreasePct}%` : 'ukendt'}
 CLUSTER-KØB: ${tx.isClusterBuy ? `JA (${tx.clusterCount ?? 2} uafhængige personer)` : 'NEJ'}
 ${
   tx.clusterPeers && tx.clusterPeers.length > 0

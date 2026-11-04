@@ -67,6 +67,11 @@ interface ScanResponse {
   };
   count: number;
   items: ScanItem[];
+  scannedAt?: string;
+  stale?: boolean; // true = live-hentning fejlede, items er den seneste gemte scan
+  errors?: Array<{ source: string; error: string }>;
+  rejectedCount?: number;
+  error?: string;
 }
 
 const STORAGE_KEY = 'insiderops_verdicts_v1';
@@ -194,7 +199,7 @@ export default function Dashboard() {
   const autoPilotProgress = councilQueueProgress;
 
   const generateInvestmentMemoMarkdown = (tx: InsiderTransaction, verdict: CouncilVerdict): string => {
-    const dateFormatted = tx.filingDate || new Date().toISOString().split('T')[0];
+    const dateFormatted = tx.tradeDate ? `${tx.tradeDate} (handelsdato)` : tx.filedAt ? `${tx.filedAt.slice(0, 10)} (indberettet)` : 'ukendt';
     const alphaStr =
       tx.returnSinceBuyPct !== undefined
         ? `${tx.returnSinceBuyPct > 0 ? '+' : ''}${tx.returnSinceBuyPct}% (${
@@ -228,7 +233,7 @@ ${tx.footnotesSummary ? `- **SEC Fodnoter (Det med småt):**\n${tx.footnotesSumm
 - **Handelbarheds-status:** ${tx.tradabilityReason || (tx.isTradableInDK !== false ? 'Handelbar på standard DK mæglere' : 'Ikke verificeret')}
 - **Transaktionstype:** Kode ${tx.transactionCode} (Åbent markedskøb)
 - **Handelsbeløb:** $${Math.round(tx.totalValueUsd).toLocaleString()} USD (${tx.shares.toLocaleString()} aktier á $${tx.pricePerShare} USD)
-- **Beholdning efter køb:** ${tx.sharesOwnedFollowing.toLocaleString()} aktier (+${tx.holdingsIncreasePct}% stigning)
+- **Beholdning efter køb:** ${tx.sharesOwnedFollowing !== undefined ? `${tx.sharesOwnedFollowing.toLocaleString()} aktier` : 'ikke oplyst'} (${tx.holdingsIncreasePct !== undefined ? `+${tx.holdingsIncreasePct}%` : 'ukendt'} stigning)
 - **Købskurs:** $${tx.pricePerShare} USD
 - **Aktuel markedskurs:** ${tx.currentMarketPrice !== undefined ? `$${tx.currentMarketPrice} USD` : 'Ukendt'}
 - **Insider Alpha / Rabat:** ${alphaStr}
@@ -384,7 +389,7 @@ ${verdict.judgeThinking}
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `InsiderOps_${selectedTx.ticker}_${selectedTx.filingDate || 'memo'}.md`;
+    a.download = `InsiderOps_${selectedTx.ticker}_${selectedTx.tradeDate || 'memo'}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -482,17 +487,30 @@ ${verdict.judgeThinking}
           : `/api/scan?source=${selectedSource}`;
 
         const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-        const data: ScanResponse = await res.json();
+        const data: ScanResponse = await res.json().catch(() => ({}) as ScanResponse);
+        if (!res.ok) throw new Error(data.error || `HTTP-fejl ${res.status}`);
         setItems(data.items || []);
         setApiKeys(data.apiKeysConfigured || { gemini: false, anthropic: false });
 
-        if (tickerQuery && data.items.length === 0) {
-          setError(`Ingen Form 4 filings fundet hos SEC for '${tickerQuery}'.`);
+        // Fejl og forældede data vises som det, de er – aldrig som "ingen signaler".
+        const notes: string[] = [];
+        if (data.stale) {
+          notes.push(`Viser gemt scan fra ${formatDateTimeDk(data.scannedAt)} – live-hentningen fejlede (forældede data).`);
         }
+        if (data.errors?.length) {
+          notes.push(`Kilder der fejlede: ${data.errors.map((e) => `${e.source}: ${e.error}`).join(' • ')}`);
+        }
+        if (!data.stale && data.items.length === 0) {
+          notes.push(
+            tickerQuery
+              ? `Ingen åbne markedskøb (kode P) hos SEC for '${tickerQuery}', der består filtrene (${data.rejectedCount ?? 0} afvist).`
+              : `Ingen rækker bestod filtrene (${data.rejectedCount ?? 0} afvist).`
+          );
+        }
+        if (notes.length > 0) setError(notes.join('\n'));
       } catch (err: unknown) {
         console.error(err);
-        setError('Kunne ikke hente filings fra SEC. Prøv venligst igen.');
+        setError(`Scanningen fejlede: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         setLoading(false);
       }
@@ -1363,7 +1381,7 @@ ${verdict.judgeThinking}
         {error && (
           <div className="p-3 rounded bg-rose-950/40 border border-rose-800 text-rose-300 text-xs font-mono flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0" />
-            <span>{error}</span>
+            <span className="whitespace-pre-line">{error}</span>
           </div>
         )}
 
@@ -1866,7 +1884,7 @@ ${verdict.judgeThinking}
                         tx.insiderTitle
                       );
                       const isCosmeticBuy =
-                        tx.transactionCode === 'P' && tx.holdingsIncreasePct < 1.0;
+                        tx.transactionCode === 'P' && tx.holdingsIncreasePct !== undefined && tx.holdingsIncreasePct < 1.0;
                       const isChecked = selectedRowIds.includes(tx.id);
 
                       return (
@@ -2231,20 +2249,26 @@ ${verdict.judgeThinking}
                           <td className="py-3 px-3 text-right font-mono">
                             <div
                               className={`font-semibold flex items-center justify-end gap-1 ${
-                                tx.holdingsIncreasePct >= 15
+                                (tx.holdingsIncreasePct ?? 0) >= 15
                                   ? 'text-emerald-400'
                                   : isCosmeticBuy
                                   ? 'text-amber-400'
                                   : 'text-slate-300'
                               }`}
                             >
-                              {tx.holdingsIncreasePct > 0 ? (
-                                <TrendingUp className="w-3 h-3" />
+                              {tx.holdingsIncreasePct === undefined ? (
+                                <span className="text-slate-500" title="Beholdning ikke oplyst eller ny position">ukendt</span>
                               ) : (
-                                <TrendingDown className="w-3 h-3" />
+                                <>
+                                  {tx.holdingsIncreasePct > 0 ? (
+                                    <TrendingUp className="w-3 h-3" />
+                                  ) : (
+                                    <TrendingDown className="w-3 h-3" />
+                                  )}
+                                  {tx.holdingsIncreasePct > 0 ? '+' : ''}
+                                  {tx.holdingsIncreasePct}%
+                                </>
                               )}
-                              {tx.holdingsIncreasePct > 0 ? '+' : ''}
-                              {tx.holdingsIncreasePct}%
                             </div>
                             {isCosmeticBuy && (
                               <div className="text-[10px] text-amber-400/80 font-sans">
@@ -2488,7 +2512,7 @@ ${verdict.judgeThinking}
                       <div className="mt-2 text-xs text-slate-300 font-sans font-medium flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span>
-                            {tx.insiderName} ({tx.insiderTitle}) • ${Math.round(tx.totalValueUsd).toLocaleString()} (+{tx.holdingsIncreasePct}%)
+                            {tx.insiderName} ({tx.insiderTitle}) • ${Math.round(tx.totalValueUsd).toLocaleString()} ({tx.holdingsIncreasePct !== undefined ? `+${tx.holdingsIncreasePct}%` : 'beholdning ukendt'})
                           </span>
                           {tx.isExecutiveOfficer && (
                             <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950/80 border border-cyan-600 text-cyan-300 font-mono font-bold">

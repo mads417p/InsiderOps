@@ -54,8 +54,9 @@ export async function resolveGeminiFlashModel(ai?: GoogleGenAI): Promise<string>
  */
 function evaluateHeuristicGatekeeper(tx: InsiderTransaction): GatekeeperResult {
   const isCFOorGC = /cfo|chief financial|general counsel|chief legal|jurist/i.test(tx.insiderTitle);
-  const isCosmetic = tx.holdingsIncreasePct < 2.0;
-  const isStrongIncrease = tx.holdingsIncreasePct >= 15.0;
+  // Ukendt beholdningsstigning er hverken kosmetisk eller stærk.
+  const isCosmetic = tx.holdingsIncreasePct !== undefined && tx.holdingsIncreasePct < 2.0;
+  const isStrongIncrease = tx.holdingsIncreasePct !== undefined && tx.holdingsIncreasePct >= 15.0;
   const isCluster = tx.isClusterBuy;
   const isLargeValue = tx.totalValueUsd >= 250000;
   const hadPriceDrop = (tx.recentPriceChange30dPct ?? 0) <= -15.0;
@@ -167,8 +168,8 @@ Insider: ${tx.insiderName}
 Titel: ${tx.insiderTitle}
 Transaktion: Kode ${tx.transactionCode} (${tx.shares.toLocaleString()} aktier a $${tx.pricePerShare})
 Samlet værdi: $${Math.round(tx.totalValueUsd).toLocaleString()} USD
-Holdings efter køb: ${tx.sharesOwnedFollowing.toLocaleString()} aktier
-Forøgelse af egen beholdning: +${tx.holdingsIncreasePct}%
+Holdings efter køb: ${tx.sharesOwnedFollowing !== undefined ? `${tx.sharesOwnedFollowing.toLocaleString()} aktier` : 'ikke oplyst'}
+Forøgelse af egen beholdning: ${tx.holdingsIncreasePct !== undefined ? `+${tx.holdingsIncreasePct}%` : 'ukendt'}
 Cluster-køb: ${tx.isClusterBuy ? `Ja (${tx.clusterCount ?? 2} insidere)` : 'Nej'}
 Rule 10b5-1 Plan: ${tx.is10b51Plan ? 'JA (Forudbestemt automatisk algoritme/plan)' : 'NEJ (Frivilligt, skønsmæssigt køb)'}
 Kursændring seneste 30 dage: ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'Ukendt'}

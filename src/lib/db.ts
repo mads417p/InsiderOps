@@ -170,11 +170,11 @@ export function deleteVerdict(txId: string): Promise<boolean> {
   });
 }
 
-export async function getLatestScan(
-  source: string
-): Promise<Array<{ transaction: InsiderTransaction; result: GatekeeperResult }> | null> {
-  const record = (await getDatabase()).scanHistory[source];
-  return record?.items?.length ? record.items : null;
+/** Seneste gemte scan for en kilde (med tidsstempel), eller null hvis der ingen er. */
+export async function getLatestScan(source: string): Promise<SavedScanItem | null> {
+  const db = await getDatabase();
+  const record = Object.hasOwn(db.scanHistory, source) ? db.scanHistory[source] : undefined;
+  return record?.items?.length ? record : null;
 }
 
 export function saveScan(

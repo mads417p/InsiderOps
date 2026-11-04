@@ -2,18 +2,23 @@ export type TransactionCode = 'P' | 'S' | 'A' | 'M' | 'F' | 'G' | 'D';
 
 export interface InsiderTransaction {
   id: string;
-  filingDate: string;
+  tradeDate?: string; // handelsdato (YYYY-MM-DD). undefined = ukendt (ældre poster fra før fase 2)
+  filedAt?: string; // SEC-accept-tidspunkt eller meddelelsens offentliggørelse (ISO / "YYYY-MM-DDTHH:MM:SS" ET for OpenInsider)
+  accessionNo?: string; // SEC accession-nummer (18 cifre) – dedup-nøgle sammen med ownerCik
+  ownerCik?: string; // reporting owner CIK (uden foranstillede nuller)
   ticker: string;
   companyName: string;
   insiderName: string;
   insiderTitle: string; // f.eks. "CFO", "CEO", "General Counsel", "Director", "10% Owner"
   transactionCode: TransactionCode;
   shares: number;
-  pricePerShare: number;
-  totalValueUsd: number;
-  sharesOwnedFollowing: number;
-  holdingsIncreasePct: number; // beregnet % stigning i insiderens samlede beholdning
-  isClusterBuy: boolean; // om flere insidere har købt inden for 10 dage
+  pricePerShare: number; // insiderens kurs i `currency` (USD, hvis currency mangler)
+  currency?: string; // valuta for pricePerShare og totalValueLocal (USD, DKK, SEK, EUR, NOK)
+  totalValueLocal?: number; // handelsbeløb i lokal valuta (nordiske meddelelser)
+  totalValueUsd: number; // USD-ækvivalent – kun til $50k-grænsen og rangering
+  sharesOwnedFollowing?: number; // undefined = ikke oplyst
+  holdingsIncreasePct?: number; // % stigning i insiderens beholdning. undefined = beholdning ukendt eller ny
+  isClusterBuy: boolean; // om flere distinkte købere har købt inden for ±10 dage af lead-handlen
   clusterCount?: number;
   recentPriceChange30dPct?: number; // kursændring seneste 30 dage op til købet
   secFilingUrl: string;
