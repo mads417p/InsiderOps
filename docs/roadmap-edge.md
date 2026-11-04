@@ -230,6 +230,7 @@ Mål: Ingen opfundne tal må kunne nå UI, DB eller trade-planner. En fejl skal 
    e. Modeller fra env (CLAUDE_SPECIALIST_MODEL, CLAUDE_JUDGE_MODEL) med defaults claude-sonnet-5-5 og claude-opus-5-5. Fjern heuristikken, der matcher model-id'er på includes('5').
    f. Al utroværdig tekst (SEC-fodnoter, nyhedsoverskrifter, meddelelsestekst) skal afgrænses i prompts med tags og en instruktion om, at indholdet er data, ikke instruktioner.
    g. Gem i hver dom: model-id'er, PROMPT_VERSION (konstant), og usage (input, output og cache-tokens).
+   h. 🖥️ Alle 32 eksisterende domme har den samme opdigtede judgeThinking-tekst. Fjern den fra DB'en via updateDb efter backup, og markér dommene med legacyThinkingRemoved: true.
 
 2. Ukendt må ikke blive til et positivt signal:
    a. fundamentals.ts:
@@ -237,6 +238,8 @@ Mål: Ingen opfundne tal må kunne nå UI, DB eller trade-planner. En fejl skal 
       - Udvid tag-listerne med CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents, ConvertibleNotesPayable, LongTermDebtAndCapitalLeaseObligations og LongTermNotesPayable, og læg NotesAndLoansPayable til gælden.
       - Fjern `?? 99`. Tilføj badge 'UNKNOWN'. SOLID_RUNWAY må kun skrive "Cash-Flow Positiv", når det er sandt.
       - Fejlede opslag caches ikke.
+      - nextEarningsDate i fortiden betyder ukendt. Hent næste dato; lykkes det ikke, er den UNKNOWN. daysUntilEarnings må aldrig være negativ i earnings-guarden. (RAPP havde en dato 88 dage tilbage, ACN 31.)
+      - Gæld: ACN blev læst som $113M, hvilket kun er den kortfristede del. Den langfristede gæld var ca. $5,03 mia. pr. 31.8.2025. Medtag LongTermDebtNoncurrent og LongTermDebt, og brug ACN som testcase.
    b. track-record.ts: slet mock-blokkene (NVCR/PLXR/MTLR/PLAN). Fejl, timeout og ikke-US-tickers giver reputation 'UNKNOWN' (tilføj til typen), ikke FIRST_TIME_OR_RARE.
    c. verifyDkTradability (market-enricher.ts):
       - Kun en eksplicit liste af børser godkendes (NASDAQ, NYSE, NYSE American, Cboe, samt .CO/.ST/.HE/.OL).
@@ -302,6 +305,13 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs docs/audit-2026-11-04.md afs
 
 4. Handelbarhed: omregn likviditet og kurs til USD med live FX, før grænserne på $500k og $2 anvendes.
 
+4b. Track record (track-record.ts):
+   a. Mål hvert tidligere køb over en fast horisont (126 handelsdage), ikke til dagens kurs. Udelad køb, der er yngre end horisonten. (APLD viser i dag 31 køb, 100 % win rate og +594,7 % i snit, fordi alt måles til dagens kurs efter et stort kursløb.)
+   b. Brug isSamePerson: vis insiderens egen historik og selskabets historik hver for sig.
+   c. Match kun transaktionskode P, ikke rækker som "OptEx".
+   d. FIRST_TIME_OR_RARE = ingen køb i 24 måneder.
+   e. SMART_MONEY_SNIPER kræver mindst 3 målte køb.
+
 5. Portefølje (api/portfolio/route.ts, db.ts):
    a. Gem USD/DKK og SPY-kurs ved entry. Fjern SPY-fallbacken 755 (null vises som "N/A"). Skriv en backfill af SPY's lukkekurs på openedAt for ældre positioner (🖥️ selve kørslen mod DB'en).
    b. Alpha = positionens afkast i DKK minus SPY's afkast i DKK i samme periode.
@@ -328,6 +338,7 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs docs/audit-2026-11-04.md afs
 
 7. Vitest-tests:
    - cluster-scenarierne fra auditten (to direktører samme dato og antal; én person fra to kilder; et salg i samme ticker; 30 dages mellemrum),
+   - track record med fast horisont (køb yngre end horisonten udelades),
    - titel- og navnefunktionerne,
    - den nordiske talparser,
    - valutasammenligning,
@@ -335,6 +346,7 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs docs/audit-2026-11-04.md afs
    - computeSummary pr. type.
 
 8. Kør tsc, test og build. 🖥️ Kør én rigtig scan. Commit.
+9. 🖥️ Gen-vurdér alle åbne positioner (i dag RAPP, APLD, ACN, DINO og LSTR) med forceRefresh, og vis gammel og ny score, fundamentals og track record side om side.
 
 🖥️ Rapportér før/efter på en rigtig scan: antal rækker, antal clusters, og eksempler på rækker, der nu afvises, med årsag.
 ```
