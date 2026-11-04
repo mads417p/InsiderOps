@@ -22,6 +22,8 @@ export const councilPostSchema = z.strictObject({
   id: idSchema, // transaktionen hentes server-side – klientens data bruges ikke
   judgeTier: z.enum(['opus', 'sonnet']).optional(),
   forceRefresh: z.boolean().optional(),
+  // Hvilken regel sendte signalet til rådet (logges i ledgerens evaluations). Mangler = manuel.
+  queueRule: z.string().regex(/^(manuel|auto:rang-top\d{1,2}-min\d{1,3})$/, 'Ugyldig køregel').optional(),
 });
 
 export const portfolioPostSchema = z.strictObject({

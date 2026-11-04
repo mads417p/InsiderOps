@@ -25,19 +25,29 @@ export const GATEKEEPER_CLAUDE_PARALLEL = 4;
 // Thinking-tokens tæller med i max_tokens; 10 tickers × ca. 150 output-tokens + lav thinking ligger langt under.
 const MAX_TOKENS = 8000;
 
-// Haiku 5.5, prompts ≤ 100.000 tokens, USD pr. MTok (platform.claude.com/docs/en/about-claude/pricing, tjekket 4.11.2026).
-// ponytail: kun Haiku-takster; peger CLAUDE_GATEKEEPER_MODEL på en anden model, er costUsd undefined.
-const HAIKU_PRICE = { input: 0.1, cacheWrite5m: 0.125, cacheRead: 0.01, output: 0.5 };
+// USD pr. MTok (claude-api-reference, tjekket 4.11.2026). Haiku-takster gælder prompts ≤ 100.000 tokens.
+// Cache-skriv (5 min) = 1,25 × input. Ukendt model → costUsd undefined (ingen gættet pris).
+const CLAUDE_PRICES: Record<string, { input: number; cacheWrite5m: number; cacheRead: number; output: number }> = {
+  'claude-haiku-5-5': { input: 0.1, cacheWrite5m: 0.125, cacheRead: 0.01, output: 0.5 },
+  'claude-sonnet-5-5': { input: 2, cacheWrite5m: 2.5, cacheRead: 0.2, output: 10 },
+  'claude-opus-5-5': { input: 4, cacheWrite5m: 5, cacheRead: 0.2, output: 20 },
+  'claude-fable-5-1': { input: 10, cacheWrite5m: 12.5, cacheRead: 0.25, output: 50 },
+};
 
-export function gatekeeperCostUsd(u: Pick<GatekeeperUsage, 'model' | 'inputTokens' | 'outputTokens' | 'cacheCreationInputTokens' | 'cacheReadInputTokens'>): number | undefined {
-  if (u.model !== 'claude-haiku-5-5') return undefined;
+type TokenUsage = { inputTokens: number; outputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number };
+
+/** Estimeret pris i USD for et Claude-kald (eller en sum af kald på samme model). */
+export function claudeCostUsd(model: string | undefined, u: TokenUsage): number | undefined {
+  const p = model ? CLAUDE_PRICES[model] : undefined;
+  if (!p) return undefined;
   const usd =
-    (u.inputTokens * HAIKU_PRICE.input +
-      u.cacheCreationInputTokens * HAIKU_PRICE.cacheWrite5m +
-      u.cacheReadInputTokens * HAIKU_PRICE.cacheRead +
-      u.outputTokens * HAIKU_PRICE.output) /
+    (u.inputTokens * p.input + u.cacheCreationInputTokens * p.cacheWrite5m + u.cacheReadInputTokens * p.cacheRead + u.outputTokens * p.output) /
     1_000_000;
   return Math.round(usd * 1_000_000) / 1_000_000;
+}
+
+export function gatekeeperCostUsd(u: Pick<GatekeeperUsage, 'model' | 'inputTokens' | 'outputTokens' | 'cacheCreationInputTokens' | 'cacheReadInputTokens'>): number | undefined {
+  return u.model === 'claude-haiku-5-5' ? claudeCostUsd(u.model, u) : undefined;
 }
 
 /** Felterne modellen ser pr. transaktion. Modellen må kun angive disse som "brugte felter". */

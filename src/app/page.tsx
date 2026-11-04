@@ -65,6 +65,14 @@ interface SavedVerdictItem {
   savedAt: string;
 }
 
+/** Rang-baseret auto-kø fra scan-svaret (server-side regel, se src/lib/auto-queue.ts). */
+interface AutoQueue {
+  rule: string;
+  topN: number;
+  minScore: number;
+  ids: string[];
+}
+
 interface ScanResponse {
   success: boolean;
   source: string;
@@ -81,6 +89,7 @@ interface ScanResponse {
   scannedAt?: string | null;
   saved?: boolean; // true = ?latest=1: seneste gemte scan, ingen ny scan kørt
   ledger?: { inserted: number; seen: number; scored: number } | { error: string } | null;
+  autoQueue?: AutoQueue;
   stale?: boolean; // true = live-hentning fejlede, items er den seneste gemte scan
   errors?: Array<{ source: string; error: string }>;
   rejectedCount?: number;
@@ -172,6 +181,7 @@ export default function Dashboard() {
   });
   const [gatekeeperUsage, setGatekeeperUsage] = useState<GatekeeperUsage | null>(null);
   const [scannedAt, setScannedAt] = useState<string | null>(null);
+  const [autoQueue, setAutoQueue] = useState<AutoQueue | null>(null);
 
   // Paper-Trading Portfolio State
   const [paperPortfolio, setPaperPortfolio] = useState<Record<string, PaperTradePosition>>({});
@@ -521,6 +531,7 @@ ${verdict.judgeThinking}
         setApiKeys(data.apiKeysConfigured || { gemini: false, anthropic: false });
         setGatekeeperUsage(data.gatekeeperUsage ?? null);
         setScannedAt(data.scannedAt ?? null);
+        setAutoQueue(data.autoQueue ?? null);
 
         // Fejl og forældede data vises som det, de er – aldrig som "ingen signaler".
         const notes: string[] = [];
@@ -849,14 +860,10 @@ ${verdict.judgeThinking}
     }
   };
 
-  // 1. Uvurderede HIGH signaler (asymmetrySignal === 'HIGH' eller score >= 75 uden rådsdom).
-  //    Kun model-scorer (Claude/Gemini) – en heuristisk score må ikke starte auto-køen.
+  // 1. Auto-kø (fase 3): de N højest Claude-scorede rækker pr. scan med score ≥ min og uden gemt dom.
+  //    Reglen beregnes server-side (AUTO_QUEUE_TOP_N / AUTO_QUEUE_MIN_SCORE); rådet starter kun ved klik.
   const unjudgedHighItems = items.filter(
-    (item) =>
-      item.result.passedHardFilter &&
-      isModelScore(item.result) &&
-      (item.result.asymmetrySignal === 'HIGH' || item.result.geminiPreScore >= 75) &&
-      !verdictHistory[item.transaction.id]
+    (item) => autoQueue?.ids.includes(item.transaction.id) && !verdictHistory[item.transaction.id]
   );
   const unjudgedHighCount = unjudgedHighItems.length;
 
@@ -902,6 +909,7 @@ ${verdict.judgeThinking}
             id: tx.id,
             judgeTier,
             forceRefresh: hasOldVerdict,
+            queueRule: 'manuel',
           }),
         });
 
@@ -971,7 +979,7 @@ ${verdict.judgeThinking}
           current: i + 1,
           total: unjudgedHighItems.length,
           ticker: tx.ticker,
-          label: `Analyserer HIGH signal ${tx.ticker} (${i + 1}/${unjudgedHighItems.length})...`,
+          label: `Auto-kø: analyserer ${tx.ticker} (${i + 1}/${unjudgedHighItems.length})...`,
         });
 
         const res = await fetch('/api/council', {
@@ -981,6 +989,7 @@ ${verdict.judgeThinking}
             id: tx.id,
             judgeTier,
             forceRefresh: false,
+            queueRule: autoQueue?.rule, // logges i signal-ledgeren
           }),
         });
 
@@ -1022,7 +1031,7 @@ ${verdict.judgeThinking}
         }, 250);
       }
     } catch (err) {
-      console.error('Fejl under analyse af uvurderede HIGH signaler:', err);
+      console.error('Fejl under afvikling af auto-køen:', err);
     } finally {
       setCouncilQueueRunning(false);
       setCouncilQueueProgress(null);
@@ -1033,7 +1042,6 @@ ${verdict.judgeThinking}
   const totalScanned = items.length;
   // Alle afviste: pipelinens rejected-liste + items, der ikke bestod hard-filteret (ældre gemte scans).
   const rejectedRows = collectRejected(scanRejected, items);
-  const highAsymmetryCount = items.filter((i) => i.result.geminiPreScore >= 75).length;
   const savedVerdictItems = Object.values(verdictHistory).sort(
     (a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore
   );
@@ -1260,10 +1268,16 @@ ${verdict.judgeThinking}
                   ? 'bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-500/80 text-emerald-200 hover:text-white shadow-emerald-950'
                   : 'bg-slate-800/80 border border-slate-700 text-slate-400 opacity-60 cursor-not-allowed'
               }`}
-              title="Finder alle aktier med asymmetrySignal === 'HIGH' eller score >= 75 der endnu ikke har en rådsdom"
+              title={
+                autoQueue
+                  ? `Rangregel: de ${autoQueue.topN} højest Claude-scorede rækker i scannen med score ≥ ${autoQueue.minScore}, som endnu ikke har en dom`
+                  : 'Auto-køen beregnes ved scan'
+              }
             >
               <Zap className="w-3.5 h-3.5 text-emerald-400" />
-              <span>⚡ Analyser Alle Uvurderede &apos;HIGH&apos; Signaler ({unjudgedHighCount})</span>
+              <span>
+                ⚡ Auto-kø: top {autoQueue?.topN ?? '–'} ≥ {autoQueue?.minScore ?? '–'} ({unjudgedHighCount})
+              </span>
             </button>
           </div>
         </div>
@@ -1297,13 +1311,15 @@ ${verdict.judgeThinking}
 
           <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded">
             <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-              <span>HØJ ASYMMETRI</span>
+              <span>AUTO-KØ (RANG)</span>
               <Zap className="w-3.5 h-3.5 text-emerald-400" />
             </div>
             <div className="mt-2 text-2xl font-mono font-bold text-emerald-400">
-              {loading ? '-' : highAsymmetryCount}
+              {loading ? '-' : unjudgedHighCount}
             </div>
-            <div className="text-[11px] text-slate-500 mt-1">Pre-Score &gt; 75/100</div>
+            <div className="text-[11px] text-slate-500 mt-1">
+              {autoQueue ? `Top ${autoQueue.topN} pr. scan, Claude-score ≥ ${autoQueue.minScore}, uden dom` : 'Beregnes ved scan'}
+            </div>
           </div>
 
           <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded">

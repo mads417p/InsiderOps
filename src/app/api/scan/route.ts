@@ -11,8 +11,9 @@ import { fetchNordicInsiderTransactions } from '@/lib/nordic-scanner';
 import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
 import { anthropicKeyConfigured, gatekeeperModelLabel, gatekeeperProvider } from '@/lib/claude-gatekeeper';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
-import { saveScan, getLatestScan } from '@/lib/db';
-import { recordSignals } from '@/lib/ledger';
+import { saveScan, getLatestScan, getSavedVerdicts } from '@/lib/db';
+import { autoQueueLabel, autoQueueRule, selectAutoQueue } from '@/lib/auto-queue';
+import { recordSignals, signalIdFor } from '@/lib/ledger';
 import { fetchLiveFxRates } from '@/lib/live-quote';
 import { parseJson, scanPostSchema } from '@/lib/api-schemas';
 import { GatekeeperResult, GatekeeperUsage, InsiderTransaction } from '@/types/insider';
@@ -55,6 +56,17 @@ function apiKeysConfigured() {
     gatekeeperProvider: gatekeeperProvider(),
     gatekeeperModel: gatekeeperModelLabel(),
   };
+}
+
+/** Rang-baseret auto-kø for de viste rækker (kun validerede domme tæller som "gemt dom"). */
+async function autoQueueFor(items: Array<{ transaction: InsiderTransaction; result: GatekeeperResult }>) {
+  const rule = autoQueueRule();
+  const judged = new Set(
+    Object.values(await getSavedVerdicts())
+      .filter((v) => v.verdict?.validated === true)
+      .map((v) => signalIdFor(v.transaction))
+  );
+  return { rule: autoQueueLabel(rule), topN: rule.topN, minScore: rule.minScore, ids: selectAutoQueue(items, judged, rule) };
 }
 
 type SourceTask = { name: string; run: () => Promise<InsiderTransaction[]> };
@@ -120,6 +132,7 @@ export async function GET(request: Request) {
         gatekeeperUsage: null,
         rejectedCount: saved?.rejected?.length ?? 0,
         rejected: saved?.rejected ?? [],
+        autoQueue: await autoQueueFor(saved?.items ?? []),
       });
     }
 
@@ -212,6 +225,7 @@ export async function GET(request: Request) {
       items,
       gatekeeperUsage,
       ledger,
+      autoQueue: await autoQueueFor(items),
       rejectedCount: rejected.length,
       rejected,
     });

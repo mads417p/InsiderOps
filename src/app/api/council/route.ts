@@ -8,6 +8,8 @@ import { fetchInsiderTrackRecord } from '@/lib/track-record';
 import { fetchCompanyFundamentals } from '@/lib/fundamentals';
 import { getDatabase, getSavedVerdicts, saveVerdict, deleteVerdict, findTransactionForCouncil } from '@/lib/db';
 import { InsiderTransaction } from '@/types/insider';
+import { recordEvaluation, signalIdFor } from '@/lib/ledger';
+import { claudeCostUsd } from '@/lib/claude-gatekeeper';
 
 export async function GET() {
   try {
@@ -186,8 +188,8 @@ export async function POST(request: Request) {
 
     const nowIso = new Date().toISOString();
     verdict.evaluatedAt = nowIso;
-    // ponytail: insiderkurs som fallback for priceAtEvaluation hører til fase 3 (signal-ledger) – uændret her.
-    verdict.priceAtEvaluation = tx.currentMarketPrice || tx.pricePerShare;
+    // Markedskurs ved dommen; mangler den, mangler den (insiderens købskurs er ikke en markedskurs).
+    verdict.priceAtEvaluation = tx.currentMarketPrice || undefined;
     if (typeof previousScore === 'number') {
       verdict.previousScore = previousScore;
     }
@@ -203,11 +205,27 @@ export async function POST(request: Request) {
       );
     }
 
+    // Signal-ledger: dommen logges som evaluation med den regel, der sendte signalet. Fejl stopper ikke svaret.
+    let ledger: 'logget' | 'signal-mangler' | 'fejl' = 'fejl';
+    try {
+      const u = verdict.usage;
+      const parts = u
+        ? [claudeCostUsd(verdict.modelsUsed?.specialists, u.specialists), claudeCostUsd(verdict.modelsUsed?.judge, u.judge)]
+        : [undefined];
+      const costUsd = parts.every((c) => c !== undefined) ? (parts as number[]).reduce((a, b) => a + b, 0) : undefined;
+      const logged = recordEvaluation({ tx, verdict, queueRule: parsed.data.queueRule ?? 'manuel', costUsd });
+      ledger = logged ? 'logget' : 'signal-mangler';
+      if (!logged) console.warn(`Signal-ledger: ${tx.ticker} (${signalIdFor(tx)}) findes ikke i ledgeren – dommen er ikke logget som evaluation.`);
+    } catch (ledgerErr) {
+      console.error('Signal-ledgeren kunne ikke logge dommen:', ledgerErr);
+    }
+
     return NextResponse.json({
       success: true,
       judgeTier,
       verdict,
       transaction: tx,
+      ledger,
     });
   } catch (error: unknown) {
     if (
