@@ -5,10 +5,43 @@ import { UNTRUSTED_DATA_INSTRUCTION, untrusted } from '@/lib/prompt-safety';
 
 const clampScore = (n: number) => Math.min(100, Math.max(0, Math.round(n)));
 
-// Batch-scoring: få tickers pr. kald og lav thinking, så svaret ikke afskæres.
-// Thinking-tokens tæller med i maxOutputTokens; med 12 tickers og 4096 tokens blev JSON'en klippet midt i en streng.
-export const GATEKEEPER_CHUNK_SIZE = 5;
+// Batch-scoring: lav thinking og højere output-loft, så svaret ikke afskæres.
+// Thinking-tokens tæller med i maxOutputTokens; med 12 tickers, standard-thinking og 4096 tokens blev JSON'en klippet.
+// ponytail: 10 pr. kald (ikke 5) – nøglen er på Free Tier (5 kald/min, 20 kald/dag); mindre chunks brugte kvoten op.
+// Sæt ned til 5, hvis en betalt nøgle tages i brug og afskæringer dukker op igen.
+export const GATEKEEPER_CHUNK_SIZE = 10;
 const GATEKEEPER_MAX_OUTPUT_TOKENS = 8192;
+
+/** retryDelay i sekunder fra et Gemini 429/RESOURCE_EXHAUSTED-svar; undefined, hvis fejlen ikke er en kvotefejl. */
+export function geminiRetryDelaySec(err: unknown): number | undefined {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (!/\b429\b|RESOURCE_EXHAUSTED/.test(msg)) return undefined;
+  const m = msg.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+  return m ? Number(m[1]) : 60;
+}
+
+/**
+ * Kort ventetid (minutgrænsen, ≤ 30 s) → vent og prøv igen (højst 2 gange).
+ * Lang ventetid (dagsgrænsen) → kald onExhausted og kast, så resten af scannen ikke bruger flere kald.
+ */
+export async function withGeminiQuotaRetry<T>(fn: () => Promise<T>, onExhausted: () => void): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const delay = geminiRetryDelaySec(err);
+      if (delay !== undefined && delay <= 30 && attempt < 3) {
+        await new Promise((r) => setTimeout(r, (delay + 1) * 1000));
+        continue;
+      }
+      if (delay !== undefined && delay > 30) {
+        onExhausted();
+        throw new Error(`Gemini-kvoten er opbrugt (Free Tier: 20 kald/dag) – nulstilles om ca. ${Math.round(delay / 3600)} t`);
+      }
+      throw err;
+    }
+  }
+}
 
 type BatchItem = { id: string; geminiPreScore: number; asymmetrySignal: GatekeeperResult['asymmetrySignal']; quickReasoning: string };
 
@@ -321,8 +354,14 @@ export async function evaluateBatchWithGatekeeper(
       chunks.push(candidatesToScore.slice(i, i + GATEKEEPER_CHUNK_SIZE));
     }
 
-    await Promise.allSettled(
-      chunks.map(async (chunk) => {
+    // Sekventielt (ikke parallelt): Free Tier tillader 5 kald/min og 20 kald/dag. Er dagskvoten brugt,
+    // springes resten over i stedet for at brænde flere kald af.
+    let quotaExhausted = false;
+    for (const chunk of chunks) {
+        if (quotaExhausted) {
+          console.error(`Gemini Gatekeeper sprunget over for ${chunk.map(({ tx }) => tx.ticker).join(', ')} – kvoten er opbrugt, heuristisk score bruges`);
+          continue;
+        }
         const batchPayload = chunk.map(({ tx }) => ({
           id: tx.id,
           ticker: tx.ticker,
@@ -341,7 +380,7 @@ export async function evaluateBatchWithGatekeeper(
         }));
 
         try {
-          const response = await ai.models.generateContent({
+          const response = await withGeminiQuotaRetry(() => ai.models.generateContent({
             model,
             contents: `Du er InsiderOps Gatekeeper. Evaluer hver af følgende ${batchPayload.length} godkendte insider-transaktioner:
 ${JSON.stringify(batchPayload, null, 2)}`,
@@ -374,6 +413,8 @@ ${UNTRUSTED_DATA_INSTRUCTION}`,
                 },
               },
             },
+          }), () => {
+            quotaExhausted = true;
           });
 
           const finishReason = response.candidates?.[0]?.finishReason;
@@ -400,11 +441,10 @@ ${UNTRUSTED_DATA_INSTRUCTION}`,
           // Fejl, ikke advarsel: rækkerne får scoreSource 'heuristik' og kan ikke starte auto-køen.
           console.error(
             `Gemini Gatekeeper fejlede for ${chunk.map(({ tx }) => tx.ticker).join(', ')} – heuristisk score bruges:`,
-            chunkErr instanceof Error ? chunkErr.message : chunkErr
+            chunkErr instanceof Error ? chunkErr.message.slice(0, 300) : chunkErr
           );
         }
-      })
-    );
+    }
 
     // Udfyld eventuelle manglende med heuristik som sikkerhedsnet
     for (const { tx } of candidatesToScore) {
