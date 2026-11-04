@@ -1,5 +1,5 @@
 import { InsiderTransaction } from '@/types/insider';
-import { currencyForTicker } from '@/lib/live-quote';
+import { convertCurrency, currencyForTicker, fetchLiveFxRates, type LiveFxRates } from '@/lib/live-quote';
 
 // Alt efter denne linje i contextNotes er genereret markedsdata og erstattes ved næste berigelse.
 export const MARKET_NOTES_MARKER = '[Markedsdata – opdateres ved hver berigelse]';
@@ -215,7 +215,8 @@ export function verifyDkTradability(
     avgDailyDollarVolume?: number;
     shortName?: string;
     longName?: string;
-  }
+  },
+  fx?: LiveFxRates | null
 ): {
   isTradableInDK?: boolean;
   tradabilityReason: string;
@@ -223,14 +224,18 @@ export function verifyDkTradability(
   avgDailyDollarVolume?: number;
 } {
   const nordic = /.(CO|ST|HE|OL)$/i.exec(tx.ticker.trim())?.[1]?.toUpperCase();
-  // Markedskurs – aldrig insiderens købskurs som stand-in.
-  const currentPrice = meta?.currentPrice || tx.currentMarketPrice || undefined;
-  // ponytail: volumen er i lokal valuta for nordiske aktier, men sammenlignes med 500.000 – valuta rettes i fase 2.
-  const avgDailyDollarVolume = meta?.avgDailyDollarVolume || tx.avgDailyDollarVolume || undefined;
+  const currency = (meta?.currency || (nordic ? NORDIC_CURRENCY[nordic] : 'USD')).toUpperCase();
+  // Kurs og omsætning omregnes til USD med live FX, før $2- og $500k-grænserne anvendes
+  // (et DKK-papir skulle før kun omsætte ca. $72k/dag). Markedskurs – aldrig insiderens købskurs som stand-in.
+  const toUsd = (v?: number) => (v === undefined || v <= 0 ? undefined : convertCurrency(v, currency, 'USD', fx));
+  const localPrice = meta?.currentPrice || tx.currentMarketPrice || undefined;
+  const currentPrice = toUsd(localPrice);
+  // tx.avgDailyDollarVolume er allerede i USD (fra en tidligere berigelse); meta-volumen er i lokal valuta.
+  const avgDailyDollarVolume = meta?.avgDailyDollarVolume ? toUsd(meta.avgDailyDollarVolume) : tx.avgDailyDollarVolume || undefined;
+  const fxMissing = convertCurrency(1, currency, 'USD', fx) === undefined;
   const exchangeRaw = (meta?.exchangeName || '').toUpperCase();
   const fullExchange = (meta?.fullExchangeName || '').toUpperCase();
   const instrument = meta?.instrumentType?.toUpperCase();
-  const currency = (meta?.currency || (nordic ? NORDIC_CURRENCY[nordic] : 'USD')).toUpperCase();
   const compName = (tx.companyName || '').toLowerCase();
 
   // 1. Børs: eksplicit allowlist
@@ -290,14 +295,12 @@ export function verifyDkTradability(
     };
   }
 
-  // 3. Minimumskurs & Likviditet (kun når tallene er kendt)
-  const minPrice = currency === 'DKK' ? 10.0 : 2.0;
-  if (currentPrice !== undefined && currentPrice < minPrice) {
-    const formattedPrice = currency === 'DKK' ? `${currentPrice} DKK` : `$${currentPrice}`;
-    const formattedMin = currency === 'DKK' ? '10 DKK' : '$2.00';
+  // 3. Minimumskurs & Likviditet i USD (kun når tallene og valutakursen er kendt)
+  if (currentPrice !== undefined && currentPrice < 2.0) {
+    const formattedPrice = currency === 'USD' ? `$${localPrice}` : `${localPrice} ${currency} ≈ $${currentPrice.toFixed(2)}`;
     return {
       isTradableInDK: false,
-      tradabilityReason: `AFVIST: Penny Stock (Kurs ${formattedPrice} er under minimumskravet på ${formattedMin})`,
+      tradabilityReason: `AFVIST: Penny Stock (Kurs ${formattedPrice} er under minimumskravet på $2.00)`,
       exchange,
       avgDailyDollarVolume,
     };
@@ -309,6 +312,15 @@ export function verifyDkTradability(
       tradabilityReason: `AFVIST: Illikvid aktie (Gns. daglig omsætning $${Math.round(
         avgDailyDollarVolume
       ).toLocaleString()} er under $500.000/dag)`,
+      exchange,
+      avgDailyDollarVolume,
+    };
+  }
+
+  if (fxMissing) {
+    return {
+      isTradableInDK: undefined,
+      tradabilityReason: `Ikke verificeret – valutakurs ${currency}/USD mangler`,
       exchange,
       avgDailyDollarVolume,
     };
@@ -441,13 +453,15 @@ export async function enrichTransactionWithMarketData(
   const timeoutId = setTimeout(() => controller.abort(), 3000);
 
   try {
-    const [pricesResult, newsResult] = await Promise.allSettled([
+    const [pricesResult, newsResult, fxResult] = await Promise.allSettled([
       fetchMarketPrices(tx.ticker, controller.signal),
       fetchNewsHeadlines(tx.ticker, controller.signal),
+      fetchLiveFxRates(), // cachet 60 s – kun nødvendig for ikke-USD-aktier
     ]);
 
     const prices = pricesResult.status === 'fulfilled' ? pricesResult.value : null;
     const news = newsResult.status === 'fulfilled' ? newsResult.value : [];
+    const fx = fxResult.status === 'fulfilled' ? fxResult.value : null;
 
     const notesParts: string[] = [];
 
@@ -461,7 +475,7 @@ export async function enrichTransactionWithMarketData(
       avgDailyDollarVolume: prices?.avgDailyDollarVolume,
       shortName: prices?.shortName,
       longName: prices?.longName,
-    });
+    }, fx);
 
     tx.exchange = tradability.exchange ?? tx.exchange;
     tx.isTradableInDK = tradability.isTradableInDK;

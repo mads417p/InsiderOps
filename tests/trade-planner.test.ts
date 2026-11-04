@@ -86,4 +86,27 @@ describe('verifyDkTradability', () => {
     expect(r.exchange).toBe('NYSE');
     expect(r.tradabilityReason).toMatch(/^Verificeret: NYSE/);
   });
+
+  const cph = { exchangeName: 'CPH', fullExchangeName: 'Copenhagen', instrumentType: 'EQUITY', currency: 'DKK' };
+  const dk = tx({ ticker: 'SMALL.CO', companyName: 'Small A/S' });
+
+  it('nordisk likviditet omregnes til USD: 1 mio. DKK/dag (ca. $150k) afvises', () => {
+    const r = verifyDkTradability(dk, { ...cph, currentPrice: 120, avgDailyDollarVolume: 1_000_000 }, fx);
+    expect(r.isTradableInDK).toBe(false);
+    expect(r.tradabilityReason).toMatch(/Illikvid/);
+    expect(r.avgDailyDollarVolume).toBeCloseTo(1_000_000 / 6.65, 0);
+  });
+
+  it('kursgrænsen $2 gælder også i DKK (12 DKK ≈ $1,80 afvises)', () => {
+    const r = verifyDkTradability(dk, { ...cph, currentPrice: 12, avgDailyDollarVolume: 50_000_000 }, fx);
+    expect(r.isTradableInDK).toBe(false);
+    expect(r.tradabilityReason).toMatch(/Penny Stock.*12 DKK/);
+  });
+
+  it('uden live FX er en DKK-aktie ikke verificeret (aldrig "Verificeret")', () => {
+    const r = verifyDkTradability(dk, { ...cph, currentPrice: 400, avgDailyDollarVolume: 50_000_000 }, null);
+    expect(r.isTradableInDK).toBeUndefined();
+    expect(r.tradabilityReason).toMatch(/valutakurs DKK\/USD mangler/);
+    expect(verifyDkTradability(dk, { ...cph, currentPrice: 400, avgDailyDollarVolume: 50_000_000 }, fx).isTradableInDK).toBe(true);
+  });
 });

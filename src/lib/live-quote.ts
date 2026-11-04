@@ -122,6 +122,7 @@ export function convertCurrency(
   to: string,
   rates: LiveFxRates | null | undefined
 ): number | undefined {
+  if ((from || '').toUpperCase().trim() === to.toUpperCase().trim()) return amount;
   const fromDkk = getFxRateToDkk(from, rates);
   const toDkk = getFxRateToDkk(to, rates);
   if (fromDkk === undefined || toDkk === undefined) return undefined;
