@@ -435,6 +435,16 @@ Mål: Fra i dag registreres hvert signal punkt-i-tid, så vi om 3–6 måneder k
      - datakilde og computedAt.
 
 3. Log ALLE signaler, der består hard-filteret – også dem med lav score, dem der aldrig sendes til rådet, og dem der aldrig handles. Ellers kan spandene ikke sammenlignes.
+   a. Signalidentitet:
+      - signal-id = SEC-accession-nummer + reporting owner CIK (nordisk: meddelelses-id + person).
+      - En cluster er en afledt visning af flere signaler, ikke et nyt signal.
+      - Gentagne scans må aldrig oprette nye rækker for samme signal.
+      - detectedAt = første gang, signalet blev set. Senere scans opdaterer kun et lastSeenAt-felt.
+   b. Siden må ikke starte en ny scan ved hver indlæsning (i dag kører en scan ved hver page load og ved hot-reload). Ved indlæsning vises den seneste gemte scan med tidsstempel. Ny scan kører kun ved knaptryk eller planlagt job (fase 6).
+   c. Auto-kø til rådet:
+      - Absolutte gatekeeper-scorer kan ikke sammenlignes på tværs af modeller; Haiku giver højst ca. 68, så grænsen 75 rammes aldrig.
+      - Erstat derfor grænsen med en rangregel: de N højest scorede rækker pr. scan (default N=3, kun scoreSource=claude, min-score 50, kun signaler uden gemt dom). Begge tal skal kunne konfigureres i env.
+      - Log i evaluations, hvilken regel der sendte signalet.
 
 4. Udfaldsjob: `npm run outcomes` plus en knap i UI, der beregner manglende udfald, når horisonten er nået. Manglende kurs giver ingen række, ikke 0. Beregnede udfald overskrives ikke.
 
@@ -453,7 +463,7 @@ Mål: Fra i dag registreres hvert signal punkt-i-tid, så vi om 3–6 måneder k
    - antal signaler, der mangler udfald,
    - tydelig besked, når N er for lille til konklusioner.
 
-7. Omkostninger i data/costs.json (ikke hårdkodet): kurtage pr. handel pr. marked, FX-spread i %, og et skøn for spread/slippage efter likviditet. Udfyld pladsholdere markeret TODO, som jeg selv retter til mine Nordnet-satser. Vis en advarsel i UI, så længe TODO står der.
+7. Omkostninger i config/costs.json (tracked i git, ingen hemmeligheder; den samme fil bruges af research/ i fase 4): kurtage pr. handel pr. marked, FX-spread i %, og et skøn for spread/slippage efter likviditet. Udfyld pladsholdere markeret TODO, som jeg selv retter til mine Nordnet-satser. Vis en advarsel i UI, så længe TODO står der.
 
 8. Tests: entry-dag (weekend og helligdage), valuta, manglende kurs. Kør tsc, test og build. Commit.
 ```
@@ -502,7 +512,7 @@ Mål: Find ud af på 20 års data og uden lookahead, hvilke egenskaber ved US-in
 6. Omkostninger: træk en realistisk round-trip fra:
    - kurtage og FX-spread for en dansk detailinvestor,
    - spread/slippage efter likviditet.
-   Brug research/costs.yaml. Indtil jeg har udfyldt mine tal, bruges konservative pladsholdere markeret TODO.
+   Brug config/costs.json (samme fil som appen; oprettes i fase 3). Findes den ikke endnu, så opret den med konservative pladsholdere markeret TODO.
 
 7. Analyse:
    a. Univariat: afkast pr. feature-spand med konfidensintervaller.
@@ -627,7 +637,7 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs afsnit 1: effekten ligger i 
 **🆕 Ny tråd i Claude Code, i mappen `C:\Users\Mads\Documents\InsiderOps` (efter fase 4).**
 
 ```text
-Følg "Fælles regler" i docs/roadmap-edge.md. Læs research/reports/backtest-v1.md og data/costs.json. Udfør kun fase 7. Start i plan mode. Gren: fase-7-risiko.
+Følg "Fælles regler" i docs/roadmap-edge.md. Læs research/reports/backtest-v1.md og config/costs.json. Udfør kun fase 7. Start i plan mode. Gren: fase-7-risiko.
 
 1. Exit-regler fra backtesten:
    a. Holdeperiode i handelsdage.
@@ -643,7 +653,7 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs research/reports/backtest-v1
 3. Indgang: næste åbning eller limit tæt på seneste kurs. Tranche 2 bruges kun, hvis backtesten viser en gevinst efter den ekstra kurtage; ellers én ordre.
 
 4. Netto-P&L:
-   - alle tal i DKK efter kurtage og FX-spread fra costs.json, med brutto og netto vist side om side,
+   - alle tal i DKK efter kurtage og FX-spread fra config/costs.json, med brutto og netto vist side om side,
    - en kort note om, at gevinst og tab på børsnoterede aktier i frie midler er aktieindkomst, og at tab kun kan modregnes i gevinst på børsnoterede aktier,
    - appen beregner ikke skat.
 
