@@ -163,11 +163,13 @@ export function extractTotalDebt(gaap: Record<string, XbrlConcept>): number | un
   const ltTotal = valueAt(gaap, LONG_TERM_TOTAL_TAG, latestEnd) ?? 0;
   const nonCurrent = valuesAt(gaap, LONG_TERM_NONCURRENT_TAGS, latestEnd)[0] ?? 0;
   const current = Math.max(0, ...valuesAt(gaap, CURRENT_DEBT_TAGS, latestEnd));
-  // ponytail: konvertible lån og NotesAndLoansPayable lægges oveni. Kan dobbelttælle, hvis et selskab også
-  // har dem med i LongTermDebt – fjern dem fra summen pr. selskab, hvis det viser sig i praksis.
+  // Konvertible lån og NotesAndLoansPayable er typisk allerede med i LongTermDebt. De er derfor en alternativ
+  // opgørelse (max), ikke et tillæg – ellers dobbelttælles de.
+  // ponytail: et selskab med bankgæld i LongTermDebt OG separate konvertible uden for den undervurderes;
+  // tjek dets 10-K, hvis det viser sig.
   const additional = valuesAt(gaap, ADDITIONAL_DEBT_TAGS, latestEnd).reduce((a, b) => a + b, 0);
 
-  return Math.max(ltTotal, nonCurrent + current) + additional;
+  return Math.max(ltTotal, nonCurrent + current, additional);
 }
 
 /**

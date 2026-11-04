@@ -30,6 +30,13 @@ describe('XBRL cash og gæld', () => {
     expect(extractTotalDebt(gaap)).toBe(10_111_758_000);
   });
 
+  it('konvertible lån og NotesAndLoansPayable dobbelttælles ikke med LongTermDebt', () => {
+    const end = '2026-08-31';
+    expect(extractTotalDebt({ LongTermDebt: concept(fact(end, 1000)), ConvertibleNotesPayable: concept(fact(end, 300)) })).toBe(1000);
+    expect(extractTotalDebt({ LongTermDebt: concept(fact(end, 1000)), NotesAndLoansPayable: concept(fact(end, 1000)) })).toBe(1000);
+    expect(extractTotalDebt({ ConvertibleNotesPayable: concept(fact(end, 300)) })).toBe(300);
+  });
+
   it('cash læses fra cash-tags på nyeste dato; restricted cash bruges som reserve', () => {
     const gaap = {
       CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents: concept(fact('2026-08-31', 400_000_000)),
