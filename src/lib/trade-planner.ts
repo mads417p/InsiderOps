@@ -1,17 +1,16 @@
 import { InsiderTransaction, CouncilVerdict, TradeExecutionPlan } from '@/types/insider';
-
-// ponytail: hardkodet FX – erstattes af live-kurser i fase 2 (audit 1.8).
-const USD_TO_DKK = 6.9;
-const SEK_TO_DKK = 0.65;
+import { currencyForTicker, getFxRateToDkk, type LiveFxRates } from '@/lib/live-quote';
 
 /**
  * Beregner en komplet kvantitativ eksekverings- og risikoplan baseret på 14-dages ATR volatilitet,
  * asymmetri-score, insiderens købskurs og brugerens allokeringsramme i DKK.
+ * Uden live valutakurs for aktiens valuta laves ingen plan (ingen hårdkodede kurser).
  */
 export function generateTradeExecutionPlan(
   tx: InsiderTransaction,
   verdict: CouncilVerdict,
-  maxCapitalDkk: number = 25000
+  maxCapitalDkk: number = 25000,
+  fx?: LiveFxRates | null
 ): TradeExecutionPlan {
   // 1. Kapitalbeskyttelse: Afvis transaktioner med lav score eller PR-stunt
   if (verdict.asymmetryScore < 60 || verdict.verdict === 'PR STUNT / STØJ (IGNORER)') {
@@ -29,10 +28,13 @@ export function generateTradeExecutionPlan(
     return doNotTrade(`Data mangler: ${missing.join(' og ')}. Ingen handelsplan uden målte tal.`);
   }
 
-  // 2. Valuta og kurser
-  const isDkk = tx.ticker.endsWith('.CO') || tx.exchange?.includes('Copenhagen');
-  const isSek = tx.ticker.endsWith('.ST') || tx.exchange?.includes('Stockholm');
-  const fxToDkk = isDkk ? 1.0 : isSek ? SEK_TO_DKK : USD_TO_DKK;
+  // 2. Valuta og live kurser
+  const currency = currencyForTicker(tx.ticker);
+  const fxToDkk = getFxRateToDkk(currency, fx);
+  const usdToDkk = getFxRateToDkk('USD', fx);
+  if (fxToDkk === undefined || usdToDkk === undefined) {
+    return doNotTrade(`Live valutakurs mangler (${currency}/DKK eller USD/DKK). Ingen handelsplan uden målt valutakurs.`);
+  }
 
   const currentPrice = tx.currentMarketPrice as number;
   const insiderPrice = tx.pricePerShare || currentPrice;
@@ -69,7 +71,7 @@ export function generateTradeExecutionPlan(
   }
 
   const recommendedAllocationDkk = Math.round(maxCapitalDkk * convictionMult * volMult);
-  const recommendedAllocationUsd = Math.round(recommendedAllocationDkk / fxToDkk);
+  const recommendedAllocationUsd = Math.round(recommendedAllocationDkk / usdToDkk);
 
   const priceInDkk = currentPrice * fxToDkk;
   const totalShares = Math.max(1, Math.floor(recommendedAllocationDkk / priceInDkk));
@@ -126,7 +128,7 @@ export function generateTradeExecutionPlan(
   const targetReturnPct1 = Number((((targetPrice1 - currentPrice) / currentPrice) * 100).toFixed(1));
   const riskRewardRatio = Number((targetReturnPct1 / Math.abs(stopLossRiskPct)).toFixed(1));
 
-  const currPrefix = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';
+  const currPrefix = currency === 'USD' ? '$' : `${currency} `;
 
   return {
     status: 'ACTIVE_PLAN',
@@ -146,14 +148,14 @@ export function generateTradeExecutionPlan(
       shares: tranche1Shares,
       price: currentPrice,
       allocationDkk: tranche1Dkk,
-      allocationUsd: Math.round(tranche1Dkk / fxToDkk),
+      allocationUsd: Math.round(tranche1Dkk / usdToDkk),
       description: `Tranche 1 (60%): ${tranche1Shares} aktier @ ${currPrefix}${currentPrice} (Markedsåbning / Limit)`,
     },
     tranche2: {
       shares: tranche2Shares,
       price: entryZoneMin,
       allocationDkk: tranche2Dkk,
-      allocationUsd: Math.round(tranche2Dkk / fxToDkk),
+      allocationUsd: Math.round(tranche2Dkk / usdToDkk),
       description: `Tranche 2 (40%): ${tranche2Shares} aktier @ ${currPrefix}${entryZoneMin} (Pullback ordrebog)`,
     },
     volatilityTag,

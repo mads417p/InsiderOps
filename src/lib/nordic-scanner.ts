@@ -4,10 +4,7 @@ import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { isExecutiveTitle, isValidInsiderName } from '@/lib/sec-scanner';
 import { resolveGeminiFlashModel } from '@/lib/gemini-gatekeeper';
 import { UNTRUSTED_DATA_INSTRUCTION, untrusted } from '@/lib/prompt-safety';
-
-const DKK_TO_USD_RATE = 0.145; // 1 DKK ≈ $0.145 USD
-const SEK_TO_USD_RATE = 0.095; // 1 SEK ≈ $0.095 USD
-const EUR_TO_USD_RATE = 1.08;  // 1 EUR ≈ $1.08 USD
+import { convertCurrency, fetchLiveFxRates, type LiveFxRates } from '@/lib/live-quote';
 
 /**
  * Intelligent mapping fra nordisk selskabsnavn til korrekt Yahoo Finance ticker (.CO / .ST).
@@ -140,7 +137,8 @@ async function parseNordicMarBatchWithGemini(
     headline: string;
     text: string;
     market: string;
-  }>
+  }>,
+  fx: LiveFxRates
 ): Promise<Map<string, ParsedNordicMarItem>> {
   const results = new Map<string, ParsedNordicMarItem>();
   if (announcements.length === 0) return results;
@@ -241,14 +239,9 @@ Regler for udtræk:
           if (!item.shares || item.shares <= 0) continue;
           if (!item.pricePerShare || item.pricePerShare <= 0) continue;
 
-          const rate =
-            item.currency === 'SEK'
-              ? SEK_TO_USD_RATE
-              : item.currency === 'EUR'
-              ? EUR_TO_USD_RATE
-              : DKK_TO_USD_RATE;
-          const totalUsd = (item.totalValueLocal || item.shares * item.pricePerShare) * rate;
-          if (totalUsd < 50000) continue;
+          // Uden live FX kan $50k-grænsen ikke vurderes → meddelelsen afvises.
+          const totalUsd = convertCurrency(item.totalValueLocal || item.shares * item.pricePerShare, item.currency, 'USD', fx);
+          if (totalUsd === undefined || totalUsd < 50000) continue;
 
           results.set(item.id, item);
         }
@@ -293,11 +286,10 @@ Regler for udtræk:
     if (isNaN(rawShares) || rawShares <= 0 || isNaN(rawPrice) || rawPrice <= 0) continue;
 
     const totalValueLocal = rawShares * rawPrice;
-    const rate = currency === 'SEK' ? SEK_TO_USD_RATE : currency === 'EUR' ? EUR_TO_USD_RATE : DKK_TO_USD_RATE;
-    const totalValueUsd = totalValueLocal * rate;
+    const totalValueUsd = convertCurrency(totalValueLocal, currency, 'USD', fx);
 
-    // Afvis køb under $50.000 USD ækvivalent
-    if (totalValueUsd < 50000) continue;
+    // Afvis køb under $50.000 USD ækvivalent (eller uden live FX)
+    if (totalValueUsd === undefined || totalValueUsd < 50000) continue;
 
     results.set(ann.id, {
       id: ann.id,
@@ -420,6 +412,8 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
       })
     );
 
+    const fx = await fetchLiveFxRates();
+
     // Kør Gemini 3 Flash i ét samlet batch-kald for alle meddelelser
     const parsedMap = await parseNordicMarBatchWithGemini(
       preparedItems.map((p) => ({
@@ -428,7 +422,8 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
         headline: p.headline,
         text: p.text,
         market: p.market,
-      }))
+      })),
+      fx
     );
 
     const parsedTransactions: InsiderTransaction[] = [];
@@ -442,16 +437,13 @@ export async function fetchNordicInsiderTransactions(): Promise<InsiderTransacti
       const ticker = mapNordicCompanyToTicker(item.company, item.market, parsed.currency);
       const isSwedish = ticker.endsWith('.ST') || parsed.currency === 'SEK';
 
-      // Valutaomregning til USD
-      const rate = isSwedish
-        ? SEK_TO_USD_RATE
-        : parsed.currency === 'EUR'
-        ? EUR_TO_USD_RATE
-        : DKK_TO_USD_RATE;
-
-      const totalValueUsd = Math.round(parsed.totalValueLocal * rate);
+      // Valutaomregning til USD med live FX – uden live kurs afvises rækken.
+      const totalUsdRaw = convertCurrency(parsed.totalValueLocal, parsed.currency, 'USD', fx);
+      const priceUsdRaw = convertCurrency(parsed.pricePerShare, parsed.currency, 'USD', fx);
+      if (totalUsdRaw === undefined || priceUsdRaw === undefined) continue;
+      const totalValueUsd = Math.round(totalUsdRaw);
       if (totalValueUsd < 50000) continue;
-      const pricePerShareUsd = Number((parsed.pricePerShare * rate).toFixed(2));
+      const pricePerShareUsd = Number(priceUsdRaw.toFixed(2));
       const sharesOwnedFollowing = parsed.sharesOwnedFollowing || parsed.shares * 3;
       const priorShares = sharesOwnedFollowing - parsed.shares;
       const holdingsIncreasePct =

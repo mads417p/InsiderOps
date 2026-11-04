@@ -76,28 +76,10 @@ async function readDb(): Promise<DatabaseSchema> {
     scanHistory[k] = { ...v, items: (v?.items || []).filter((it) => !isMockEntity(it.transaction?.id)) };
   }
 
+  // Positioner returneres, som de er gemt – ingen opfundne FX-, kurs- eller kildeværdier ved læsning.
   const paperPortfolio: Record<string, PaperTradePosition> = {};
   for (const [k, p] of Object.entries(parsed.paperPortfolio || {})) {
-    if (isMockEntity(k)) continue;
-    // ponytail: FX-fallback 6.70 og kurs-fallbacks her hører til fase 2 (valuta) – uændret i fase 1.
-    const entryFx =
-      typeof p.entryFxRateDkk === 'number' && p.entryFxRateDkk > 0
-        ? p.entryFxRateDkk
-        : p.ticker?.endsWith('.CO')
-          ? 1.0
-          : 6.7;
-    const shares = p.shares || 1;
-    const entryPrice = p.entryPrice || 1.0;
-    paperPortfolio[k] = {
-      ...p,
-      investedDkk: Math.round(shares * entryPrice * entryFx),
-      insiderBuyPrice: typeof p.insiderBuyPrice === 'number' ? p.insiderBuyPrice : p.entryPrice,
-      entryFxRateDkk: entryFx,
-      currentFxRateDkk: typeof p.currentFxRateDkk === 'number' ? p.currentFxRateDkk : entryFx,
-      lastQuoteTime: p.lastQuoteTime || new Date().toISOString(),
-      quoteSource: p.quoteSource || 'CNBC + Yahoo Real-Time Verified',
-      insiderPnlPct: typeof p.insiderPnlPct === 'number' ? p.insiderPnlPct : 0,
-    };
+    if (!isMockEntity(k)) paperPortfolio[k] = p;
   }
 
   return { verdicts, scanHistory, paperPortfolio };

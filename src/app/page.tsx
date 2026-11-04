@@ -43,6 +43,7 @@ import {
   PortfolioSummary,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
+import type { LiveFxRates } from '@/lib/live-quote';
 import { formatCompactUsd } from '@/lib/fundamentals';
 
 interface ScanItem {
@@ -147,6 +148,8 @@ export default function Dashboard() {
   // Paper-Trading Portfolio State
   const [paperPortfolio, setPaperPortfolio] = useState<Record<string, PaperTradePosition>>({});
   const [portfolioSummary, setPortfolioSummary] = useState<PortfolioSummary | null>(null);
+  // Live FX fra /api/portfolio – uden den laver trade-planneren ingen plan (ingen hårdkodede kurser).
+  const [fxRates, setFxRates] = useState<LiveFxRates | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState<boolean>(false);
   const [portfolioRefreshing, setPortfolioRefreshing] = useState<boolean>(false);
 
@@ -314,7 +317,7 @@ ${verdict.synthesis}
 
 ## 6. Kvantitativ Eksekverings- & Risikoplan (Frie Midler)
 ${(() => {
-  const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk);
+  const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk, fxRates);
   if (plan.status === 'DO_NOT_TRADE') {
     return `- **Status:** 🛡️ Kapitalbeskyttelse aktiveret (${plan.reason})`;
   }
@@ -460,6 +463,7 @@ ${verdict.judgeThinking}
           });
           setPaperPortfolio(map);
           if (data.summary) setPortfolioSummary(data.summary);
+          if (data.fxRates) setFxRates(data.fxRates);
         }
       })
       .catch((err) => console.warn('Kunne ikke hente paper-trading portefølje:', err));
@@ -691,6 +695,7 @@ ${verdict.judgeThinking}
         if (data.position) {
           setPaperPortfolio((prev) => ({ ...prev, [data.position.id]: data.position }));
           if (data.summary) setPortfolioSummary(data.summary);
+          if (data.fxRates) setFxRates(data.fxRates);
         }
       }
     } catch (e) {
@@ -713,6 +718,7 @@ ${verdict.judgeThinking}
           });
           setPaperPortfolio(map);
           if (data.summary) setPortfolioSummary(data.summary);
+          if (data.fxRates) setFxRates(data.fxRates);
         }
       }
     } catch (err) {
@@ -733,6 +739,7 @@ ${verdict.judgeThinking}
           return copy;
         });
         if (data.summary) setPortfolioSummary(data.summary);
+          if (data.fxRates) setFxRates(data.fxRates);
       }
     } catch (e) {
       console.error('Fejl ved lukning af paper-trade position:', e);
@@ -773,6 +780,7 @@ ${verdict.judgeThinking}
         });
         setPaperPortfolio(map);
         if (data.summary) setPortfolioSummary(data.summary);
+          if (data.fxRates) setFxRates(data.fxRates);
         setEditingPosId(null);
       }
     } catch (err) {
@@ -1484,7 +1492,7 @@ ${verdict.judgeThinking}
                 return (
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                     {activeList.map(({ transaction: tx, verdict, savedAt }) => {
-                      const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk);
+                      const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk, fxRates);
                       const isDkk = tx.ticker.endsWith('.CO') || tx.exchange?.includes('Copenhagen');
                       const isSek = tx.ticker.endsWith('.ST') || tx.exchange?.includes('Stockholm');
                       const currSym = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';
@@ -2877,7 +2885,7 @@ ${verdict.judgeThinking}
                             {pos.investedDkk.toLocaleString('da-DK')} DKK inv.
                           </div>
                           <div className="pt-1 border-t border-slate-800/60 text-[10px] text-slate-400">
-                            Værdi nu: <span className="text-cyan-300 font-bold">{Math.round(pos.shares * pos.currentPrice * (pos.currentFxRateDkk || 1)).toLocaleString('da-DK')} DKK</span>
+                            Værdi nu: <span className="text-cyan-300 font-bold">{pos.currentFxRateDkk > 0 ? `${Math.round(pos.shares * pos.currentPrice * pos.currentFxRateDkk).toLocaleString('da-DK')} DKK` : 'mangler valutakurs'}</span>
                           </div>
                         </div>
 
@@ -3079,11 +3087,11 @@ ${verdict.judgeThinking}
                           </span>
                           <span className="text-slate-600">•</span>
                           <span className="text-slate-400">
-                            Kilde: <span className="text-cyan-300 font-semibold">{pos.quoteSource || 'CNBC + Yahoo Real-Time Verified'}</span>
+                            Kilde: <span className="text-cyan-300 font-semibold">{pos.quoteSource || 'ukendt'}</span>
                           </span>
                           <span className="text-slate-600">•</span>
                           <span className="text-slate-400">
-                            Valuta: <span className="text-amber-300">1 {currencyCode} = {Number(pos.currentFxRateDkk || 6.70).toFixed(4)} DKK</span>
+                            Valuta: <span className="text-amber-300">{pos.currentFxRateDkk > 0 ? `1 ${currencyCode} = ${Number(pos.currentFxRateDkk).toFixed(4)} DKK` : 'mangler live valutakurs'}</span>
                           </span>
                         </div>
 
@@ -3776,7 +3784,7 @@ ${verdict.judgeThinking}
 
               {/* Quantitative Trade Execution, ATR Volatility & Position Sizing Plan */}
               {(() => {
-                const plan = generateTradeExecutionPlan(selectedTx, activeVerdict, maxCapitalDkk);
+                const plan = generateTradeExecutionPlan(selectedTx, activeVerdict, maxCapitalDkk, fxRates);
                 const isDkk = selectedTx.ticker.endsWith('.CO') || selectedTx.exchange?.includes('Copenhagen');
                 const isSek = selectedTx.ticker.endsWith('.ST') || selectedTx.exchange?.includes('Stockholm');
                 const currSym = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';

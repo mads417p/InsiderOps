@@ -15,47 +15,47 @@ export interface VerifiedLiveQuote {
   isRealTime: boolean;
 }
 
-export interface LiveFxRates {
-  USD_DKK: number;
-  SEK_DKK: number;
-  EUR_DKK: number;
-  NOK_DKK: number;
-  lastUpdated: string;
-  isLive: boolean;
+export interface FxQuote {
+  rate: number; // 1 enhed af valutaen = rate DKK
+  fetchedAt: string; // ISO tidsstempel for hvornår kursen blev hentet live
 }
 
-// Fallback kurser i tilfælde af midlertidig netværksfejl
-const FALLBACK_FX_RATES: LiveFxRates = {
-  USD_DKK: 6.6968,
-  SEK_DKK: 0.6813,
-  EUR_DKK: 7.4735,
-  NOK_DKK: 0.6400,
-  lastUpdated: new Date().toISOString(),
-  isLive: false,
-};
+/** Live valutakurser mod DKK. En manglende kurs er undefined – der findes ingen hårdkodede reservekurser. */
+export interface LiveFxRates {
+  USD_DKK?: FxQuote;
+  EUR_DKK?: FxQuote;
+  SEK_DKK?: FxQuote;
+  NOK_DKK?: FxQuote;
+  fxIsLive: boolean; // true = alle fire kurser er hentet live
+  lastUpdated: string;
+}
 
-let cachedFx: { rates: LiveFxRates; timestamp: number } | null = null;
-const FX_CACHE_TTL_MS = 60_000; // 1 minut intern cache i memory for at undgå at overbelaste Yahoo på batch-kald
+type FxKey = 'USD_DKK' | 'EUR_DKK' | 'SEK_DKK' | 'NOK_DKK';
+const FX_PAIRS: Array<{ key: FxKey; symbol: string }> = [
+  { key: 'USD_DKK', symbol: 'USDDKK=X' },
+  { key: 'EUR_DKK', symbol: 'EURDKK=X' },
+  { key: 'SEK_DKK', symbol: 'SEKDKK=X' },
+  { key: 'NOK_DKK', symbol: 'NOKDKK=X' },
+];
+
+// Kun vellykkede opslag caches (pr. par), så en fejl prøves igen ved næste kald.
+const fxCache = new Map<FxKey, { quote: FxQuote; timestamp: number }>();
+const FX_CACHE_TTL_MS = 60_000; // 1 minut, så batch-kald ikke overbelaster Yahoo
 
 /**
- * Henter ægte live valutakurser mod DKK via Yahoo Finance med no-store.
+ * Henter live valutakurser mod DKK via Yahoo Finance (no-store). Fejler et par, mangler det i svaret.
  */
 export async function fetchLiveFxRates(): Promise<LiveFxRates> {
   const now = Date.now();
-  if (cachedFx && now - cachedFx.timestamp < FX_CACHE_TTL_MS) {
-    return cachedFx.rates;
-  }
-
-  const rates: LiveFxRates = { ...FALLBACK_FX_RATES, lastUpdated: new Date().toISOString(), isLive: false };
-
-  const pairs = [
-    { key: 'USD_DKK' as const, symbol: 'USDDKK=X' },
-    { key: 'SEK_DKK' as const, symbol: 'SEKDKK=X' },
-    { key: 'EUR_DKK' as const, symbol: 'EURDKK=X' },
-  ];
+  const rates: LiveFxRates = { fxIsLive: false, lastUpdated: new Date().toISOString() };
 
   await Promise.all(
-    pairs.map(async ({ key, symbol }) => {
+    FX_PAIRS.map(async ({ key, symbol }) => {
+      const cached = fxCache.get(key);
+      if (cached && now - cached.timestamp < FX_CACHE_TTL_MS) {
+        rates[key] = cached.quote;
+        return;
+      }
       try {
         const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
           symbol
@@ -77,9 +77,12 @@ export async function fetchLiveFxRates(): Promise<LiveFxRates> {
           const json = await res.json();
           const meta = json?.chart?.result?.[0]?.meta;
           if (typeof meta?.regularMarketPrice === 'number' && meta.regularMarketPrice > 0) {
-            rates[key] = meta.regularMarketPrice;
-            rates.isLive = true;
+            const quote = { rate: meta.regularMarketPrice, fetchedAt: new Date().toISOString() };
+            rates[key] = quote;
+            fxCache.set(key, { quote, timestamp: now });
           }
+        } else {
+          console.warn(`Live FX ${symbol} svarede ${res.status}`);
         }
       } catch (e) {
         console.warn(`Kunne ikke hente live FX kurs for ${symbol}:`, e);
@@ -87,22 +90,42 @@ export async function fetchLiveFxRates(): Promise<LiveFxRates> {
     })
   );
 
-  cachedFx = { rates, timestamp: now };
+  rates.fxIsLive = FX_PAIRS.every(({ key }) => rates[key] !== undefined);
   return rates;
 }
 
+/** Handelsvaluta ud fra Yahoo-tickerens suffiks: .CO DKK, .ST SEK, .HE EUR, .OL NOK, ellers USD. */
+export function currencyForTicker(ticker: string): 'DKK' | 'SEK' | 'EUR' | 'NOK' | 'USD' {
+  const suffix = /\.(CO|ST|HE|OL)$/i.exec(ticker.trim())?.[1]?.toUpperCase();
+  return suffix === 'CO' ? 'DKK' : suffix === 'ST' ? 'SEK' : suffix === 'HE' ? 'EUR' : suffix === 'OL' ? 'NOK' : 'USD';
+}
+
 /**
- * Returnerer den relevante valutakurs til omregning af et aktiv i given valuta til DKK.
+ * Kurs til omregning af 1 enhed `currency` til DKK. undefined, når valutaen er ukendt, eller kursen ikke
+ * er hentet live – så må der ikke regnes i DKK.
  */
-export function getFxRateToDkk(currency: string | undefined, rates: LiveFxRates): number {
-  if (!currency) return rates.USD_DKK;
-  const upper = currency.toUpperCase().trim();
+export function getFxRateToDkk(currency: string | undefined, rates: LiveFxRates | null | undefined): number | undefined {
+  const upper = (currency || '').toUpperCase().trim();
   if (upper === 'DKK') return 1.0;
-  if (upper === 'USD' || upper === '$' || upper === 'US$') return rates.USD_DKK;
-  if (upper === 'SEK') return rates.SEK_DKK;
-  if (upper === 'EUR' || upper === '€') return rates.EUR_DKK;
-  if (upper === 'NOK') return rates.NOK_DKK;
-  return rates.USD_DKK;
+  if (!rates) return undefined;
+  if (upper === 'USD' || upper === '$' || upper === 'US$') return rates.USD_DKK?.rate;
+  if (upper === 'SEK') return rates.SEK_DKK?.rate;
+  if (upper === 'EUR' || upper === '€') return rates.EUR_DKK?.rate;
+  if (upper === 'NOK') return rates.NOK_DKK?.rate;
+  return undefined;
+}
+
+/** Omregner et beløb mellem to valutaer via DKK med live kurser. undefined, hvis en kurs mangler. */
+export function convertCurrency(
+  amount: number,
+  from: string | undefined,
+  to: string,
+  rates: LiveFxRates | null | undefined
+): number | undefined {
+  const fromDkk = getFxRateToDkk(from, rates);
+  const toDkk = getFxRateToDkk(to, rates);
+  if (fromDkk === undefined || toDkk === undefined) return undefined;
+  return (amount * fromDkk) / toDkk;
 }
 
 /**
@@ -226,7 +249,7 @@ export async function fetchVerifiedLiveQuote(ticker: string): Promise<VerifiedLi
           changePct: Number(changePct.toFixed(2)),
           timeIso,
           exchange: meta.exchangeName || meta.fullExchangeName || '',
-          currency: meta.currency || (isNordic ? 'DKK' : 'USD'),
+          currency: meta.currency || currencyForTicker(cleanTicker),
         };
       }
     }
@@ -292,7 +315,7 @@ export async function fetchVerifiedLiveQuote(ticker: string): Promise<VerifiedLi
     price: 0,
     previousClose: 0,
     changePct: 0,
-    currency: isNordic ? 'DKK' : 'USD',
+    currency: currencyForTicker(cleanTicker),
     lastQuoteTime: new Date().toISOString(),
     quoteSource: 'Fallback / Ikke Tilgængelig',
     isRealTime: false,

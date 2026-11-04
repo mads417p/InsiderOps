@@ -184,8 +184,11 @@ export async function GET(request: Request) {
               pos.insiderExitWarning = exitWarning;
             }
 
-            if (liveQuote && liveQuote.price > 0) {
-              const currentFx = getFxRateToDkk(liveQuote.currency, fxRates);
+            const currentFx = getFxRateToDkk(liveQuote?.currency, fxRates);
+            if (currentFx === undefined) {
+              console.warn(`Live valutakurs mangler for ${pos.ticker} (${liveQuote?.currency}) – positionen opdateres ikke`);
+            }
+            if (liveQuote && liveQuote.price > 0 && currentFx !== undefined) {
 
               pos.currentPrice = liveQuote.price;
               pos.currentFxRateDkk = currentFx;
@@ -335,6 +338,12 @@ export async function POST(request: Request) {
     ]);
 
     const currentFxRateDkk = getFxRateToDkk(liveQuote.currency, fxRates);
+    if (currentFxRateDkk === undefined) {
+      return NextResponse.json(
+        { success: false, error: `Live valutakurs ${liveQuote.currency}/DKK mangler – positionen er ikke oprettet` },
+        { status: 502 }
+      );
+    }
     const currentSpyPrice = spyQuote && spyQuote.price > 0 ? spyQuote.price : 755.0;
 
     // Hvis live quote returnerer gyldig kurs, lås til den!
@@ -465,9 +474,10 @@ export async function PATCH(request: Request) {
         pos.targetPrice = Number(body.targetPrice);
       }
 
-      // 2. Genberegn investering og P&L baseret på de nye tal
-      const entryFx = pos.entryFxRateDkk || 6.70;
-      const currentFx = pos.currentFxRateDkk || entryFx;
+      // 2. Genberegn investering og P&L baseret på de nye tal (kun med gemte, målte valutakurser)
+      const entryFx = pos.entryFxRateDkk;
+      const currentFx = pos.currentFxRateDkk;
+      if (!(entryFx > 0) || !(currentFx > 0)) return pos;
 
       pos.investedDkk = Math.round(pos.shares * pos.entryPrice * entryFx);
       pos.pnlPct = Number((((pos.currentPrice - pos.entryPrice) / pos.entryPrice) * 100).toFixed(2));
