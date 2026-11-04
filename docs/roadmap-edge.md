@@ -70,7 +70,8 @@ Kilder ──► Normalisering ──► Hårde filtre ──► Features ──
 | 0b | Backup og inspektion af dine rigtige data, merge til main | Ny tråd, 🖥️ lokalt | 0 | – |
 | 1 | Fail loud (audit 1.1–1.5) | Ny tråd | 0b | 8 |
 | 2 | Korrekte signaler, valuta, portefølje, sikkerhed (audit 1.6–1.9 + P2) | Ny tråd | 1 merget | 8 |
-| 3 | Signal-ledger og skyggeportefølje (start uret) | Ny tråd, 🖥️ lokalt | 2 merget | 4 |
+| 2.5 | Gatekeeper på Claude Haiku, aktuelle domme på positioner, oprydning | Ny tråd, 🖥️ lokalt | 2 merget | – |
+| 3 | Signal-ledger og skyggeportefølje (start uret) | Ny tråd, 🖥️ lokalt | 2.5 merget | 4 |
 | 4 | Historisk backtest i `research/` (Python) | Ny tråd, 🖥️ lokalt (eget worktree) | 0 | 3 |
 | 5 | quantScore + Claude som udtræk, kontekst og red team | Ny tråd | 3 og 4 | – |
 | 6 | Realtid og alarmer | Ny tråd, 🖥️ lokalt | 3 (helst 5) | 7 |
@@ -366,6 +367,47 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs docs/audit-2026-11-04.md afs
 
 ---
 
+### Prompt 2.5 – Gatekeeper på Claude, aktuelle domme og oprydning
+
+**🆕 Ny tråd i Claude Code LOKALT på din pc, i mappen `C:\Users\Mads\Documents\InsiderOps` (efter fase 2 er merget).** Fasen skal køre før fase 3, så ledgeren ikke starter med halvdelen af scorerne fra heuristik.
+
+```text
+Følg "Fælles regler" i docs/roadmap-edge.md. Udfør kun fase 2.5. Start i plan mode. Gren: fase-2-5-gatekeeper.
+
+Baggrund: Gemini-nøglen er på Free Tier (5 kald/min, 20/dag), så en rigtig scan gav heuristiske scorer på 15 af 31 rækker. Jeg har rigelig Claude-kapacitet.
+
+1. Gatekeeper på Claude:
+   a. Flyt forsorteringen til claude-haiku-5-5 med structured outputs. Skemaet indeholder for hver ticker:
+      - score (heltal),
+      - asymmetrySignal (enum),
+      - begrundelse på dansk,
+      - liste over brugte felter.
+   b. Clamp og validér i kode.
+   c. Brug prompt caching på system-prompt og skema, 10 tickers pr. kald, og parallelle kald med et loft (fx 4 ad gangen).
+   d. Behold Gemini bag GATEKEEPER_PROVIDER=gemini (default claude). scoreSource bliver 'claude' | 'gemini' | 'heuristik'.
+   e. Log tokens og pris pr. scan.
+   f. Ved fejl: heuristik med tydeligt mærke, som i dag. Heuristik starter aldrig auto-køen.
+
+2. Aktuelle domme på positioner:
+   a. Positionskortet viser den nyeste validerede dom for positionens ticker, med dato, og "dom ændret: 85 → 56", når den afviger fra scoren ved åbning.
+   b. Gem asymmetryScore ved åbning som openedScore. Overskriv den aldrig.
+
+3. Afvist støj: knappen "Vis afvist støj" og tallet "HARD FILTER AFVIST" bruger scan-svarets rejected-liste med årsag pr. række. Tæl alle afviste, ikke kun dem, Gemini/Claude afviste.
+
+4. UI-fejl: page.tsx viser "🛡️ Ingen udvandingsfare", når runway er ukendt, fordi koden bruger `?? 99`. Ukendt runway skal vises som "Runway ukendt" i grå farve. Søg efter andre `??`-standardværdier, der bliver til en positiv tekst.
+
+5. Fonde og udbud i clusters:
+   a. Vis for hver køber i en cluster, om ejerskabet er direkte (D) eller indirekte (I, via fond/entity), og vis "personlige købere: X, via fonde: Y".
+   b. Markér køb, der ligger på samme dato og præcis samme kurs som et registreret udbud eller en IPO (opdag det fra fodnoter eller fra kurs = udbudskurs, hvis det kan findes), som "mulig deltagelse i udbud".
+   c. 🖥️ Tjek konkret RAPP: dato, kurs, D/I og fodnoter for James Healys køb (fasens gen-vurdering nævnte $20,4 mio.). Healy købte tidligere indirekte via Sofinnova/Crestline-enheder på IPO-dagen 10.6.2024 til IPO-kursen $17,00. Rapportér, om det nye køb er et personligt markedskøb, et fondskøb eller deltagelse i et udbud. Vis også, om track recorden tæller IPO-dagens køb med som et markedskøb, og ret det i så fald.
+
+6. Tests: gatekeeper-validering (skema, clamp, fejl → heuristik-mærke), openedScore bevares, rejected-tælling, runway-label.
+
+7. 🖥️ Kør en rigtig scan med Claude som gatekeeper, og rapportér fordelingen af scoreSource, prisen og eventuelle afskårne svar. Kør tsc, test og build. Commit pr. punkt.
+```
+
+---
+
 ### Prompt 3 – Signal-ledger og skyggeportefølje
 
 **🆕 Ny tråd i Claude Code LOKALT på din pc, i mappen `C:\Users\Mads\Documents\InsiderOps` (efter fase 2 er merget). Fasen migrerer din DB, så den skal køre lokalt.**
@@ -500,7 +542,7 @@ Mål: Den primære score er kvantitativ og backtestet. Claude bruges, hvor sprog
 
 2. Udtræk med Claude Haiku 5.5 eller Sonnet 5.5, structured outputs og prompt caching på system-prompt og skema:
    a. Form 4-fodnoter: klassificér hver købslinje (markedskøb, udbud/private placement, DRIP, gave, overførsel, 10b5-1) med citat fra fodnoten som evidens.
-   b. Nordiske meddelelser: erstat Gemini-parseren med Claude. Felterne er nullable, og hvert tal har den præcise tekststump, det kommer fra. Validér i kode, at stumpen findes i kilden. Transaktionstyperne er som i fase 2.
+   b. Nordiske meddelelser: erstat Gemini-parseren med Claude. Felterne er nullable, og hvert tal har den præcise tekststump, det kommer fra. Validér i kode, at stumpen findes i kilden. Transaktionstyperne er som i fase 2. Danske meddelelser har tallene i et PDF-bilag. Send PDF'en direkte til Claude som document-blok (PDF-input), og validér tallene mod den tekst, der kan udtrækkes fra PDF'en.
 
 3. Kontekst med Claude Sonnet 5.5 og web search tool (max_uses 5, citations). Undersøg selskabets seneste 90 dage:
    - kapitalrejsning, ATM-program eller shelf-registrering,
@@ -519,7 +561,7 @@ Mål: Den primære score er kvantitativ og backtestet. Claude bruges, hvor sprog
    c. Self-consistency: kør dommeren 3 gange parallelt. Brug median-justeringen og veto ved flertal, og gem spredningen.
    d. A/B fremad: tildel hvert signal tilfældigt (50/50) claude-opus-5-5 eller claude-fable-5-1 som dommer, og log valget i evaluations.
 
-5. Gatekeeper: vurdér, om Claude Haiku 5.5 bør erstatte Gemini som forsortering (én leverandør, structured outputs). Foreslå, og implementér kun efter mit OK.
+5. Gatekeeper: flyttet til Claude Haiku 5.5 i fase 2.5. Vurdér her kun, om ledgeren viser forskel på Claude- og heuristik-scorer.
 
 6. 🖥️ Historisk udtræk med Message Batches API (50 % rabat): kør fodnote-klassifikationen på alle P-køb i backtest-datasættet. Kun faktaudtræk, ingen domme. Estimér prisen, og vis mig den før kørsel. Test derefter i research/, om fodnote-typen forbedrer modellen.
 
