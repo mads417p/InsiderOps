@@ -106,6 +106,13 @@ describe('ledger: append-only', () => {
     expect(JSON.parse(rows[1].featuresJson).rollUp.leadSignalId).toBe('acc:000122520826008642:2041310');
   });
 
+  it('scoredAt er tidspunktet, scoren forelå (efter gatekeeper-kaldet)', () => {
+    const a = tx();
+    recordSignals({ passed: [a], items: [{ transaction: a, result: result(66) }], scanSource: 'unified', detectedAt: '2026-11-04T21:00:00.000Z', scoredAt: '2026-11-04T21:00:30.000Z', fx });
+    expect(listSignals()[0].scoredAt).toBe('2026-11-04T21:00:30.000Z');
+    expect(listSignals()[0].detectedAt).toBe('2026-11-04T21:00:00.000Z');
+  });
+
   it('heuristisk score låser ikke; en senere Claude-score udfylder feltet', () => {
     const a = tx();
     scan([a], [{ transaction: a, result: result(80, 'heuristik') }], '2026-11-04T21:00:00.000Z');

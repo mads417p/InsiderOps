@@ -246,6 +246,7 @@ export interface RecordSignalsInput {
   items: ScanItem[]; // roll-up-rækkerne med gatekeeper-resultat (én pr. ticker)
   scanSource: string; // unified | csuite | live | nordic | ticker:XYZ
   detectedAt: string; // scan-tidspunkt (UTC ISO)
+  scoredAt?: string; // hvornår gatekeeper-scoren forelå (efter LLM-kaldet); default detectedAt
   gatekeeperModel?: string;
   fx: LiveFxRates | null;
 }
@@ -351,7 +352,7 @@ export function recordSignals(input: RecordSignalsInput): { inserted: number; se
           scoreSource: r.scoreSource,
           signal: r.asymmetrySignal,
           model: v(input.gatekeeperModel),
-          at: input.detectedAt,
+          at: input.scoredAt ?? input.detectedAt,
         });
         if (Number(s.changes) > 0) counts.scored++;
       }

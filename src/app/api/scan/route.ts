@@ -202,6 +202,7 @@ export async function GET(request: Request) {
           items,
           scanSource: sourceKey,
           detectedAt: scannedAt,
+          scoredAt: new Date().toISOString(), // efter gatekeeper-kaldet: ankeret må ikke ligge før scoren
           gatekeeperModel: gatekeeperUsage?.model,
           fx,
         });
