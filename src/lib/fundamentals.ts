@@ -403,7 +403,7 @@ async function fetchFinvizMetrics(ticker: string): Promise<{
         peRatio = null;
       } else {
         const parsed = parseFloat(kvMap['P/E']);
-        peRatio = isNaN(parsed) ? null : parsed;
+        peRatio = isNaN(parsed) ? undefined : parsed; // ulæselig værdi = ukendt, ikke "negativ"
       }
     }
 
@@ -557,7 +557,11 @@ export async function fetchCompanyFundamentals(
   const cashStr = formatCompactUsd(cashAndEquivalentsUsd);
   const debtStr = formatCompactUsd(totalDebtUsd);
   const shortStr = shortPercentOfFloat !== undefined ? `${shortPercentOfFloat.toFixed(1)}%` : undefined;
-  const runwayStr = isCashFlowPositive ? 'Cash-Flow Positiv' : `Runway: ~${estimatedRunwayMonths} mdr.`;
+  const runwayStr = isCashFlowPositive
+    ? 'Cash-Flow Positiv'
+    : estimatedRunwayMonths === undefined || estimatedRunwayMonths === null
+    ? 'Runway ukendt'
+    : `Runway: ~${estimatedRunwayMonths} mdr.`;
 
   switch (fundamentalHealthBadge) {
     case 'DILUTION_RISK':

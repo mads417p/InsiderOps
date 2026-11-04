@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildScanRows } from '@/lib/sec-scanner';
-import { collectRejected } from '@/lib/ui-labels';
+import { collectRejected, runwayLabel } from '@/lib/ui-labels';
 import type { InsiderTransaction } from '@/types/insider';
 
 const tx = (over: Partial<InsiderTransaction> = {}): InsiderTransaction => ({
@@ -42,5 +42,15 @@ describe('afvist støj (fase 2.5, 3)', () => {
     const all = collectRejected(scanRejected, items);
     expect(all.map((r) => r.id)).toEqual(['a', 'b', 'c']);
     expect(all[2].reason).toBe('OTC');
+  });
+});
+
+describe('runway-label (fase 2.5, 4)', () => {
+  it('ukendt runway er "Runway ukendt" i grå – aldrig "Ingen udvandingsfare"', () => {
+    expect(runwayLabel({ estimatedRunwayMonths: undefined, isCashFlowPositive: undefined })).toEqual({ text: 'Runway ukendt', tone: 'unknown' });
+    expect(runwayLabel({ estimatedRunwayMonths: null, isCashFlowPositive: undefined }).tone).toBe('good');
+    expect(runwayLabel({ estimatedRunwayMonths: 5, isCashFlowPositive: false })).toEqual({ text: '⚠️ Akut emissionsrisiko', tone: 'bad' });
+    expect(runwayLabel({ estimatedRunwayMonths: 24, isCashFlowPositive: false })).toEqual({ text: '🛡️ Ingen udvandingsfare', tone: 'good' });
+    expect(runwayLabel({ estimatedRunwayMonths: undefined, isCashFlowPositive: true }).tone).toBe('good');
   });
 });

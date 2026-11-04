@@ -46,7 +46,7 @@ import {
   TradeType,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
-import { collectRejected, isModelScore } from '@/lib/ui-labels';
+import { collectRejected, isModelScore, runwayLabel, TONE_CLASS } from '@/lib/ui-labels';
 import { RejectedNoisePanel } from '@/components/RejectedNoisePanel';
 import { latestValidatedVerdict } from '@/lib/verdicts';
 import { PositionVerdict } from '@/components/PositionVerdict';
@@ -94,7 +94,7 @@ const priceLabel = (tx: InsiderTransaction) => curLabel((tx.currency || 'USD').t
 const marketPriceLabel = (ticker: string) => curLabel(currencyForTicker(ticker));
 
 function formatQuoteTime(isoOrStr?: string): string {
-  if (!isoOrStr) return 'Lige nu';
+  if (!isoOrStr) return 'ukendt';
   try {
     const d = new Date(isoOrStr);
     if (!isNaN(d.getTime())) {
@@ -250,7 +250,7 @@ export default function Dashboard() {
 - **Ejerskabets natur:** ${tx.ownershipNature === 'D' ? 'Direkte (D - Egne personlige aktier)' : 'Indirekte (I - Fond / Trust / Holdingselskab)'}
 - **Rule 10b5-1 Handelsplan:** ${tx.is10b51Plan === undefined ? '❔ Ukendt (Form 4 ikke tjekket)' : tx.is10b51Plan ? '⚠️ JA (Automatisk forudbestemt plan - 0% aktuel asymmetri)' : '✅ NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
 ${tx.footnotesSummary ? `- **SEC Fodnoter (Det med småt):**\n${tx.footnotesSummary}\n` : ''}- **Børs & Handelbarhed (DK / Nordnet / Saxo):** ${tx.isTradableInDK === true ? '✅ Verificeret handelbar' : tx.isTradableInDK === false ? '🚫 Ikke godkendt' : '❔ Ikke verificeret – mangler data'} (${tx.exchange || 'N/A'}${tx.avgDailyDollarVolume ? `, Gns. omsætning: $${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')}/dag` : ''})
-- **Handelbarheds-status:** ${tx.tradabilityReason || (tx.isTradableInDK !== false ? 'Handelbar på standard DK mæglere' : 'Ikke verificeret')}
+- **Handelbarheds-status:** ${tx.tradabilityReason || (tx.isTradableInDK === true ? 'Handelbar på standard DK mæglere' : tx.isTradableInDK === false ? 'Ikke handelbar' : 'Handelbarhed ikke verificeret')}
 - **Transaktionstype:** Kode ${tx.transactionCode} (Åbent markedskøb)
 - **Handelsbeløb:** ${tx.totalValueLocal !== undefined ? `${Math.round(tx.totalValueLocal).toLocaleString()} ${tx.currency} (ca. $${Math.round(tx.totalValueUsd).toLocaleString()} USD)` : `$${Math.round(tx.totalValueUsd).toLocaleString()} USD`} (${tx.shares.toLocaleString()} aktier á ${priceLabel(tx)}${tx.pricePerShare})
 - **Beholdning efter køb:** ${tx.sharesOwnedFollowing !== undefined ? `${tx.sharesOwnedFollowing.toLocaleString()} aktier` : 'ikke oplyst'} (${tx.holdingsIncreasePct !== undefined ? `+${tx.holdingsIncreasePct}%` : 'ukendt'} stigning)
@@ -1079,6 +1079,13 @@ ${verdict.judgeThinking}
     );
   };
 
+  // Rabat-zonen kræver kendt afkast og verificeret handelbarhed – ukendt tælles ikke som rabat.
+  const isBelowInsiderZone = (i: ScanItem) =>
+    i.result.passedHardFilter &&
+    i.transaction.isTradableInDK === true &&
+    i.transaction.returnSinceBuyPct !== undefined &&
+    i.transaction.returnSinceBuyPct <= 0.5;
+
   // Afviste rækker vises i panelet "Vis afvist støj", ikke i tabellen.
   const baseFiltered = items.filter((i) => i.result.passedHardFilter);
 
@@ -1096,13 +1103,7 @@ ${verdict.judgeThinking}
         i.transaction.isClusterBuy || i.transaction.isTradingBelowInsiderPrice
       );
     }
-    if (quickFilter === 'below_insider') {
-      return (
-        i.result.passedHardFilter &&
-        i.transaction.isTradableInDK !== false &&
-        (i.transaction.returnSinceBuyPct ?? 0) <= 0.5
-      );
-    }
+    if (quickFilter === 'below_insider') return isBelowInsiderZone(i);
     if (quickFilter === 'csuite_cluster') {
       return (
         i.result.passedHardFilter &&
@@ -1117,12 +1118,7 @@ ${verdict.judgeThinking}
   const clusterDiscountCount = baseFiltered.filter((i) =>
     Boolean(i.transaction.isClusterBuy || i.transaction.isTradingBelowInsiderPrice)
   ).length;
-  const belowInsiderCount = baseFiltered.filter(
-    (i) =>
-      i.result.passedHardFilter &&
-      i.transaction.isTradableInDK !== false &&
-      (i.transaction.returnSinceBuyPct ?? 0) <= 0.5
-  ).length;
+  const belowInsiderCount = baseFiltered.filter(isBelowInsiderZone).length;
   const csuiteClusterCount = baseFiltered.filter(
     (i) =>
       i.result.passedHardFilter &&
@@ -2088,14 +2084,14 @@ ${verdict.judgeThinking}
                                 >
                                   🏢 10% Fond / Indirect
                                 </span>
-                              ) : (
+                              ) : tx.ownershipNature === 'D' ? (
                                 <span
                                   className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 border border-slate-800 text-slate-400"
                                   title="Direkte personligt ejerskab"
                                 >
                                   Direct
                                 </span>
-                              )}
+                              ) : null}
                               {tx.isClusterBuy && (
                                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950/60 border border-amber-800 text-amber-300 flex items-center gap-0.5">
                                   <Users className="w-2.5 h-2.5" />
@@ -2957,13 +2953,13 @@ ${verdict.judgeThinking}
                           </div>
                           <div className="pt-1 border-t border-slate-800/60 flex items-center justify-between">
                             <span className="text-[10px] text-slate-400">Insider P&L:</span>
-                            <span
-                              className={`text-[11px] font-bold ${
-                                (pos.insiderPnlPct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                              }`}
-                            >
-                              {(pos.insiderPnlPct || 0) >= 0 ? '+' : ''}{pos.insiderPnlPct || 0}%
-                            </span>
+                            {Number.isFinite(pos.insiderPnlPct) ? (
+                              <span className={`text-[11px] font-bold ${pos.insiderPnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {pos.insiderPnlPct >= 0 ? '+' : ''}{pos.insiderPnlPct}%
+                              </span>
+                            ) : (
+                              <span className={`text-[11px] ${TONE_CLASS.unknown}`}>N/A</span>
+                            )}
                           </div>
                           {isBelowInsider && (
                             <div className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/40 border border-emerald-900/50 rounded px-1.5 py-0.5 text-center">
@@ -3200,9 +3196,9 @@ ${verdict.judgeThinking}
                       {/* Verifikations-linje i bunden af kortet med live kurs, tidsstempel, kilde, FX & eksterne links */}
                       <div className="pt-2.5 border-t border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-2.5 text-[11px] font-mono">
                         <div className="flex items-center gap-2 text-slate-300 flex-wrap">
-                          <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
-                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                            Verificeret kurs: {currSym}{pos.currentPrice}
+                          {/* Ingen "verificeret": en fejlet opdatering beholder den gamle kurs – tidspunktet står ved siden af. */}
+                          <span className="flex items-center gap-1.5 text-slate-100 font-bold">
+                            Seneste kurs: {currSym}{pos.currentPrice}
                           </span>
                           <span className="text-slate-600">•</span>
                           <span className="text-slate-400">
@@ -3661,8 +3657,16 @@ ${verdict.judgeThinking}
                           </div>
                           <div className="flex justify-between border-t border-slate-800/60 pt-0.5 font-bold">
                             <span className="text-slate-400">Net Cash:</span>
-                            <span className={(fundamentals.netCashUsd ?? 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'}>
-                              {(fundamentals.netCashUsd ?? 0) >= 0 ? '+' : ''}
+                            <span
+                              className={
+                                fundamentals.netCashUsd === undefined
+                                  ? TONE_CLASS.unknown
+                                  : fundamentals.netCashUsd >= 0
+                                  ? 'text-emerald-300'
+                                  : 'text-rose-300'
+                              }
+                            >
+                              {fundamentals.netCashUsd !== undefined && fundamentals.netCashUsd >= 0 ? '+' : ''}
                               {formatCompactUsd(fundamentals.netCashUsd)}
                             </span>
                           </div>
@@ -3685,26 +3689,21 @@ ${verdict.judgeThinking}
                           </div>
                           <div className="flex justify-between">
                             <span className="text-slate-400">Runway:</span>
-                            <span
-                              className={`font-bold ${
-                                fundamentals.isCashFlowPositive
-                                  ? 'text-emerald-400'
-                                  : (fundamentals.estimatedRunwayMonths ?? 99) < 9
-                                  ? 'text-rose-400 animate-pulse'
-                                  : 'text-cyan-400'
-                              }`}
-                            >
-                              {fundamentals.isCashFlowPositive
-                                ? 'Uendelig (Overskud)'
-                                : fundamentals.estimatedRunwayMonths !== null && fundamentals.estimatedRunwayMonths !== undefined
-                                ? `${fundamentals.estimatedRunwayMonths} mdr.`
-                                : 'N/A'}
-                            </span>
+                            {(() => {
+                              const rl = runwayLabel(fundamentals);
+                              return (
+                                <span className={`font-bold ${rl.tone === 'bad' ? 'text-rose-400 animate-pulse' : rl.tone === 'good' && !fundamentals.isCashFlowPositive ? TONE_CLASS.neutral : TONE_CLASS[rl.tone]}`}>
+                                  {fundamentals.isCashFlowPositive || fundamentals.estimatedRunwayMonths === null
+                                    ? 'Uendelig (Overskud)'
+                                    : rl.tone === 'unknown'
+                                    ? 'ukendt'
+                                    : `${fundamentals.estimatedRunwayMonths} mdr.`}
+                                </span>
+                              );
+                            })()}
                           </div>
-                          <div className="text-[10px] text-slate-500 pt-0.5 border-t border-slate-800/60 truncate">
-                            {(fundamentals.estimatedRunwayMonths ?? 99) < 9 && !fundamentals.isCashFlowPositive
-                              ? '⚠️ Akut emissionsrisiko'
-                              : '🛡️ Ingen udvandingsfare'}
+                          <div className={`text-[10px] pt-0.5 border-t border-slate-800/60 truncate ${runwayLabel(fundamentals).tone === 'unknown' ? TONE_CLASS.unknown : 'text-slate-400'}`}>
+                            {runwayLabel(fundamentals).text}
                           </div>
                         </div>
                       </div>
@@ -3739,7 +3738,9 @@ ${verdict.judgeThinking}
                             </span>
                           </div>
                           <div className="text-[10px] text-slate-500 pt-0.5 border-t border-slate-800/60 truncate">
-                            {(fundamentals.shortPercentOfFloat ?? 0) >= 12
+                            {fundamentals.shortPercentOfFloat === undefined
+                              ? 'Short-andel ukendt'
+                              : fundamentals.shortPercentOfFloat >= 12
                               ? '🔥 Short Squeeze kandidat'
                               : 'Normal short-andel'}
                           </div>
@@ -3761,9 +3762,11 @@ ${verdict.judgeThinking}
                           <div className="flex justify-between">
                             <span className="text-slate-400">P/E:</span>
                             <span className="text-slate-200 font-bold">
-                              {fundamentals.peRatio !== null && fundamentals.peRatio !== undefined
-                                ? fundamentals.peRatio.toFixed(1)
-                                : 'Negativ'}
+                              {fundamentals.peRatio === undefined
+                                ? 'mangler data'
+                                : fundamentals.peRatio === null
+                                ? 'Negativ'
+                                : fundamentals.peRatio.toFixed(1)}
                             </span>
                           </div>
                           <div className="flex justify-between border-t border-slate-800/60 pt-0.5">
@@ -3910,7 +3913,9 @@ ${verdict.judgeThinking}
                     </div>
                   ) : (
                     <div className="p-2.5 rounded bg-slate-950/40 border border-slate-800/60 text-xs text-slate-400 font-mono">
-                      Ingen tidligere registrerede åbne markedskøb i selskabet de seneste 3-4 år. Dette indikerer et sjældent regimeskift eller ny overbevisning fra ledelsen.
+                      {selectedTx.trackRecord.reputation === 'UNKNOWN'
+                        ? 'Track record ukendt – opslaget fejlede, eller tickeren er ikke amerikansk. Det er ikke et signal.'
+                        : 'Ingen tidligere registrerede åbne markedskøb i selskabet de seneste 3-4 år. Dette indikerer et sjældent regimeskift eller ny overbevisning fra ledelsen.'}
                     </div>
                   )}
                 </div>

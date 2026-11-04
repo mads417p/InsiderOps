@@ -1,4 +1,23 @@
-import type { GatekeeperResult, InsiderTransaction, RejectedRow } from '@/types/insider';
+import type { CompanyFundamentals, GatekeeperResult, InsiderTransaction, RejectedRow } from '@/types/insider';
+
+export type LabelTone = 'good' | 'bad' | 'neutral' | 'unknown';
+export const TONE_CLASS: Record<LabelTone, string> = {
+  good: 'text-emerald-400',
+  bad: 'text-rose-400',
+  neutral: 'text-cyan-400',
+  unknown: 'text-slate-500', // ukendt er gråt – aldrig en positiv farve
+};
+
+/**
+ * Udvandings-label ud fra runway. Ukendt runway (undefined) er "Runway ukendt" – aldrig "Ingen udvandingsfare".
+ * estimatedRunwayMonths === null betyder cash-flow positiv (se fundamentals.ts).
+ */
+export function runwayLabel(f: Pick<CompanyFundamentals, 'estimatedRunwayMonths' | 'isCashFlowPositive'>): { text: string; tone: LabelTone } {
+  if (f.isCashFlowPositive === true || f.estimatedRunwayMonths === null) return { text: '🛡️ Cash-flow positiv', tone: 'good' };
+  if (f.estimatedRunwayMonths === undefined || !Number.isFinite(f.estimatedRunwayMonths)) return { text: 'Runway ukendt', tone: 'unknown' };
+  if (f.estimatedRunwayMonths < 9) return { text: '⚠️ Akut emissionsrisiko', tone: 'bad' };
+  return { text: '🛡️ Ingen udvandingsfare', tone: 'good' };
+}
 
 /**
  * Alle afviste rækker i en scan: dem pipelinen afviste (kode, beløb, handelbarhed, Norden …) plus
