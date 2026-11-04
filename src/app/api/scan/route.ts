@@ -12,6 +12,8 @@ import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
 import { anthropicKeyConfigured, gatekeeperModelLabel, gatekeeperProvider } from '@/lib/claude-gatekeeper';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { saveScan, getLatestScan } from '@/lib/db';
+import { recordSignals } from '@/lib/ledger';
+import { fetchLiveFxRates } from '@/lib/live-quote';
 import { parseJson, scanPostSchema } from '@/lib/api-schemas';
 import { GatekeeperResult, GatekeeperUsage, InsiderTransaction } from '@/types/insider';
 
@@ -146,6 +148,28 @@ export async function GET(request: Request) {
       }
     }
 
+    // 3. Signal-ledger: hver handel, der bestod hard-filteret, logges punkt-i-tid (også dem uden score og
+    //    dem, csuite-visningen skjuler). En fejl her vises i svaret, men stopper ikke scannen.
+    let ledger: { inserted: number; seen: number; scored: number } | { error: string } | null = null;
+    if (source !== 'mock' && !stale && built.passed.length > 0) {
+      try {
+        const fx = await fetchLiveFxRates().catch(() => null);
+        ledger = recordSignals({
+          passed: built.passed,
+          items,
+          scanSource: sourceKey,
+          detectedAt: scannedAt,
+          gatekeeperModel: gatekeeperUsage?.model,
+          fx,
+        });
+        console.log(`Signal-ledger: ${ledger.inserted} nye, ${ledger.seen} set før, ${ledger.scored} scoret`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error('Signal-ledgeren kunne ikke opdateres:', msg);
+        ledger = { error: msg };
+      }
+    }
+
     const geminiKey = process.env.GEMINI_API_KEY;
     const apiKeysConfigured = {
       gemini: Boolean(geminiKey && geminiKey.trim() !== '' && !geminiKey.includes('your-')),
@@ -165,6 +189,7 @@ export async function GET(request: Request) {
       count: items.length,
       items,
       gatekeeperUsage,
+      ledger,
       rejectedCount: rejected.length,
       rejected,
     });

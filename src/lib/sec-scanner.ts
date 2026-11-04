@@ -375,7 +375,7 @@ export async function annotateForm4Details(rows: InsiderTransaction[]): Promise<
 export async function buildScanRows(
   raw: InsiderTransaction[],
   opts: { enrich?: boolean } = {}
-): Promise<{ rows: InsiderTransaction[]; rejected: RejectedRow[] }> {
+): Promise<{ rows: InsiderTransaction[]; passed: InsiderTransaction[]; rejected: RejectedRow[] }> {
   const rejected: RejectedRow[] = [];
   const seen = new Set<string>(); // samme handel fra to kilder (OpenInsider + EDGAR) afvises og tælles én gang
   const reject = (tx: InsiderTransaction, reason: string) => {
@@ -416,7 +416,8 @@ export async function buildScanRows(
     return hf.passed;
   });
 
-  return { rows: rollUpByTicker(tradable), rejected };
+  // passed = hver enkelt handel efter hard-filteret (til signal-ledgeren); rows = én række pr. ticker (til UI og gatekeeper).
+  return { rows: rollUpByTicker(tradable), passed: tradable, rejected };
 }
 
 /**

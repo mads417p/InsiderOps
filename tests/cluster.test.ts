@@ -62,6 +62,20 @@ describe('cluster og dedup (audit 1.6)', () => {
     expect(rejected[0].reason).toMatch(/Salg/);
   });
 
+  it('passed (til ledgeren) har hver handel – også dem uden for cluster-vinduet, som roll-up skjuler', async () => {
+    const { rows, passed } = await buildScanRows(
+      [
+        buy({ insiderName: 'Smith John', tradeDate: '2026-09-20', ownerCik: '111', accessionNo: '000000000126000011' }),
+        buy({ insiderName: 'Jones Mary', tradeDate: '2026-10-20', ownerCik: '222', accessionNo: '000000000126000012' }),
+        buy({ insiderName: 'Lee Ann', tradeDate: '2026-10-21', ownerCik: '333', accessionNo: '000000000126000013' }),
+      ],
+      { enrich: false }
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].clusterCount).toBe(2); // septemberkøbet er uden for vinduet
+    expect(passed.map((t) => t.ownerCik).sort()).toEqual(['111', '222', '333']);
+  });
+
   it('30 dages mellemrum er ikke en cluster (vindue ±10 dage)', () => {
     const [lead] = rollUpByTicker([
       buy({ insiderName: 'Smith John', tradeDate: '2026-09-20' }),

@@ -9,6 +9,7 @@ const BROWSER_USER_AGENT =
 
 export interface MarketDataSummary {
   currentPrice: number;
+  priceTime?: string; // Yahoo meta.regularMarketTime (UTC ISO)
   recentPriceChange30dPct: number;
   pctFrom3moHigh: number;
   threeMonthHigh: number;
@@ -166,6 +167,7 @@ export async function fetchMarketPrices(
 
   return {
     currentPrice: Number(currentPrice.toFixed(2)),
+    priceTime: typeof meta?.regularMarketTime === 'number' ? new Date(meta.regularMarketTime * 1000).toISOString() : undefined,
     recentPriceChange30dPct,
     pctFrom3moHigh,
     threeMonthHigh: Number(threeMonthHigh.toFixed(2)),
@@ -492,6 +494,7 @@ export async function enrichTransactionWithMarketData(
     if (prices) {
       tx.recentPriceChange30dPct = prices.recentPriceChange30dPct;
       tx.currentMarketPrice = prices.currentPrice;
+      tx.currentMarketPriceTime = prices.priceTime;
       tx.atr14d = prices.atr14d;
       tx.dailyVolatilityPct = prices.dailyVolatilityPct;
       tx.supportLow30d = prices.supportLow30d;

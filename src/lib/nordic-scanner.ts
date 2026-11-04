@@ -471,6 +471,7 @@ export async function fetchNordicInsiderTransactions(): Promise<{
       tradeDate: v.tradeDate,
       filedAt,
       ticker,
+      isin: v.isin,
       companyName: ann.company,
       insiderName: v.insiderName,
       insiderTitle: v.insiderTitle,
