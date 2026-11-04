@@ -1,5 +1,6 @@
 import { CompanyFundamentals, FundamentalHealthBadge, InsiderTransaction } from '@/types/insider';
 import { getCikForTicker } from '@/lib/sec-scanner';
+import { secFetch } from '@/lib/sec-client';
 
 export interface XbrlFactItem {
   end: string;
@@ -214,18 +215,13 @@ function extractOperatingCashFlow(
 /**
  * Henter SEC EDGAR CompanyFacts JSON for et CIK-nummer.
  */
-async function fetchSecXbrlFacts(cikStr: string, userAgent: string): Promise<XbrlCompanyFacts | null> {
+async function fetchSecXbrlFacts(cikStr: string): Promise<XbrlCompanyFacts | null> {
   const paddedCik = String(cikStr).padStart(10, '0');
   const url = `https://data.sec.gov/api/xbrl/companyfacts/CIK${paddedCik}.json`;
 
   try {
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': userAgent,
-        Accept: 'application/json',
-      },
-      next: { revalidate: 3600 },
-    });
+    // no-store: companyfacts kan være 6 MB (ACN) – for stort til Next' fetch-cache. Resultatet caches i fundamentalsCache.
+    const res = await secFetch(url, { accept: 'application/json', timeoutMs: 20_000 });
 
     if (!res.ok) {
       return null;
@@ -472,9 +468,6 @@ export async function fetchCompanyFundamentals(
     return cached.data;
   }
 
-  const userAgent =
-    process.env.SEC_USER_AGENT || 'InsiderOps/1.0 (mads.rosengaard2003@gmail.com)';
-
   let cashAndEquivalentsUsd: number | undefined;
   let totalDebtUsd: number | undefined;
   let quarterlyCashBurnUsd: number | undefined;
@@ -492,7 +485,7 @@ export async function fetchCompanyFundamentals(
   try {
     // 1. Parallel kørsel: CIK lookup + Finviz metrics
     const [cikInfo, finviz] = await Promise.all([
-      getCikForTicker(cleanTicker, userAgent),
+      getCikForTicker(cleanTicker),
       fetchFinvizMetrics(cleanTicker),
     ]);
 
@@ -515,7 +508,7 @@ export async function fetchCompanyFundamentals(
 
     // 2. Hvis CIK fundet, hent SEC EDGAR XBRL facts
     if (cikInfo && cikInfo.cik) {
-      const facts = await fetchSecXbrlFacts(cikInfo.cik, userAgent);
+      const facts = await fetchSecXbrlFacts(cikInfo.cik);
       if (!facts) lookupFailed = true;
       if (facts && facts.facts && facts.facts['us-gaap']) {
         const gaap = facts.facts['us-gaap'];

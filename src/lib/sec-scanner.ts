@@ -1,5 +1,6 @@
 import { InsiderTransaction, TransactionCode } from '@/types/insider';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
+import { assertSecUrl, secFetch } from '@/lib/sec-client';
 
 /**
  * Trin 2: Hård filtrering uden API-omkostninger.
@@ -673,7 +674,6 @@ function parseAndAggregateTransactions(xml: string): {
  */
 async function parseForm4Entry(
   entryContent: string,
-  userAgent: string,
   defaultTicker?: string,
   defaultCompanyName?: string
 ): Promise<InsiderTransaction | null> {
@@ -686,9 +686,7 @@ async function parseForm4Entry(
   }
 
   try {
-    const indexResponse = await fetch(indexUrl, {
-      headers: { 'User-Agent': userAgent },
-    });
+    const indexResponse = await secFetch(indexUrl, { accept: 'text/html' });
 
     if (!indexResponse.ok) return null;
 
@@ -700,9 +698,7 @@ async function parseForm4Entry(
     const rawXmlPath = xmlMatch[1].replace(/\/xsl[^\/]+\//i, '/');
     const rawXmlUrl = 'https://www.sec.gov' + rawXmlPath;
 
-    const xmlResponse = await fetch(rawXmlUrl, {
-      headers: { 'User-Agent': userAgent },
-    });
+    const xmlResponse = await secFetch(rawXmlUrl, { accept: 'application/xml, text/xml' });
 
     if (!xmlResponse.ok) return null;
 
@@ -799,10 +795,7 @@ let tickerCikCache: Map<string, { cik: string; title: string }> | null = null;
 /**
  * Slår en tickers 10-cifrede CIK-nummer op via SEC company_tickers.json.
  */
-export async function getCikForTicker(
-  ticker: string,
-  userAgent: string
-): Promise<{ cik: string; title: string } | null> {
+export async function getCikForTicker(ticker: string): Promise<{ cik: string; title: string } | null> {
   const cleanTicker = ticker.trim().toUpperCase();
 
   if (tickerCikCache && tickerCikCache.has(cleanTicker)) {
@@ -810,12 +803,7 @@ export async function getCikForTicker(
   }
 
   try {
-    const res = await fetch('https://www.sec.gov/files/company_tickers.json', {
-      headers: {
-        'User-Agent': userAgent,
-        Accept: 'application/json',
-      },
-    });
+    const res = await secFetch('https://www.sec.gov/files/company_tickers.json', { accept: 'application/json' });
 
     if (!res.ok) return null;
 
@@ -1030,17 +1018,11 @@ export async function fetchHighConvictionOpenMarketBuys(limit: number = 20): Pro
  * Henter seneste Form 4 filings fra det rå SEC EDGAR Atom/XML feed.
  */
 async function fetchRawSecEdgarAtomFeed(limit: number = 8): Promise<InsiderTransaction[]> {
-  const userAgent = process.env.SEC_USER_AGENT || 'InsiderOps/1.0 (mads.rosengaard2003@gmail.com)';
   const feedUrl =
     'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&company=&dateb=&owner=only&start=0&count=40&output=atom';
 
   try {
-    const feedResponse = await fetch(feedUrl, {
-      headers: {
-        'User-Agent': userAgent,
-        Accept: 'application/atom+xml, application/xml, text/xml',
-      },
-    });
+    const feedResponse = await secFetch(feedUrl, { accept: 'application/atom+xml, application/xml, text/xml' });
 
     if (!feedResponse.ok) {
       return [];
@@ -1059,7 +1041,7 @@ async function fetchRawSecEdgarAtomFeed(limit: number = 8): Promise<InsiderTrans
 
     for (let i = 0; i < entriesToProcess.length; i += BATCH_SIZE) {
       const chunk = entriesToProcess.slice(i, i + BATCH_SIZE);
-      const chunkResults = await Promise.all(chunk.map((m) => parseForm4Entry(m[1], userAgent)));
+      const chunkResults = await Promise.all(chunk.map((m) => parseForm4Entry(m[1])));
 
       for (const tx of chunkResults) {
         if (tx) transactions.push(tx);
@@ -1218,9 +1200,8 @@ export async function fetchLiveSecForm4s(limit: number = 20): Promise<InsiderTra
  */
 export async function scanTickerSecForm4s(ticker: string): Promise<InsiderTransaction[]> {
   const cleanTicker = ticker.trim().toUpperCase();
-  const userAgent = process.env.SEC_USER_AGENT || 'InsiderOps/1.0 (mads.rosengaard2003@gmail.com)';
 
-  const cikInfo = await getCikForTicker(cleanTicker, userAgent);
+  const cikInfo = await getCikForTicker(cleanTicker);
   if (!cikInfo) {
     console.warn(`Kunne ikke finde CIK nummer for tickeren '${cleanTicker}'`);
     return [];
@@ -1231,12 +1212,7 @@ export async function scanTickerSecForm4s(ticker: string): Promise<InsiderTransa
   )}&type=4&owner=only&count=15&output=atom`;
 
   try {
-    const feedResponse = await fetch(feedUrl, {
-      headers: {
-        'User-Agent': userAgent,
-        Accept: 'application/atom+xml, application/xml, text/xml',
-      },
-    });
+    const feedResponse = await secFetch(feedUrl, { accept: 'application/atom+xml, application/xml, text/xml' });
 
     if (!feedResponse.ok) {
       console.warn(`SEC Atom feed for ${cleanTicker} fejlede med status ${feedResponse.status}`);
@@ -1257,7 +1233,7 @@ export async function scanTickerSecForm4s(ticker: string): Promise<InsiderTransa
     for (let i = 0; i < entriesToProcess.length; i += BATCH_SIZE) {
       const chunk = entriesToProcess.slice(i, i + BATCH_SIZE);
       const chunkResults = await Promise.all(
-        chunk.map((m) => parseForm4Entry(m[1], userAgent, cleanTicker, cikInfo.title))
+        chunk.map((m) => parseForm4Entry(m[1], cleanTicker, cikInfo.title))
       );
 
       for (const tx of chunkResults) {
@@ -1285,25 +1261,17 @@ export async function scanTickerSecForm4s(ticker: string): Promise<InsiderTransa
  * Stripper automatisk eventuelle XSLT-stylesheets (/xslF345.../) for at hente den rå XML.
  */
 export async function fetchSecForm4Footnotes(secUrl?: string): Promise<string[]> {
-  if (!secUrl || !secUrl.includes('sec.gov')) {
-    return [];
-  }
-
-  const userAgent = process.env.SEC_USER_AGENT || 'InsiderOps/1.0 (mads.rosengaard2003@gmail.com)';
+  if (!secUrl) return [];
+  // SSRF-værn: URL'en kan komme fra en klient – kun https://www.sec.gov accepteres (kaster ellers).
+  assertSecUrl(secUrl, ['www.sec.gov']);
   const cleanUrl = secUrl.replace(/\/xsl[^\/]+\//i, '/');
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-
-    const res = await fetch(cleanUrl, {
-      headers: {
-        'User-Agent': userAgent,
-        Accept: 'application/xml, text/xml, text/html, */*',
-      },
-      signal: controller.signal,
+    const res = await secFetch(cleanUrl, {
+      accept: 'application/xml, text/xml, text/html, */*',
+      timeoutMs: 6000,
+      allowedHosts: ['www.sec.gov'],
     });
-    clearTimeout(timeoutId);
 
     if (!res.ok) return [];
 
@@ -1314,9 +1282,7 @@ export async function fetchSecForm4Footnotes(secUrl?: string): Promise<string[]>
       const xmlMatch = text.match(/href=["'](\/Archives\/edgar\/data\/[^"']+\.xml)["']/i);
       if (xmlMatch) {
         const rawXmlUrl = 'https://www.sec.gov' + xmlMatch[1].replace(/\/xsl[^\/]+\//i, '/');
-        const xmlRes = await fetch(rawXmlUrl, {
-          headers: { 'User-Agent': userAgent },
-        });
+        const xmlRes = await secFetch(rawXmlUrl, { accept: 'application/xml, text/xml', allowedHosts: ['www.sec.gov'] });
         if (xmlRes.ok) {
           text = await xmlRes.text();
         }

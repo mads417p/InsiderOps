@@ -108,7 +108,7 @@ export async function POST(request: Request) {
     // 1. SEC EDGAR Form 4 juridiske fodnoter
     if (
       tx.secFilingUrl &&
-      tx.secFilingUrl.includes('sec.gov') &&
+      tx.secFilingUrl.startsWith('https://www.sec.gov/') &&
       !tx.contextNotes?.includes('SEC Form 4 Fodnoter')
     ) {
       enrichmentTasks.push(
