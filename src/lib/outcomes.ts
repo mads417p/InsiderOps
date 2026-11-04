@@ -191,12 +191,19 @@ export async function computeMissingOutcomes(opts: { now?: Date; write?: boolean
   const now = opts.now ?? new Date();
   const fetcher = opts.fetcher ?? fetchDailyBars;
   const done = new Set(listOutcomes().map((o) => `${o.signalId}|${o.horizon}`));
-  const todo = listSignals()
+  const open = listSignals()
     .map((s) => ({ s, horizons: HORIZONS.filter((h) => !done.has(`${s.id}|${h}`)) }))
-    // ponytail: intet udfald kan være klar samme døgn som ankeret – spar Yahoo-kaldet.
-    .filter(({ s, horizons }) => horizons.length > 0 && now.getTime() - Date.parse(anchorFor(s)) > 12 * 3_600_000);
+    .filter(({ horizons }) => horizons.length > 0);
+  // ponytail: intet udfald kan være klar inden for 12 t efter ankeret – spar Yahoo-kaldet (tælles som ikke nået).
+  const isFresh = ({ s }: (typeof open)[number]) => now.getTime() - Date.parse(anchorFor(s)) <= 12 * 3_600_000;
+  const todo = open.filter((o) => !isFresh(o));
 
-  const result: OutcomeJobResult = { inserted: 0, notReached: 0, missingData: [], fetchErrors: [] };
+  const result: OutcomeJobResult = {
+    inserted: 0,
+    notReached: open.filter(isFresh).reduce((n, o) => n + o.horizons.length, 0),
+    missingData: [],
+    fetchErrors: [],
+  };
   if (todo.length === 0) return result;
 
   // Én hentning pr. symbol, fra det tidligste anker der skal bruge det.
