@@ -1,4 +1,8 @@
 import { InsiderTransaction } from '@/types/insider';
+import { currencyForTicker } from '@/lib/live-quote';
+
+// Alt efter denne linje i contextNotes er genereret markedsdata og erstattes ved næste berigelse.
+export const MARKET_NOTES_MARKER = '[Markedsdata – opdateres ved hver berigelse]';
 
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -479,7 +483,11 @@ export async function enrichTransactionWithMarketData(
       tx.supportLow30d = prices.supportLow30d;
       tx.resistanceHigh90d = prices.resistanceHigh90d;
 
-      if (tx.pricePerShare > 0 && tx.transactionCode === 'P') {
+      // Insiderkurs og markedskurs sammenlignes kun i samme valuta (385 DKK mod $55,80 gav før "+590 %").
+      const txCurrency = (tx.currency || 'USD').toUpperCase();
+      const quoteCurrency = (prices.currency || currencyForTicker(tx.ticker)).toUpperCase();
+      const label = quoteCurrency === 'USD' ? '$' : `${quoteCurrency} `;
+      if (tx.pricePerShare > 0 && tx.transactionCode === 'P' && txCurrency === quoteCurrency) {
         const diffPct = Number(
           (((prices.currentPrice - tx.pricePerShare) / tx.pricePerShare) * 100).toFixed(2)
         );
@@ -491,14 +499,18 @@ export async function enrichTransactionWithMarketData(
           : `(Insider afkast siden køb: +${diffPct}%)`;
 
         notesParts.push(
-          `Insider Alpha: Købskurs $${tx.pricePerShare} vs. Aktuel kurs $${prices.currentPrice} ${discountText}`
+          `Insider Alpha: Købskurs ${label}${tx.pricePerShare} vs. Aktuel kurs ${label}${prices.currentPrice} ${discountText}`
         );
+      } else if (tx.transactionCode === 'P' && txCurrency !== quoteCurrency) {
+        tx.returnSinceBuyPct = undefined;
+        tx.isTradingBelowInsiderPrice = undefined;
+        notesParts.push(`Insider Alpha: ikke beregnet – insiderkurs i ${txCurrency}, markedskurs i ${quoteCurrency}.`);
       }
 
       notesParts.push(
-        `Kurs-kontekst: Seneste lukkekurs $${prices.currentPrice} (${
+        `Kurs-kontekst: Seneste lukkekurs ${label}${prices.currentPrice} (${
           prices.recentPriceChange30dPct >= 0 ? '+' : ''
-        }${prices.recentPriceChange30dPct}% seneste 30d, ${prices.pctFrom3moHigh}% fra 3-mdr top $${
+        }${prices.recentPriceChange30dPct}% seneste 30d, ${prices.pctFrom3moHigh}% fra 3-mdr top ${label}${
           prices.threeMonthHigh
         }).`
       );
@@ -513,10 +525,10 @@ export async function enrichTransactionWithMarketData(
     }
 
     if (notesParts.length > 0) {
-      const generatedNotes = notesParts.join('\n\n');
-      tx.contextNotes = tx.contextNotes
-        ? `${tx.contextNotes}\n\n${generatedNotes}`
-        : generatedNotes;
+      // Markedsdata-blokken erstattes ved hver berigelse, så gamle kurser ikke hober sig op i prompten.
+      const base = (tx.contextNotes || '').split(MARKET_NOTES_MARKER)[0].trimEnd();
+      const generatedNotes = `${MARKET_NOTES_MARKER}\n${notesParts.join('\n\n')}`;
+      tx.contextNotes = base ? `${base}\n\n${generatedNotes}` : generatedNotes;
     }
 
     return tx;

@@ -5,6 +5,7 @@ import {
   fetchEdgarCurrentForm4s,
   scanTickerSecForm4s,
   buildScanRows,
+  type RejectedRow,
 } from '@/lib/sec-scanner';
 import { fetchNordicInsiderTransactions } from '@/lib/nordic-scanner';
 import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
@@ -44,11 +45,18 @@ type SourceTask = { name: string; run: () => Promise<InsiderTransaction[]> };
  * Kilderne for en scan. Hver kilde hentes præcis én gang (OpenInsider højst én gang pr. screener),
  * og alle rækker går gennem samme pipeline (buildScanRows).
  */
-function sourceTasks(source: string, ticker?: string): SourceTask[] {
+function sourceTasks(source: string, ticker: string | undefined, sourceRejected: RejectedRow[]): SourceTask[] {
   const officer = { name: 'OpenInsider (C-suite)', run: () => fetchOpenInsiderBuys('officer', 25) };
   const general = { name: 'OpenInsider (alle insidere)', run: () => fetchOpenInsiderBuys('general', 25) };
   const edgar = { name: 'SEC EDGAR (seneste Form 4)', run: () => fetchEdgarCurrentForm4s(16) };
-  const nordic = { name: 'Nasdaq Nordic (MAR art. 19)', run: () => fetchNordicInsiderTransactions() };
+  const nordic = {
+    name: 'Nasdaq Nordic (MAR art. 19)',
+    run: async () => {
+      const { transactions, rejected } = await fetchNordicInsiderTransactions();
+      sourceRejected.push(...rejected); // meddelelser afvist allerede ved udtræk (tal/ISIN mangler i teksten osv.)
+      return transactions;
+    },
+  };
 
   if (ticker) return [{ name: `SEC EDGAR (${ticker})`, run: () => scanTickerSecForm4s(ticker) }];
   if (source === 'nordic') return [nordic];
@@ -78,7 +86,8 @@ export async function GET(request: Request) {
     }
 
     // 1. Hent alle kilder parallelt. En fejlet kilde vises som fejl – aldrig som "ingen signaler".
-    const tasks = sourceTasks(source, ticker);
+    const sourceRejected: RejectedRow[] = [];
+    const tasks = sourceTasks(source, ticker, sourceRejected);
     const settled = await Promise.allSettled(tasks.map((t) => t.run()));
     const errors: Array<{ source: string; error: string }> = [];
     const raw: InsiderTransaction[] = [];
@@ -92,7 +101,9 @@ export async function GET(request: Request) {
     });
 
     // 2. Fælles pipeline: kode P → handelsdato/navn → dedup → berigelse → hard-filter → én række pr. ticker.
-    const { rows, rejected } = await buildScanRows(raw, { enrich: source !== 'mock' });
+    const built = await buildScanRows(raw, { enrich: source !== 'mock' });
+    const rows = built.rows;
+    const rejected = [...sourceRejected, ...built.rejected];
     // C-suite-visningen: kun executives eller ægte clusters.
     const transactions = source === 'csuite' && !ticker ? rows.filter((tx) => tx.isExecutiveOfficer || tx.isClusterBuy) : rows;
 

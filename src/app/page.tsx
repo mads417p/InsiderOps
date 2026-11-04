@@ -43,7 +43,7 @@ import {
   PortfolioSummary,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
-import type { LiveFxRates } from '@/lib/live-quote';
+import { currencyForTicker, type LiveFxRates } from '@/lib/live-quote';
 import { formatCompactUsd } from '@/lib/fundamentals';
 
 interface ScanItem {
@@ -76,6 +76,11 @@ interface ScanResponse {
 
 const STORAGE_KEY = 'insiderops_verdicts_v1';
 const CAPITAL_STORAGE_KEY = 'insiderops_capital_frame_dkk';
+
+/** Valutamærke for insiderens kurs (tx.currency) og for markedskursen (børsens valuta). */
+const curLabel = (c: string) => (c === 'USD' ? '$' : `${c} `);
+const priceLabel = (tx: InsiderTransaction) => curLabel((tx.currency || 'USD').toUpperCase());
+const marketPriceLabel = (ticker: string) => curLabel(currencyForTicker(ticker));
 
 function formatQuoteTime(isoOrStr?: string): string {
   if (!isoOrStr) return 'Lige nu';
@@ -232,9 +237,9 @@ export default function Dashboard() {
 ${tx.footnotesSummary ? `- **SEC Fodnoter (Det med småt):**\n${tx.footnotesSummary}\n` : ''}- **Børs & Handelbarhed (DK / Nordnet / Saxo):** ${tx.isTradableInDK === true ? '✅ Verificeret handelbar' : tx.isTradableInDK === false ? '🚫 Ikke godkendt' : '❔ Ikke verificeret – mangler data'} (${tx.exchange || 'N/A'}${tx.avgDailyDollarVolume ? `, Gns. omsætning: $${(tx.avgDailyDollarVolume >= 1000000 ? (tx.avgDailyDollarVolume / 1000000).toFixed(1) + 'M' : Math.round(tx.avgDailyDollarVolume / 1000) + 'k')}/dag` : ''})
 - **Handelbarheds-status:** ${tx.tradabilityReason || (tx.isTradableInDK !== false ? 'Handelbar på standard DK mæglere' : 'Ikke verificeret')}
 - **Transaktionstype:** Kode ${tx.transactionCode} (Åbent markedskøb)
-- **Handelsbeløb:** $${Math.round(tx.totalValueUsd).toLocaleString()} USD (${tx.shares.toLocaleString()} aktier á $${tx.pricePerShare} USD)
+- **Handelsbeløb:** ${tx.totalValueLocal !== undefined ? `${Math.round(tx.totalValueLocal).toLocaleString()} ${tx.currency} (ca. $${Math.round(tx.totalValueUsd).toLocaleString()} USD)` : `$${Math.round(tx.totalValueUsd).toLocaleString()} USD`} (${tx.shares.toLocaleString()} aktier á ${priceLabel(tx)}${tx.pricePerShare})
 - **Beholdning efter køb:** ${tx.sharesOwnedFollowing !== undefined ? `${tx.sharesOwnedFollowing.toLocaleString()} aktier` : 'ikke oplyst'} (${tx.holdingsIncreasePct !== undefined ? `+${tx.holdingsIncreasePct}%` : 'ukendt'} stigning)
-- **Købskurs:** $${tx.pricePerShare} USD
+- **Købskurs:** ${priceLabel(tx)}${tx.pricePerShare}
 - **Aktuel markedskurs:** ${tx.currentMarketPrice !== undefined ? `$${tx.currentMarketPrice} USD` : 'Ukendt'}
 - **Insider Alpha / Rabat:** ${alphaStr}
 - **Kursændring 30 dage op til køb:** ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'Ukendt'}
@@ -1514,14 +1519,10 @@ ${verdict.judgeThinking}
                       const isDkk = tx.ticker.endsWith('.CO') || tx.exchange?.includes('Copenhagen');
                       const isSek = tx.ticker.endsWith('.ST') || tx.exchange?.includes('Stockholm');
                       const currSym = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';
-                      const currentPrice = tx.currentMarketPrice || tx.pricePerShare;
-                      const returnPct =
-                        tx.returnSinceBuyPct !== undefined
-                          ? tx.returnSinceBuyPct
-                          : currentPrice && tx.pricePerShare > 0
-                          ? Number((((currentPrice - tx.pricePerShare) / tx.pricePerShare) * 100).toFixed(1))
-                          : 0;
-                      const isDiscount = returnPct < 0;
+                      // Kun målte tal: ingen insiderkurs som stand-in for markedskursen og ingen afkast på tværs af valutaer.
+                      const currentPrice = tx.currentMarketPrice;
+                      const returnPct = tx.returnSinceBuyPct;
+                      const isDiscount = returnPct !== undefined && returnPct < 0;
                       const evalTime = verdict.evaluatedAt || verdict.timestamp || savedAt;
                       const evalDateStr = formatDateTimeDk(evalTime);
                       const isInPortfolio = Boolean(paperPortfolio[tx.id]);
@@ -1595,11 +1596,13 @@ ${verdict.judgeThinking}
                             <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-1.5 text-xs font-mono">
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="text-slate-400">Insider:</span>
-                                <span className="text-slate-200 font-bold">{currSym}{tx.pricePerShare}</span>
+                                <span className="text-slate-200 font-bold">{priceLabel(tx)}{tx.pricePerShare}</span>
                                 <span className="text-slate-500">•</span>
                                 <span className="text-slate-400">Nu:</span>
-                                <span className="text-cyan-300 font-bold">{currSym}{currentPrice}</span>
-                                {isDiscount ? (
+                                <span className="text-cyan-300 font-bold">{currentPrice !== undefined ? `${currSym}${currentPrice}` : 'mangler kurs'}</span>
+                                {returnPct === undefined ? (
+                                  <span className="text-slate-500 text-[10px]">afkast ukendt</span>
+                                ) : isDiscount ? (
                                   <span className="px-1.5 py-0.5 rounded bg-emerald-950/90 border border-emerald-600/70 text-emerald-300 font-bold text-[10px]">
                                     💎 {Math.abs(returnPct).toFixed(1)}% under insider
                                   </span>
@@ -2217,7 +2220,7 @@ ${verdict.judgeThinking}
                               ${Math.round(tx.totalValueUsd).toLocaleString()}
                             </div>
                             <div className="text-[10px] text-slate-500">
-                              {tx.shares.toLocaleString()} stk a ${tx.pricePerShare}
+                              {tx.shares.toLocaleString()} stk a {priceLabel(tx)}{tx.pricePerShare}
                             </div>
                             {tx.currentMarketPrice !== undefined && tx.transactionCode === 'P' && (
                               <div className="mt-1 flex flex-col items-end gap-0.5">
@@ -2533,7 +2536,7 @@ ${verdict.judgeThinking}
                         {tx.currentMarketPrice !== undefined && (
                           <div className="flex items-center gap-1.5 font-mono text-[11px]">
                             <span className="text-slate-400">
-                              Købt @ ${tx.pricePerShare} → Nu: <span className="text-slate-200 font-medium">${tx.currentMarketPrice}</span>
+                              Købt @ {priceLabel(tx)}{tx.pricePerShare} → Nu: <span className="text-slate-200 font-medium">{marketPriceLabel(tx.ticker)}{tx.currentMarketPrice}</span>
                             </span>
                             {tx.returnSinceBuyPct !== undefined && (
                               <span

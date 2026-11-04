@@ -7,6 +7,7 @@ import {
   InsiderTransaction,
 } from '@/types/insider';
 import { formatCompactUsd } from '@/lib/fundamentals';
+import { currencyForTicker } from '@/lib/live-quote';
 import { UNTRUSTED_DATA_INSTRUCTION, untrusted } from '@/lib/prompt-safety';
 
 /** Bump ved enhver ændring af prompts eller skema, så domme kan spores til den prompt, der lavede dem. */
@@ -208,6 +209,9 @@ ${
       : tx.isTradableInDK === false
         ? 'Advarsel: Ikke handelbar i DK'
         : 'Ikke verificeret – data mangler';
+  // Insiderens kurs står i tx.currency; markedskursen i børsens valuta (nordiske aktier: DKK/SEK/EUR/NOK).
+  const txCur = tx.currency || 'USD';
+  const marketCur = currencyForTicker(tx.ticker);
 
   return `
 TICKER: ${tx.ticker} (${tx.companyName})
@@ -217,8 +221,8 @@ C-SUITE DIREKTØR: ${tx.isExecutiveOfficer ? 'JA (C-Suite / Executive Officer)' 
 EJERSKABETS NATUR: ${tx.ownershipNature === 'I' ? 'INDIREKTE (I - Via Fond / LLC / Trust / Holding)' : 'DIREKTE (D - Egne personlige aktier)'}
 RULE 10b5-1 HANDELSPLAN: ${tx.is10b51Plan === undefined ? 'UKENDT (Form 4 ikke tjekket)' : tx.is10b51Plan ? 'JA (Forudbestemt automatisk handelsplan - 0% aktuel asymmetri/skøn)' : 'NEJ (Frivilligt, skønsmæssigt køb på åbent marked)'}
 ${tx.footnotesSummary ? `SEC FORM 4 FODNOTER / DET MED SMÅT:\n${untrusted('sec-form4-fodnoter', tx.footnotesSummary)}\n` : ''}TRANSAKTIONSTYPE: Kode ${tx.transactionCode} (Åbent markedskøb)
-ANTAL AKTIER: ${tx.shares.toLocaleString()} stk a $${tx.pricePerShare} USD
-TOTAL HANDELSVÆRDI: $${Math.round(tx.totalValueUsd).toLocaleString()} USD
+ANTAL AKTIER: ${tx.shares.toLocaleString()} stk a ${tx.pricePerShare} ${txCur}
+TOTAL HANDELSVÆRDI: ${tx.totalValueLocal !== undefined ? `${Math.round(tx.totalValueLocal).toLocaleString()} ${txCur} (ca. $${Math.round(tx.totalValueUsd).toLocaleString()} USD)` : `$${Math.round(tx.totalValueUsd).toLocaleString()} USD`}
 BEHOLDNING EFTER KØB: ${tx.sharesOwnedFollowing !== undefined ? `${tx.sharesOwnedFollowing.toLocaleString()} aktier` : 'ikke oplyst'}
 FORØGELSE AF EGEN BEHOLDNING: ${tx.holdingsIncreasePct !== undefined ? `+${tx.holdingsIncreasePct}%` : 'ukendt'}
 CLUSTER-KØB: ${tx.isClusterBuy ? `JA (${tx.clusterCount ?? 2} uafhængige personer)` : 'NEJ'}
@@ -228,7 +232,7 @@ ${
     : ''
 }
 KURSUDVIKLING SENESTE 30 DAGE: ${tx.recentPriceChange30dPct !== undefined ? `${tx.recentPriceChange30dPct}%` : 'mangler data'}
-AKTUEL MARKEDSKURS: ${tx.currentMarketPrice !== undefined ? `$${tx.currentMarketPrice} USD` : 'mangler data'}
+AKTUEL MARKEDSKURS: ${tx.currentMarketPrice !== undefined ? `${tx.currentMarketPrice} ${marketCur}` : 'mangler data'}
 AFKAST / DISKONT SIDEN KØB: ${
     tx.returnSinceBuyPct !== undefined
       ? `${tx.returnSinceBuyPct}% (${tx.isTradingBelowInsiderPrice ? 'HANDLER UNDER INSIDERENS KØBSKURS - RABAT/TAB' : 'HANDLER OVER INSIDERENS KØBSKURS - GEVINST'})`
