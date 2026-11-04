@@ -3,6 +3,7 @@ import { extractOfferingPrices, isOfferingFootnote, matchOffering, type Offering
 import {
   annotateForm4Details,
   detectOwnershipNature,
+  isFundBuyer,
   ownershipFromLines,
   parseForm4PurchaseLines,
   rollUpByTicker,
@@ -163,5 +164,18 @@ describe('track record udelader køb i IPO/udbud (fase 2.5, 5c)', () => {
     const { kept, excluded } = excludeOfferingBuys(buys, [ipo]);
     expect(excluded.map((b) => b.insiderName)).toEqual(['Healy James', 'Third Rock Ventures']);
     expect(kept.map((b) => b.insiderName)).toEqual(['Ignelzi Troy A.']);
+  });
+});
+
+describe('personlig eller fond (live-fund STRZ, 4.11.2026)', () => {
+  it('indirekte via egen revocable trust er personlig; via L.P./SPC og entity-indberetter er fond', () => {
+    expect(isFundBuyer({ name: 'Hirsch Jeffrey', ownership: 'I', via: 'By Revocable Trust' })).toBe(false);
+    expect(isFundBuyer({ name: 'Silva Paul M', ownership: 'I', via: 'By Paul M Silva 2016 Declaration of Trust U/A DTD 12/19/2016' })).toBe(false);
+    expect(isFundBuyer({ name: 'Paul Steven M', ownership: 'I', via: 'By Paul Capital Strategy III Fund LLC' })).toBe(true);
+    expect(isFundBuyer({ name: 'Healy James', ownership: 'I', via: 'By Sofinnova Venture Partners XI, L.P.' })).toBe(true);
+    expect(isFundBuyer({ name: 'Healy James', ownership: 'I', via: undefined })).toBe(true);
+    expect(isFundBuyer({ name: 'Third Rock Ventures V, L.P.', ownership: 'D' })).toBe(true);
+    expect(isFundBuyer({ name: 'Ignelzi Troy A.', ownership: 'D' })).toBe(false);
+    expect(isFundBuyer({ name: 'Silva Paul M', ownership: undefined })).toBe(false);
   });
 });

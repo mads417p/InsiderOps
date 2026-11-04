@@ -195,6 +195,22 @@ function buyerKeys(rows: InsiderTransaction[]): Map<InsiderTransaction, string> 
 
 const priceLabel = (tx: InsiderTransaction) => (tx.currency && tx.currency !== 'USD' ? `${tx.currency} ` : '$');
 
+// Indirekte, men personlige penge: insiderens egen trust, ægtefælle, børn, IRA/pension (STRZ: "By Revocable Trust").
+// RAPP: "By John M. Maraganore Revocable Trust", "By Paul M Silva 2016 Declaration of Trust U/A DTD 12/19/2016".
+const PERSONAL_VEHICLE_RE =
+  /revocable|living trust|family trust|declaration of trust|\bu\/a\b|\bspouse|\bwife|\bhusband|\bchildren|\bson\b|\bdaughter|\bira\b|401\s*\(?k|\bself\b|\bgrat\b/i;
+
+/**
+ * Fond = en entity, der selv indberetter (Third Rock Ventures V, L.P.), eller indirekte køb via en fond/et selskab
+ * (By Sofinnova Venture Partners XI, L.P.). Indirekte køb via egen trust, ægtefælle eller IRA er personlige.
+ */
+export function isFundBuyer(b: Pick<ClusterBuyer, 'name' | 'ownership' | 'via'>): boolean {
+  if (b.ownership === undefined) return false; // ukendt – tælles hverken som personlig eller fond
+  if (isEntityName(b.name)) return true;
+  if (b.ownership !== 'I') return false; // 'D' eller 'D+I': mindst én personlig linje
+  return !(b.via && PERSONAL_VEHICLE_RE.test(b.via));
+}
+
 /** Én post pr. distinkt køber (samme nøgler som cluster-tællingen). Beløb tælles én gang pr. indberetning. */
 function buildClusterBuyers(rows: InsiderTransaction[], keys: Map<InsiderTransaction, string>): ClusterBuyer[] {
   const byBuyer = new Map<string, InsiderTransaction[]>();
@@ -273,10 +289,8 @@ export function rollUpByTicker(rows: InsiderTransaction[]): InsiderTransaction[]
       );
 
     lead.clusterBuyers = buildClusterBuyers(inWindow, keys);
-    // Personlig = mindst én direkte linje fra en person (ikke en fond, der selv indberetter). Fond = resten med kendt D/I.
-    const isFund = (b: ClusterBuyer) => b.ownership === 'I' || (b.ownership !== undefined && isEntityName(b.name));
-    lead.personalBuyers = lead.clusterBuyers.filter((b) => b.ownership !== undefined && !isFund(b)).length;
-    lead.fundBuyers = lead.clusterBuyers.filter(isFund).length;
+    lead.personalBuyers = lead.clusterBuyers.filter((b) => b.ownership !== undefined && !isFundBuyer(b)).length;
+    lead.fundBuyers = lead.clusterBuyers.filter(isFundBuyer).length;
 
     const bestName = group.find((t) => t.companyName && t.companyName !== t.ticker)?.companyName;
     if (bestName && (!lead.companyName || lead.companyName === lead.ticker)) lead.companyName = bestName;
@@ -312,6 +326,7 @@ export async function annotateForm4Details(rows: InsiderTransaction[]): Promise<
         const xml = await fetchForm4Xml(tx.secFilingUrl);
         if (!xml) return;
         tx.issuerCik ??= xml.match(/<issuerCik>\s*0*(\d+)\s*<\/issuerCik>/i)?.[1];
+        tx.is10b51Plan ??= detect10b51(xml); // OpenInsider viser ikke 10b5-1; XML'en er hentet alligevel
         const lines = parseForm4PurchaseLines(xml);
         if (lines.length === 0) return;
         linesByRow.set(tx, lines);

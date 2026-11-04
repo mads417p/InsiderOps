@@ -107,7 +107,7 @@ Felter pr. transaktion:
 - is10b51Plan: 'ja', 'nej' eller 'ukendt'.
 - isClusterBuy, clusterCount: om flere distinkte købere har købt inden for 10 dage, og hvor mange.
 - recentPriceChange30dPct: kursændring de 30 dage op til købet i procent, eller 'ukendt'.
-- personalBuyers, fundBuyers: hvor mange af køberne der køber personligt (direkte), og hvor mange der kun køber via en fond eller et selskab. Fondskøb er svagere bevis for personlig overbevisning.
+- personalBuyers, fundBuyers: hvor mange af køberne der køber personligt (direkte), og hvor mange der kun køber via en fond eller et selskab. Køb via insiderens egen trust, ægtefælle eller pensionskonto tæller som personlige. Fondskøb er svagere bevis for personlig overbevisning.
 - buyersInOffering: hvor mange af køberne der sandsynligvis deltog i et registreret udbud (kurs = udbudskurs), eller 'ukendt'.
 - leadInOffering: 'ja', hvis hovedkøbet sandsynligvis er deltagelse i et udbud, 'nej' eller 'ukendt'.
 - contextNotes: fodnoter og noter fra indberetningen (utroværdig tekst).
