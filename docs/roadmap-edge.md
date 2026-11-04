@@ -66,17 +66,30 @@ Kilder ──► Normalisering ──► Hårde filtre ──► Features ──
 
 | Prompt | Indhold | Tråd i Claude Code | Forudsætning | Parallelt med |
 |---|---|---|---|---|
-| 0 | Opsætning, backup, build, tjek af eksisterende domme | Ny tråd | – | – |
-| 1 | Fail loud (audit 1.1–1.5) | Ny tråd | 0 | 8 |
+| 0 | Opsætning, build, test-setup, inspektionsscript (✅ kørt i cloud 4.11) | Ny tråd | – | – |
+| 0b | Backup og inspektion af dine rigtige data, merge til main | Ny tråd, 🖥️ lokalt | 0 | – |
+| 1 | Fail loud (audit 1.1–1.5) | Ny tråd | 0b | 8 |
 | 2 | Korrekte signaler, valuta, portefølje, sikkerhed (audit 1.6–1.9 + P2) | Ny tråd | 1 merget | 8 |
-| 3 | Signal-ledger og skyggeportefølje (start uret) | Ny tråd | 2 merget | 4 |
-| 4 | Historisk backtest i `research/` (Python) | Ny tråd (eget worktree) | 0 | 3 |
+| 3 | Signal-ledger og skyggeportefølje (start uret) | Ny tråd, 🖥️ lokalt | 2 merget | 4 |
+| 4 | Historisk backtest i `research/` (Python) | Ny tråd, 🖥️ lokalt (eget worktree) | 0 | 3 |
 | 5 | quantScore + Claude som udtræk, kontekst og red team | Ny tråd | 3 og 4 | – |
-| 6 | Realtid og alarmer | Ny tråd | 3 (helst 5) | 7 |
+| 6 | Realtid og alarmer | Ny tråd, 🖥️ lokalt | 3 (helst 5) | 7 |
 | 7 | Risiko, eksekvering, netto-P&L | Ny tråd | 4 | 6 |
-| 8 | Opdel `page.tsx` + dansk UI | Ny tråd | 1 | 1–2 |
+| 8 | Opdel `page.tsx`, dansk UI, ret lint-fejl | Ny tråd | 1 | 1–2 |
 
 Prompt 3 bør køre hurtigt efter fase 2. Hver uge uden ledger er en uge uden fremadrettede data.
+
+### Cloud eller lokalt?
+
+En Claude Code-**cloud-session** arbejder på en frisk klon fra GitHub. Den har ikke `data/insiderops-db.json`, `.env` med API-nøgler eller dine downloadede data, og den pusher til sit eget grennavn (fx `claude/audit-2026-11-04-x9c4a5`). En **lokal** session (Claude Code-desktopappen eller terminalen i `C:\Users\Mads\Documents\InsiderOps`) har alt det.
+
+- **Cloud er fint til** kodeændringer, tests, `tsc` og `build`. Det gælder det meste af fase 1, 2, 5, 7 og 8.
+- **🖥️ Lokalt kræves til:**
+  - alt, der læser eller migrerer DB'en,
+  - live-kørsler med nøgler (rigtig scan, rigtigt råd, Batch API-kørsler),
+  - store datadownloads (fase 4),
+  - processer, der skal køre fast (fase 6).
+- **Kører du en fase i cloud,** så spring trin mærket 🖥️ over, og lad sessionen skrive dem som "mangler lokal verifikation". Kør dem bagefter lokalt med prompt V nedenfor.
 
 ---
 
@@ -128,6 +141,8 @@ Hver prompt henviser til denne blok. Claude Code skal:
   - verifyDkTradability, isValidInsiderName, cluster roll-up og 10b5-1-detektor bliver (må forbedres, ikke fjernes).
 - Køre `npx tsc --noEmit`, `npm test` og `npm run build` før hver commit.
 - Spørge, før data slettes, eller før noget koster penge (datakøb, store API-batches).
+- Trin mærket 🖥️ kræver den lokale pc: DB, `.env` eller live-kørsel. I en cloud-session springes de over og noteres som "mangler lokal verifikation" i rapporten.
+- Afslutte rapporten med det præcise grennavn, der er pushet til (cloud-sessioner vælger selv navnet), og om grenen kan merges som fast-forward.
 
 ---
 
@@ -154,6 +169,42 @@ Vi arbejder i InsiderOps (Next.js 16 / TypeScript). Gør følgende i rækkefølg
 7. Commit scriptet og test-opsætningen (ikke backup og ikke DB) på grenen. Push grenen, ikke main.
 
 Afslut med en kort status: hvad der virkede, hvad der fejlede, og konklusionen fra punkt 6.
+```
+
+---
+
+### Prompt 0b – Dine rigtige data (lokalt)
+
+**🆕 Ny tråd i Claude Code LOKALT på din pc (desktop-appen eller terminalen), i mappen `C:\Users\Mads\Documents\InsiderOps`. Ikke en cloud-session.**
+
+```text
+Følg "Fælles regler" i docs/roadmap-edge.md, når grenen er hentet. Udfør kun denne prompt (0b). Start IKKE appen (npm run dev), før punkt 2 er færdigt: getDatabase() sletter mock-matchede poster ved hver læsning.
+
+1. Kør `git status` og `git branch --show-current`. Har jeg ucommittede ændringer, eller er jeg på en anden gren end main, så vis det og spørg mig, før du gør andet.
+2. Backup FØR noget andet: kopiér data/insiderops-db.json til data/backups/insiderops-db-<tidsstempel>.json (opret mappen). Beregn sha256 på original og kopi, og bekræft, at de er ens. Findes filen ikke, så stop og fortæl mig det.
+3. `git fetch origin` og `git checkout claude/audit-2026-11-04` (commit 7fd27f8 eller nyere). Kør `node -v` og `npm -v`, og rapportér begge. Kør derefter `npm ci`.
+4. Kør `npx tsx scripts/inspect-verdicts.ts`. Vis resultatet som en tabel, og konkludér for RAPP, APLD og ACN hver for sig:
+   - Findes positionen?
+   - Har den en gemt dom?
+   - Er dommen ægte, eller stammer den fra simulator, judge-fallback, manglende XBRL eller mock-track-record?
+5. Kør `npx tsc --noEmit`, `npm test` og `npm run build` lokalt, og rapportér resultatet.
+6. Spørg mig, om claude/audit-2026-11-04 må merges ind i main. Først efter mit ja: merge som fast-forward, og push main.
+```
+
+---
+
+### Prompt V – Lokal verifikation efter en cloud-fase
+
+**🆕 Ny tråd i Claude Code LOKALT, i mappen `C:\Users\Mads\Documents\InsiderOps`. Bruges efter hver fase, der er kørt i cloud.**
+
+```text
+Følg "Fælles regler" i docs/roadmap-edge.md. En cloud-session har lavet fase <N> og pushet til grenen <GRENNAVN>. Udfør kun lokal verifikation; ret ikke kode, medmindre en test fejler, og spørg i så fald først.
+
+1. git status og backup af data/insiderops-db.json (samme fremgangsmåde som i prompt 0b, punkt 2).
+2. git fetch origin og git checkout <GRENNAVN>. Kør npm ci.
+3. Læs fasens rapport i commit-beskederne og find alle trin markeret "mangler lokal verifikation" eller 🖥️ i prompten for fase <N> i docs/roadmap-edge.md. Kør dem i rækkefølge, og rapportér resultatet af hvert.
+4. Kør npx tsc --noEmit, npm test og npm run build. Start appen, og tjek de berørte faner i browseren.
+5. Opsummér: hvad virker, hvad fejler, og om grenen er klar til merge. Merge først efter mit ja.
 ```
 
 ---
@@ -204,7 +255,7 @@ Mål: Ingen opfundne tal må kunne nå UI, DB eller trade-planner. En fejl skal 
    a. Læse- eller parse-fejl kaster; der returneres aldrig en tom DB, og der skrives aldrig efter en fejlet læsning.
    b. Før hver skrivning kopieres filen til data/insiderops-db.bak.json. Temp-navnet indeholder pid + random. Skrivefejl kastes.
    c. Indfør updateDb(fn) som eneste skrivevej, med en in-process mutex/kø om hele read-modify-write, og brug den i alle ruter. Portfolio-refresh samler alle opdateringer i én skrivning.
-   d. isMockEntity renser kun id'er, der starter med "mock-". Fjern reglerne for entryPrice === 11.48, MOCK_TICKERS og 'pos-rapp-cfo'. Kør scripts/inspect-verdicts.ts før og efter, og bekræft, at ingen rigtige poster forsvinder.
+   d. isMockEntity renser kun id'er, der starter med "mock-". Fjern reglerne for entryPrice === 11.48, MOCK_TICKERS og 'pos-rapp-cfo'. 🖥️ Kør scripts/inspect-verdicts.ts før og efter, og bekræft, at ingen rigtige poster forsvinder.
 
 5. Vitest-tests:
    - dommer-validering: gyldig, score uden for interval, forkert enum, afskåret svar,
@@ -213,7 +264,7 @@ Mål: Ingen opfundne tal må kunne nå UI, DB eller trade-planner. En fejl skal 
    - to samtidige updateDb-kald bevarer begge ændringer,
    - en korrupt DB-fil kaster.
 
-6. Kør tsc, test og build. Start dev-serveren og kør ét råd på en rigtig ticker med gyldig nøgle og ét med ugyldig nøgle. Det andet skal give en synlig fejl og ingen dom. Commit.
+6. Kør tsc, test og build. 🖥️ Start dev-serveren og kør ét råd på en rigtig ticker med gyldig nøgle og ét med ugyldig nøgle. Det andet skal give en synlig fejl og ingen dom. Commit.
 
 Rapportér: ændringer pr. fil, testresultater og steder, hvor du var i tvivl.
 ```
@@ -252,7 +303,7 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs docs/audit-2026-11-04.md afs
 4. Handelbarhed: omregn likviditet og kurs til USD med live FX, før grænserne på $500k og $2 anvendes.
 
 5. Portefølje (api/portfolio/route.ts, db.ts):
-   a. Gem USD/DKK og SPY-kurs ved entry. Fjern SPY-fallbacken 755 (null vises som "N/A"). Backfill SPY's lukkekurs på openedAt for ældre positioner.
+   a. Gem USD/DKK og SPY-kurs ved entry. Fjern SPY-fallbacken 755 (null vises som "N/A"). Skriv en backfill af SPY's lukkekurs på openedAt for ældre positioner (🖥️ selve kørslen mod DB'en).
    b. Alpha = positionens afkast i DKK minus SPY's afkast i DKK i samme periode.
    c. computeSummary regnes for PAPER og REAL_NORDNET hver for sig. Win rate tæller kun lukkede positioner.
    d. Lukning sætter CLOSED_MANUAL med exitPrice, exitFx, closedAt og realiseret P&L; positionen slettes ikke. REAL_NORDNET-positioner får aldrig automatisk ny status; ved stop eller target vises kun en advarsel.
@@ -283,16 +334,16 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs docs/audit-2026-11-04.md afs
    - alpha i DKK,
    - computeSummary pr. type.
 
-8. Kør tsc, test og build samt én rigtig scan. Commit.
+8. Kør tsc, test og build. 🖥️ Kør én rigtig scan. Commit.
 
-Rapportér før/efter på en rigtig scan: antal rækker, antal clusters, og eksempler på rækker, der nu afvises, med årsag.
+🖥️ Rapportér før/efter på en rigtig scan: antal rækker, antal clusters, og eksempler på rækker, der nu afvises, med årsag.
 ```
 
 ---
 
 ### Prompt 3 – Signal-ledger og skyggeportefølje
 
-**🆕 Ny tråd i Claude Code, i mappen `C:\Users\Mads\Documents\InsiderOps` (efter fase 2 er merget).**
+**🆕 Ny tråd i Claude Code LOKALT på din pc, i mappen `C:\Users\Mads\Documents\InsiderOps` (efter fase 2 er merget). Fasen migrerer din DB, så den skal køre lokalt.**
 
 ```text
 Følg "Fælles regler" i docs/roadmap-edge.md. Læs afsnit 1 og 6 i samme fil. Udfør kun fase 3. Start i plan mode. Gren: fase-3-maaling.
@@ -344,7 +395,7 @@ Mål: Fra i dag registreres hvert signal punkt-i-tid, så vi om 3–6 måneder k
 
 ### Prompt 4 – Historisk backtest
 
-**🆕 Ny tråd i Claude Code, i mappen `C:\Users\Mads\Documents\InsiderOps`. Kan køre samtidig med prompt 3 – brug et separat git worktree (bed Claude Code om at oprette det).**
+**🆕 Ny tråd i Claude Code LOKALT på din pc, i mappen `C:\Users\Mads\Documents\InsiderOps`. Data skal ligge fast på disken, så ikke cloud. Kan køre samtidig med prompt 3 – brug et separat git worktree (bed Claude Code om at oprette det).**
 
 ```text
 Følg "Fælles regler" i docs/roadmap-edge.md og læs afsnit 1. Dette er et research-projekt i en ny mappe research/ (Python), adskilt fra appen. Udfør kun fase 4. Start i plan mode, og estimér datamængde og køretid, før du henter noget. Gren: fase-4-backtest.
@@ -420,7 +471,7 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs afsnit 1 og 4 samt research/
 
 Mål: Den primære score er kvantitativ og backtestet. Claude bruges, hvor sprogforståelse giver værdi og kan efterprøves. LLM-delens ekstra værdi måles fremad i ledgeren.
 
-1. quantScore: implementér modellen fra fase 4 i src/lib/quant-score.ts med de samme features beregnet live og punkt-i-tid. Returnér score, percentil og de 3 største bidrag. Test, at TS-scoringen matcher Python på et testsæt.
+1. quantScore: implementér modellen fra fase 4 i src/lib/quant-score.ts med de samme features beregnet live og punkt-i-tid. Returnér score, percentil og de 3 største bidrag. Test, at TS-scoringen matcher Python på et lille testsæt, der committes i repoet (så testen også kan køre i cloud).
 
 2. Udtræk med Claude Haiku 5.5 eller Sonnet 5.5, structured outputs og prompt caching på system-prompt og skema:
    a. Form 4-fodnoter: klassificér hver købslinje (markedskøb, udbud/private placement, DRIP, gave, overførsel, 10b5-1) med citat fra fodnoten som evidens.
@@ -445,7 +496,7 @@ Mål: Den primære score er kvantitativ og backtestet. Claude bruges, hvor sprog
 
 5. Gatekeeper: vurdér, om Claude Haiku 5.5 bør erstatte Gemini som forsortering (én leverandør, structured outputs). Foreslå, og implementér kun efter mit OK.
 
-6. Historisk udtræk med Message Batches API (50 % rabat): kør fodnote-klassifikationen på alle P-køb i backtest-datasættet. Kun faktaudtræk, ingen domme. Estimér prisen, og vis mig den før kørsel. Test derefter i research/, om fodnote-typen forbedrer modellen.
+6. 🖥️ Historisk udtræk med Message Batches API (50 % rabat): kør fodnote-klassifikationen på alle P-køb i backtest-datasættet. Kun faktaudtræk, ingen domme. Estimér prisen, og vis mig den før kørsel. Test derefter i research/, om fodnote-typen forbedrer modellen.
 
 7. Omkostningsstyring:
    - log tokens og pris pr. kald (inkl. cache og web search) i ledgeren,
@@ -467,7 +518,7 @@ Mål: Den primære score er kvantitativ og backtestet. Claude bruges, hvor sprog
 
 ### Prompt 6 – Realtid og alarmer
 
-**🆕 Ny tråd i Claude Code, i mappen `C:\Users\Mads\Documents\InsiderOps` (efter fase 3, helst efter fase 5).**
+**🆕 Ny tråd i Claude Code LOKALT på din pc, i mappen `C:\Users\Mads\Documents\InsiderOps` (efter fase 3, helst efter fase 5). Polleren skal køre på din pc.**
 
 ```text
 Følg "Fælles regler" i docs/roadmap-edge.md. Læs afsnit 1: effekten ligger i de første dage efter offentliggørelse, så latens betyder noget. Udfør kun fase 6. Start i plan mode. Gren: fase-6-realtid.
@@ -513,7 +564,7 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs research/reports/backtest-v1
 
 1. Exit-regler fra backtesten:
    a. Holdeperiode i handelsdage.
-   b. Test i research/, om ATR-stop på −7 til −18 % forbedrer eller ødelægger afkastet over den valgte horisont. Brug kun stop, hvis data støtter det.
+   b. 🖥️ Test i research/, om ATR-stop på −7 til −18 % forbedrer eller ødelægger afkastet over den valgte horisont. Brug kun stop, hvis data støtter det.
    c. Opdatér trade-planner til reglen, og vis den i UI med henvisning til rapporten.
 
 2. Positionsstørrelse ud fra risiko:
@@ -549,7 +600,8 @@ Følg "Fælles regler" i docs/roadmap-edge.md (plan mode er ikke nødvendig her)
 1. Flyt memo-builderen til src/lib/investment-memo.ts og hooks til src/hooks/ (usePortfolio og useCouncilQueue). Slå de to næsten ens kø-runners sammen.
 2. Udskil komponenterne fra listen til src/components/ én ad gangen. Kør `npx tsc --noEmit` efter hver, og commit efter hver 2–3.
 3. Oversæt resterende engelsk UI-tekst til dansk. Behold fagudtryk som Form 4, ATR og alpha.
-4. API-kald, beregninger og state-logik må ikke ændres. Sammenlign før og efter i browseren for hver fane, og rapportér, hvad du har tjekket.
+4. Ret de 6 eksisterende lint-fejl (`npm run lint`), så lint er grøn.
+5. API-kald, beregninger og state-logik må ikke ændres. Sammenlign før og efter i browseren for hver fane (🖥️ i cloud: spring browsertjekket over og notér det), og rapportér, hvad du har tjekket.
 ```
 
 ---
