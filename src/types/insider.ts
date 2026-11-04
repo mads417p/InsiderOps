@@ -221,10 +221,27 @@ export type AsymmetrySignal = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';
 export interface GatekeeperResult {
   passedHardFilter: boolean;
   hardFilterReason?: string;
-  geminiPreScore: number; // 0-100
-  scoreSource: 'gemini' | 'heuristik'; // heuristiske scorer må ikke starte auto-køen
+  // ponytail: historisk navn – feltet holder gatekeeper-scoren (0-100) fra alle providers (gemte scans bruger det)
+  geminiPreScore: number;
+  scoreSource: 'claude' | 'gemini' | 'heuristik'; // heuristiske scorer må ikke starte auto-køen (se isModelScore)
   asymmetrySignal: AsymmetrySignal;
   quickReasoning: string;
+  usedFields?: string[]; // de payload-felter, modellen angav at have brugt (kun Claude)
+}
+
+/** Tokens og pris for gatekeeper-kaldene i én scan. */
+export interface GatekeeperUsage {
+  provider: 'claude' | 'gemini' | 'heuristik';
+  model?: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+  costUsd?: number; // undefined = pris ukendt for modellen
+  truncatedChunks: number; // svar afskåret (stop_reason max_tokens / MAX_TOKENS)
+  failedChunks: number; // chunks, hvor kaldet eller valideringen fejlede → heuristik
+  heuristicCount: number; // kandidater, der endte med heuristisk score
 }
 
 export interface CouncilReports {

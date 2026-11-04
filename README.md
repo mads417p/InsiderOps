@@ -186,14 +186,19 @@ npm install
 ### 3. Konfigurer Miljøvariable
 Opret en `.env.local` fil i roden af projektet:
 ```env
-# Google Gemini API Nøgle (Pre-Filter & Batch Gatekeeper)
+# Anthropic API Nøgle (Gatekeeper + The Council of Experts)
+ANTHROPIC_API_KEY=din_anthropic_api_key_her
+CLAUDE_GATEKEEPER_MODEL=claude-haiku-5-5   # valgfri; standard
+CLAUDE_SPECIALIST_MODEL=claude-sonnet-5-5  # valgfri; standard
+CLAUDE_JUDGE_MODEL=claude-opus-5-5         # valgfri; standard
+
+# Google Gemini API Nøgle (nordisk MAR 19-udtræk; gatekeeper kun med GATEKEEPER_PROVIDER=gemini)
 GEMINI_API_KEY=din_gemini_api_key_her
 GEMINI_FAST_MODEL=gemini-3-flash-preview
+# GATEKEEPER_PROVIDER=gemini
 
-# Anthropic API Nøgle (The Council of Experts)
-ANTHROPIC_API_KEY=din_anthropic_api_key_her
-ANTHROPIC_SONNET_MODEL=claude-3-5-sonnet-latest
-ANTHROPIC_OPUS_MODEL=claude-3-opus-latest
+# Påkrævet af SEC (navn + mail)
+SEC_USER_AGENT="InsiderOps din@mail.dk"
 ```
 
 ### 4. Start Udviklingsserveren (1-Klik Launcher eller CLI)

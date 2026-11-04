@@ -38,12 +38,14 @@ import {
 import {
   CouncilVerdict,
   GatekeeperResult,
+  GatekeeperUsage,
   InsiderTransaction,
   PaperTradePosition,
   PortfolioSummary,
   TradeType,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
+import { isModelScore } from '@/lib/ui-labels';
 import { currencyForTicker, type LiveFxRates } from '@/lib/live-quote';
 import { formatCompactUsd } from '@/lib/fundamentals';
 
@@ -65,9 +67,12 @@ interface ScanResponse {
   apiKeysConfigured: {
     gemini: boolean;
     anthropic: boolean;
+    gatekeeperProvider?: 'claude' | 'gemini';
+    gatekeeperModel?: string;
   };
   count: number;
   items: ScanItem[];
+  gatekeeperUsage?: GatekeeperUsage | null;
   scannedAt?: string;
   stale?: boolean; // true = live-hentning fejlede, items er den seneste gemte scan
   errors?: Array<{ source: string; error: string }>;
@@ -153,10 +158,11 @@ export default function Dashboard() {
   const [items, setItems] = useState<ScanItem[]>([]);
   // Rækker afvist allerede i scan-pipelinen (kode, beløb, handelbarhed, Norden) – de er ikke i items.
   const [scanRejectedCount, setScanRejectedCount] = useState<number>(0);
-  const [apiKeys, setApiKeys] = useState<{ gemini: boolean; anthropic: boolean }>({
+  const [apiKeys, setApiKeys] = useState<ScanResponse['apiKeysConfigured']>({
     gemini: false,
     anthropic: false,
   });
+  const [gatekeeperUsage, setGatekeeperUsage] = useState<GatekeeperUsage | null>(null);
 
   // Paper-Trading Portfolio State
   const [paperPortfolio, setPaperPortfolio] = useState<Record<string, PaperTradePosition>>({});
@@ -502,6 +508,7 @@ ${verdict.judgeThinking}
         setItems(data.items || []);
         setScanRejectedCount(data.stale ? 0 : data.rejectedCount ?? 0);
         setApiKeys(data.apiKeysConfigured || { gemini: false, anthropic: false });
+        setGatekeeperUsage(data.gatekeeperUsage ?? null);
 
         // Fejl og forældede data vises som det, de er – aldrig som "ingen signaler".
         const notes: string[] = [];
@@ -824,11 +831,11 @@ ${verdict.judgeThinking}
   };
 
   // 1. Uvurderede HIGH signaler (asymmetrySignal === 'HIGH' eller score >= 75 uden rådsdom).
-  //    Kun Gemini-scorer – en heuristisk score må ikke starte auto-køen.
+  //    Kun model-scorer (Claude/Gemini) – en heuristisk score må ikke starte auto-køen.
   const unjudgedHighItems = items.filter(
     (item) =>
       item.result.passedHardFilter &&
-      item.result.scoreSource === 'gemini' &&
+      isModelScore(item.result) &&
       (item.result.asymmetrySignal === 'HIGH' || item.result.geminiPreScore >= 75) &&
       !verdictHistory[item.transaction.id]
   );
@@ -1151,10 +1158,24 @@ ${verdict.judgeThinking}
             <div className="flex items-center gap-2 text-[11px] font-mono">
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-slate-800">
                 <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-slate-400">GEMINI FLASH:</span>
-                <span className={apiKeys.gemini ? 'text-emerald-400' : 'text-amber-400'}>
-                  {apiKeys.gemini ? 'NØGLE SAT' : 'INGEN NØGLE · HEURISTIK'}
-                </span>
+                <span className="text-slate-400">GATEKEEPER{apiKeys.gatekeeperModel ? ` (${apiKeys.gatekeeperModel})` : ''}:</span>
+                {(() => {
+                  const keySet = apiKeys.gatekeeperProvider === 'gemini' ? apiKeys.gemini : apiKeys.anthropic;
+                  return (
+                    <span className={keySet ? 'text-emerald-400' : 'text-amber-400'}>
+                      {keySet ? 'NØGLE SAT' : 'INGEN NØGLE · HEURISTIK'}
+                    </span>
+                  );
+                })()}
+                {gatekeeperUsage && gatekeeperUsage.calls > 0 && (
+                  <span
+                    className="text-slate-500"
+                    title={`${gatekeeperUsage.inputTokens} input · ${gatekeeperUsage.cacheCreationInputTokens} cache-skriv · ${gatekeeperUsage.cacheReadInputTokens} cache-læs · ${gatekeeperUsage.outputTokens} output tokens · ${gatekeeperUsage.heuristicCount} heuristik · ${gatekeeperUsage.truncatedChunks} afskåret`}
+                  >
+                    · {gatekeeperUsage.calls} kald ·{' '}
+                    {gatekeeperUsage.costUsd !== undefined ? `$${gatekeeperUsage.costUsd.toFixed(4)}` : 'pris ukendt'}
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-slate-800">
@@ -1877,7 +1898,7 @@ ${verdict.judgeThinking}
                           <span>
                             {activeTickerQuery
                               ? `Slår CIK op og henter Form 4 filings for ${activeTickerQuery}...`
-                              : 'Scanner SEC Form 4 filings og afvikler Gemini Gatekeeper...'}
+                              : 'Scanner SEC Form 4 filings og afvikler Gatekeeper...'}
                           </span>
                         </div>
                       </td>
@@ -2290,7 +2311,7 @@ ${verdict.judgeThinking}
                             )}
                           </td>
 
-                          {/* Gemini Gatekeeper Pre-Score & Saved Council Verdict */}
+                          {/* Gatekeeper Pre-Score & Saved Council Verdict */}
                           <td className="py-3 px-3 max-w-[280px]">
                             {res.passedHardFilter ? (
                               <div>
@@ -2305,8 +2326,8 @@ ${verdict.judgeThinking}
                                     }`}
                                   >
                                     Score: {res.geminiPreScore}/100
-                                    {res.scoreSource !== 'gemini' && (
-                                      <span className="ml-1 font-normal opacity-75" title="Heuristisk score (Gemini svarede ikke) – starter ikke auto-køen">
+                                    {!isModelScore(res) && (
+                                      <span className="ml-1 font-normal opacity-75" title="Heuristisk score (gatekeeper-modellen svarede ikke) – starter ikke auto-køen">
                                         · heuristik
                                       </span>
                                     )}
@@ -3230,7 +3251,7 @@ ${verdict.judgeThinking}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 font-mono">
-                  Gemini Flash Gatekeeper • Sonnet Specialister • Opus / Sonnet CIO
+                  Claude Haiku Gatekeeper • Sonnet Specialister • Opus / Sonnet CIO
                 </p>
               </div>
             </div>

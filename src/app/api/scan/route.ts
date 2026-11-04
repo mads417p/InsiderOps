@@ -9,10 +9,11 @@ import {
 } from '@/lib/sec-scanner';
 import { fetchNordicInsiderTransactions } from '@/lib/nordic-scanner';
 import { evaluateBatchWithGatekeeper } from '@/lib/gemini-gatekeeper';
+import { anthropicKeyConfigured, gatekeeperModelLabel, gatekeeperProvider } from '@/lib/claude-gatekeeper';
 import { enrichTransactionWithMarketData } from '@/lib/market-enricher';
 import { saveScan, getLatestScan } from '@/lib/db';
 import { parseJson, scanPostSchema } from '@/lib/api-schemas';
-import { GatekeeperResult, InsiderTransaction } from '@/types/insider';
+import { GatekeeperResult, GatekeeperUsage, InsiderTransaction } from '@/types/insider';
 
 export async function POST(request: Request) {
   try {
@@ -115,9 +116,17 @@ export async function GET(request: Request) {
     let items: Array<{ transaction: InsiderTransaction; result: GatekeeperResult }> = [];
     let scannedAt = new Date().toISOString();
     let stale = false;
+    let gatekeeperUsage: GatekeeperUsage | null = null;
 
     if (transactions.length > 0) {
-      const evaluations = await evaluateBatchWithGatekeeper(transactions);
+      const { evaluations, usage } = await evaluateBatchWithGatekeeper(transactions);
+      gatekeeperUsage = usage;
+      console.log(
+        `Gatekeeper (${usage.provider}${usage.model ? `, ${usage.model}` : ''}): ${evaluations.length} rækker, ${usage.calls} kald, ` +
+          `${usage.inputTokens} input / ${usage.outputTokens} output / ${usage.cacheCreationInputTokens} cache-skriv / ${usage.cacheReadInputTokens} cache-læs tokens, ` +
+          `pris ${usage.costUsd !== undefined ? `$${usage.costUsd.toFixed(4)}` : 'ukendt'}, ${usage.heuristicCount} heuristik, ` +
+          `${usage.truncatedChunks} afskåret, ${usage.failedChunks} fejlede chunks`
+      );
       // Godkendte og handelbare øverst, derefter højeste geminiPreScore.
       items = [...evaluations].sort((a, b) => {
         const aPassed = a.result.passedHardFilter && a.transaction.isTradableInDK !== false;
@@ -137,16 +146,11 @@ export async function GET(request: Request) {
     }
 
     const geminiKey = process.env.GEMINI_API_KEY;
-    const anthropicKey = process.env.ANTHROPIC_API_KEY;
-
     const apiKeysConfigured = {
       gemini: Boolean(geminiKey && geminiKey.trim() !== '' && !geminiKey.includes('your-')),
-      anthropic: Boolean(
-        anthropicKey &&
-          anthropicKey.trim() !== '' &&
-          !anthropicKey.includes('your-') &&
-          anthropicKey !== 'placeholder'
-      ),
+      anthropic: anthropicKeyConfigured(),
+      gatekeeperProvider: gatekeeperProvider(),
+      gatekeeperModel: gatekeeperModelLabel(),
     };
 
     return NextResponse.json({
@@ -159,6 +163,7 @@ export async function GET(request: Request) {
       errors,
       count: items.length,
       items,
+      gatekeeperUsage,
       rejectedCount: rejected.length,
       rejected,
     });

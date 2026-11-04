@@ -9,6 +9,7 @@ import {
 import { formatCompactUsd } from '@/lib/fundamentals';
 import { currencyForTicker } from '@/lib/live-quote';
 import { UNTRUSTED_DATA_INSTRUCTION, untrusted } from '@/lib/prompt-safety';
+import { gatekeeperModelLabel } from '@/lib/claude-gatekeeper';
 
 /** Bump ved enhver ændring af prompts eller skema, så domme kan spores til den prompt, der lavede dem. */
 export const PROMPT_VERSION = 'fase1-2026-11-04';
@@ -390,7 +391,7 @@ Afsig din endelige CIO-dom.`;
     timestamp: new Date().toISOString(),
     judgeThinking: judgeThinking || undefined,
     modelsUsed: {
-      gatekeeper: process.env.GEMINI_FAST_MODEL || 'Gemini 3 Flash Preview',
+      gatekeeper: gatekeeperModelLabel(),
       specialists: specialistModel,
       judge: judgeModel,
       judgeTier,
