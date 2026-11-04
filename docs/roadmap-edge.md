@@ -335,6 +335,19 @@ Følg "Fælles regler" i docs/roadmap-edge.md. Læs docs/audit-2026-11-04.md afs
       - hentes over https og højst én gang pr. scan,
       - fejl vises som fejl, ikke som "ingen signaler",
       - scan-svaret har tidsstempel og flaget stale.
+   g. DB-skrivning på Windows:
+      - Ved EPERM, EBUSY eller EACCES prøves rename igen med kort backoff (fx 10 forsøg over ca. 2 sek.), som graceful-fs gør. Fejl kastes først derefter.
+      - De 20 gamle `insiderops-db.json.tmp.*`-filer fra 27.10–1.11 skyldes sandsynligvis den slags rename-fejl.
+   h. Gemini-batchen:
+      - Svaret bliver i dag afskåret ("Unterminated string"), så alle scorer falder tilbage på heuristik, og auto-køen aldrig starter.
+      - Brug JSON-mode med responseSchema, færre tickers pr. kald (fx 5) og højere maxOutputTokens.
+      - Afskårne svar skal logges som fejl.
+   i. SEC companyfacts (fx ACN, 6 MB) er for store til Next' fetch-cache. Hent med cache: 'no-store', og cache i egen in-memory-/diskcache med TTL.
+   j. Portfolio-POST: fjern standardscoren 85. Mangler scoren, afvises kaldet.
+   k. Track record:
+      - "Ingen tabel fundet / parse-fejl" giver UNKNOWN.
+      - Kun "siden læst korrekt og 0 P-køb" giver FIRST_TIME_OR_RARE.
+   l. Gæld: tilføj en test, der sikrer, at ConvertibleNotesPayable og NotesAndLoansPayable ikke dobbelttælles med LongTermDebt.
 
 7. Vitest-tests:
    - cluster-scenarierne fra auditten (to direktører samme dato og antal; én person fra to kilder; et salg i samme ticker; 30 dages mellemrum),
