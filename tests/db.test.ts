@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getDatabase, isMockEntity, updateDb, type SavedVerdictItem } from '@/lib/db';
+import { getDatabase, isMockEntity, resetAppData, updateDb, type SavedVerdictItem } from '@/lib/db';
 
 let dir: string;
 const file = () => path.join(dir, 'data', 'insiderops-db.json');
@@ -98,5 +98,33 @@ describe('db.ts', () => {
     expect(isMockEntity('mock-cfo-cluster-buy')).toBe(true);
     expect(isMockEntity('pos-rapp-cfo')).toBe(false);
     expect(isMockEntity('exec-buy-RAPP-2026-10-21-5500-143550')).toBe(false);
+  });
+});
+
+describe('resetAppData', () => {
+  it('sletter domme og paper-positioner, bevarer scans og Nordnet-handler, og tager backup først', async () => {
+    const before = JSON.stringify({
+      verdicts: { a: item('a'), b: item('b') },
+      scanHistory: { unified: { source: 'unified', scannedAt: 't', items: [] } },
+      paperPortfolio: {
+        p1: { id: 'p1', tradeType: 'PAPER' },
+        p2: { id: 'p2' }, // ældre position uden tradeType = paper
+        r1: { id: 'r1', tradeType: 'REAL_NORDNET' },
+      },
+      fxRates: { USD: 6.66 },
+      portfolioRefreshedAt: '2026-11-05T17:18:00Z',
+    });
+    seed(before);
+
+    const res = await resetAppData();
+
+    expect(res).toMatchObject({ verdicts: 2, positions: 2 });
+    expect(fs.readFileSync(res.backup!, 'utf-8')).toBe(before);
+    const after = JSON.parse(fs.readFileSync(file(), 'utf-8'));
+    expect(after.verdicts).toEqual({});
+    expect(Object.keys(after.paperPortfolio)).toEqual(['r1']);
+    expect(Object.keys(after.scanHistory)).toEqual(['unified']);
+    expect(after.fxRates).toBeUndefined();
+    expect(after.portfolioRefreshedAt).toBeUndefined();
   });
 });

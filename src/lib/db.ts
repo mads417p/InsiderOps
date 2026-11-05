@@ -222,3 +222,31 @@ export function deletePaperTrade(id: string): Promise<boolean> {
     return existed;
   });
 }
+
+/**
+ * "Nulstil data": sletter alle domme og alle paper-positioner samt gemte valutakurser og opdateringstidspunkt.
+ * Bevares: gemte scans, rigtige Nordnet-positioner (tradeType REAL_NORDNET) og signal-ledgeren (insiderops.db,
+ * præregistreret og append-only). Den nuværende fil kopieres først til data/backups/, så det kan fortrydes.
+ */
+export function resetAppData(): Promise<{ backup: string | null; verdicts: number; positions: number }> {
+  return updateDb(async (db) => {
+    let backup: string | null = null;
+    try {
+      const dir = path.join(process.cwd(), 'data', 'backups');
+      await fs.promises.mkdir(dir, { recursive: true });
+      backup = path.join(dir, `insiderops-db-${new Date().toISOString().replace(/[:.]/g, '-')}-pre-reset.json`);
+      await fs.promises.copyFile(dbFile(), backup);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; // ingen DB-fil endnu → intet at tage backup af
+      backup = null;
+    }
+    const verdicts = Object.keys(db.verdicts).length;
+    const kept = Object.fromEntries(Object.entries(db.paperPortfolio).filter(([, p]) => p.tradeType === 'REAL_NORDNET'));
+    const positions = Object.keys(db.paperPortfolio).length - Object.keys(kept).length;
+    db.verdicts = {};
+    db.paperPortfolio = kept;
+    delete db.fxRates;
+    delete db.portfolioRefreshedAt;
+    return { backup, verdicts, positions };
+  });
+}

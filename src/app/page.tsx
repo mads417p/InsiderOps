@@ -27,6 +27,7 @@ import { TradePlanCard } from '@/components/TradePlanCard';
 import { MeasurementTab } from '@/components/MeasurementTab';
 import { PortfolioTab } from '@/components/PortfolioTab';
 import { VerdictsTab } from '@/components/VerdictsTab';
+import { ResetButton } from '@/components/ResetButton';
 import { ClusterBuyers } from '@/components/ClusterBuyers';
 import { FundamentalsCard } from '@/components/FundamentalsCard';
 import { TrackRecordCard } from '@/components/TrackRecordCard';
@@ -151,6 +152,24 @@ export default function Dashboard() {
 
   const memoCtx = { maxCapitalDkk, fxRates, planOpts };
   const generateInvestmentMemoMarkdown = (tx: InsiderTransaction, verdict: CouncilVerdict) => buildMemo(tx, verdict, memoCtx);
+
+  // "Nulstil data": serveren tager backup og sletter domme og paper-positioner. Browserens cache af domme og
+  // indstillinger ryddes, og siden genindlæses, så al state starter forfra.
+  const handleResetData = async () => {
+    const res = await fetch('/api/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: 'NULSTIL' }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+    try {
+      [STORAGE_KEY, CAPITAL_STORAGE_KEY, TRANCHES_STORAGE_KEY].forEach((k) => localStorage.removeItem(k));
+    } catch {
+      // ignore
+    }
+    window.location.reload();
+  };
 
   const handleCopyMemo = () => {
     if (!selectedTx || !activeVerdict) return;
@@ -891,6 +910,9 @@ export default function Dashboard() {
           </p>
           <p>Claude Sonnet + Opus: {apiKeys.anthropic ? 'nøgle sat' : 'ingen nøgle – rådet fejler'}</p>
           <p>Samlet scanner: USA (SEC) + direktion + Norden (MAR 19)</p>
+          <div className="mt-3">
+            <ResetButton onReset={handleResetData} />
+          </div>
         </>
       }
       caseOpen={!!selectedTx}
