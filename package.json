@@ -8,7 +8,8 @@
     "start": "next start -H 127.0.0.1",
     "lint": "eslint",
     "test": "vitest run",
-    "outcomes": "tsx scripts/compute-outcomes.ts --write"
+    "outcomes": "tsx scripts/compute-outcomes.ts --write",
+    "scan": "tsx scripts/scan.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
