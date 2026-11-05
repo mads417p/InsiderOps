@@ -129,4 +129,46 @@ Skiftes gatekeeper-model eller -prompt, behandles signaler efter skiftet som en 
 
 ## Vurderinger
 
-_(Ingen endnu.)_
+### 5.11.2026 – Spredning målt i historisk backtest (fase 4; note, ingen regel ændret)
+
+**Kilde:** `research/reports/backtest-v1.md` (commit 22c105a), in-sample 2006–2024.
+
+**Data:** 34.842 enheder (ticker, entry-dag) i 992 ISO-uger.
+
+**Regler som ovenfor:**
+- entry ved første ordinære åbning ≥ EDGAR-accepttid + 10 min;
+- costs.json v3;
+- AR i DKK mod SPY.
+
+**Population:** kode P, ikke-derivat, ≥ $50k pr. Form 4, ujusteret kurs ≥ $2, ADV ≥ $500k (punkt-i-tid), NASDAQ/NYSE/NYSE American/Cboe, ikke fonde/trusts og ikke 10b5-1.
+
+**Forskelle fra ledgeren:**
+- ingen Claude-score og intet 72-timers-krav (ankeret er accepttiden);
+- kun selskaber, Yahoo har kurser for i dag (38,7 % af kandidaterne mangler kursdata, 59 % i 2006 og 8,5 % i 2024).
+
+**Resultater (5-dages netto AR mod SPY):**
+- **SD pr. enhed:** 7,66 % (afsnit 10 antog 7 %). For 2018–2024 er den 8,69 %, og efter winsorisering ved 1/99 % (kun til orientering) 6,48 %.
+- **Gennemsnit og usikkerhed:** −0,34 % netto (+0,56 % brutto). Uge-klynget SE er 0,133 %, og 95 %-intervallet er [−0,60 %; −0,08 %].
+- **Uge-klyngning:**
+  - Korrelationen inden for ugen er ρ = 0,154, så designeffekten er cirka 1 + (m − 1) · 0,154 ved m enheder pr. uge.
+  - I backtesten (35 enheder/uge) er designeffekten 10,4, og den uge-klyngede SE er 3,2 gange så stor som ved uafhængige enheder.
+  - Ved 10 enheder/uge er designeffekten 2,4.
+
+**N for en ensidet nedre grænse over 0,** når den sande effekt er δ. Første tal er prereg-logikken fra afsnit 10 (50 % styrke), andet tal er 80 % styrke. Designeffekten er sat til 10 enheder/uge:
+
+| δ (netto 5 d) | Ensidet 95 % | Ensidet 99 % |
+|---|---|---|
+| 0,5 % | 1.519 / 3.469 | 3.037 / 5.632 |
+| 1,0 % | 380 / 868 | 760 / 1.408 |
+| 1,5 % | 169 / 386 | 338 / 626 |
+
+Uden klyngning (designeffekt 1, 50 % styrke) er N 636 / 1.271 ved 0,5 %, 159 / 318 ved 1,0 % og 71 / 142 ved 1,5 % (95 % / 99 %).
+
+**Hvad det betyder for go-live-reglen (150 enheder):**
+- Ved 10 enheder/uge kræver den endelige vurdering (95 %) et netto-gennemsnit på ca. 1,645 × 7,66 % × √(2,4/150) ≈ **1,6 %**. Interim-vurderingerne (99 %) kræver ca. **2,25 %**. Uden klyngning er tallene 1,0 % og 1,5 %; afsnit 10 regnede med 0,9 % og 1,3 %.
+- Backtestens basisstrategi ligger langt under det:
+  - netto −0,34 % efter 5 dage;
+  - en faldende trend på −0,075 procentpoint pr. år;
+  - ca. −0,9 % netto i 2023–2024.
+- **Basisstrategien 2006–2024** (5 d mod SPY): brutto +0,56 %, netto −0,34 %, aftagende med ca. 0,075 procentpoint om året (2023–2024 netto ca. −0,9 %). Forventningen til H1 er derfor negativ.
+- Reglerne ændres ikke.
