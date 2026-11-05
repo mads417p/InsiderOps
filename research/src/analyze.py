@@ -371,11 +371,9 @@ def model_section(u: pd.DataFrame) -> tuple[str, bool, dict]:
     return '\n'.join(lines), passed, {'best_baseline': best, 'variants': res, 'alpha': alpha}
 
 
-def live_features_section(u: pd.DataFrame) -> str:
-    """Features med samme fortegn i begge halvdele af in-sample-perioden og et interval uden 0 i hele perioden (univariat, spand mod resten)."""
-    d = u[u.net_5.notna()].copy()
-    d['first_half'] = d.year < 2016
-    flags = {
+def feature_flags(d: pd.DataFrame) -> dict[str, pd.Series]:
+    """De binære features fra afsnit 12 (samme definitioner bruges i holdout)."""
+    return {
         'opportunistisk køb (CMP)': d.cmp == 'opportunistisk', 'rutinekøb (CMP)': d.cmp == 'rutine',
         'CEO eller CFO': d.role.isin(['CEO', 'CFO']), 'director': d.role == 'director', '10 %-ejer': d.role == '10 %-ejer',
         'C-suite-titel': d.c_suite, '≥ 2 personlige købere/10 d': d.personal_buyers_10d >= 2, 'fond/enhed': d.ownership == 'fond/enhed',
@@ -383,6 +381,45 @@ def live_features_section(u: pd.DataFrame) -> str:
         'kursfald > 20 % de seneste 60 d': d.ret60 < -0.2, '> 30 % under 52-ugers-top': d.dist52w < -0.3,
         'markedsværdi < $300 mio.': d.mcap < 3e8, 'ADV < $5 mio.': d.adv < 5e6,
     }
+
+
+def test2_rule(d: pd.DataFrame) -> pd.Series:
+    """Holdout-test 2: højeste rolle i enheden er CEO eller CFO OG sidste (justerede) close før entry ligger mere end 30 % under
+    toppen af de seneste 252 closes (dist52w < −0,3) – præcis flagene 'CEO eller CFO' og '> 30 % under 52-ugers-top' fra afsnit 12."""
+    f = feature_flags(d)
+    return (f['CEO eller CFO'] & f['> 30 % under 52-ugers-top']).fillna(False).astype(bool)
+
+
+def flag_diff(d: pd.DataFrame, f: pd.Series, col: str = 'net_5') -> tuple[float, float]:
+    """Forskel i gennemsnit (med − uden flag), uge-klynget SE. NaN, hvis en af grupperne har under 30 enheder."""
+    import statsmodels.api as sm
+    x = d[d[col].notna()]
+    fx = f[x.index].fillna(False).astype(bool)
+    if fx.sum() < MIN_UNITS or (~fx).sum() < MIN_UNITS:
+        return math.nan, math.nan
+    fit = sm.OLS(x[col], sm.add_constant(fx.astype(float))).fit(cov_type='cluster', cov_kwds={'groups': pd.factorize(x.week)[0]})
+    return float(fit.params.iloc[1]), float(fit.bse.iloc[1])
+
+
+def rule_table(u: pd.DataFrame, z_lo: float) -> str:
+    """Pr. horisont: N, brutto og netto mod SPY, netto mod IWM [95 %, uge-klynget] og ensidet nedre grænse for netto mod SPY."""
+    lines = ['| Horisont | N | Brutto mod SPY | Netto mod SPY | Netto mod IWM | Ensidet nedre grænse, netto SPY |', '|---|---|---|---|---|---|']
+    for h in HORIZONS:
+        cells = [f'{h} d', num(u[f'net_{h}'].notna().sum())]
+        for c in (f'gross_{h}', f'net_{h}', f'net_iwm_{h}'):
+            st = stat(u, c)
+            cells.append(f'{pct(st["mean"])} [{pct(st["lo"])}; {pct(st["hi"])}]')
+        st = stat(u, f'net_{h}')
+        cells.append(pct(st['mean'] - z_lo * st['se']))
+        lines.append('| ' + ' | '.join(cells) + ' |')
+    return '\n'.join(lines) + '\n'
+
+
+def live_features_section(u: pd.DataFrame) -> str:
+    """Features med samme fortegn i begge halvdele af in-sample-perioden og et interval uden 0 i hele perioden (univariat, spand mod resten)."""
+    d = u[u.net_5.notna()].copy()
+    d['first_half'] = d.year < 2016
+    flags = feature_flags(d)
     lines = ['## 12. Features til live-beregning i appen', '',
              'Hver feature er testet som forskellen mellem enheder med og uden den (netto 5 d, uge-klynget).',
              'En feature er "holdbar", hvis forskellen har et 95 %-interval uden 0 over hele in-sample-perioden og samme fortegn i 2006–2015 og 2016–2024.', '',
@@ -390,18 +427,9 @@ def live_features_section(u: pd.DataFrame) -> str:
     keep = []
     for lab, f in flags.items():
         f = f.fillna(False).astype(bool)
-
-        def eff(mask):
-            x = d[mask]
-            fx = f[mask]
-            if fx.sum() < MIN_UNITS or (~fx).sum() < MIN_UNITS:
-                return math.nan, math.nan
-            import statsmodels.api as sm
-            fit = sm.OLS(x.net_5, sm.add_constant(fx.astype(float))).fit(cov_type='cluster', cov_kwds={'groups': pd.factorize(x.week)[0]})
-            return float(fit.params.iloc[1]), float(fit.bse.iloc[1])
-        b, se = eff(pd.Series(True, index=d.index))
-        b1, _ = eff(d.first_half)
-        b2, _ = eff(~d.first_half)
+        b, se = flag_diff(d, f)
+        b1, _ = flag_diff(d[d.first_half], f)
+        b2, _ = flag_diff(d[~d.first_half], f)
         ok = not math.isnan(b) and abs(b) > 1.96 * se and np.sign(b1) == np.sign(b2) == np.sign(b)
         if ok:
             keep.append(lab)
