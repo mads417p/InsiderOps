@@ -39,7 +39,8 @@ SMALL_MID_ADV_USD = 5_000_000  # small/mid cap = ADV(20) < $5 mio. ved entry
 MIN_TEST_N = 150  # færre enheder = kun beskrivende
 COSTS_V4 = ('costs-v4.json', 4, '067e6ec4e2d3a4b95b7ac8847a4fb4c9554de4819bc1c82447b56ed198b7199b')
 BENCH, BENCH2, FX_DKK, FX_USD = '^OMXSBGI', 'XACT-SMABOLAG.ST', 'SEKDKK=X', 'USDSEK=X'
-GUARD = (0.75, 1.33)  # meddelelsens kurs ÷ Yahoo ujusteret close på handelsdagen; uden for = til kontroltabellen
+GUARD = (0.75, 1.33)  # ISIN-niveau: median(meddelelsens kurs ÷ Yahoo ujusteret close på handelsdagen); uden for = kontroltabellen
+SIGNAL_GUARD = (0.5, 2.0)  # signal-niveau: uden for = 'kurs-mismatch' (bredt, så emissionsjusterede serier ikke smides ud)
 
 BUY, SHARE, OUTSIDE, CANCELLED = 'Förvärv', 'Aktie', 'Utanför handelsplats', 'Makulerad'
 NON_SHARE_RE = re.compile(r'option|teckningsr|\bbt[au]\b|warrant|konvertib|obligation|\bto\s?\d|\bts\b|interim|certifikat|'
@@ -127,14 +128,27 @@ def load_fi() -> pd.DataFrame:
     df = pd.DataFrame([r + [''] * (len(COLS) - len(r)) for r in rows], columns=COLS).drop_duplicates()
     for c in ('volume', 'price'):
         df[c] = df[c].map(_num)
-    df['isin'] = df.isin.str.strip().str.upper()
+    df['isin'] = df['isin'].str.strip().str.upper()
     return df.reset_index(drop=True)
 
 
 def market_buy(df: pd.DataFrame) -> pd.Series:
     """Original meddelelse (Korrigering ≠ Ja, Status ≠ Makulerad), Förvärv af aktie på en handelsplads (alt undtagen Utanför)."""
     share = (df.itype == SHARE) | ((df.itype.str.strip() == '') & ~df.iname.str.contains(NON_SHARE_RE, na=False))
+    share &= ~df['isin'].str.startswith('EZ')  # EZ = ANNA DSB-ISIN for OTC-derivater, ikke aktier
     return (df.is_corr != 'Ja') & (df.status != CANCELLED) & (df.nature == BUY) & share & (df.venue != OUTSIDE)
+
+
+def valid_isin(isin: str) -> bool:
+    """isValidIsin (src/lib/nordic-scanner.ts): format + Luhn på bogstaver omregnet til tal (A=10 … Z=35)."""
+    if not re.fullmatch(r'[A-Z]{2}[A-Z0-9]{9}\d', isin or ''):
+        return False
+    digits = ''.join(str(ord(ch) - 55) if ch.isalpha() else ch for ch in isin)
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch) * (2 if i % 2 else 1)
+        total += d - 9 if d > 9 else d
+    return total % 10 == 0
 
 
 def norm_person(s: str) -> str:
@@ -207,9 +221,42 @@ def search_isin(isin: str) -> list[str]:
         SEARCH_DIR.mkdir(parents=True, exist_ok=True)
         body = http_get(f'https://query2.finance.yahoo.com/v1/finance/search?q={quote(isin)}&quotesCount=5&newsCount=0', sec=False)
         p.write_bytes(body or b'{}')
+    return _st_equities(p)
+
+
+def _st_equities(p) -> list[str]:
     quotes = json.loads(p.read_bytes() or b'{}').get('quotes') or []
     return list(dict.fromkeys((q.get('symbol') or '').upper() for q in quotes
                               if q.get('quoteType') == 'EQUITY' and (q.get('symbol') or '').upper().endswith('.ST')))
+
+
+def name_query(issuers) -> str:
+    """Det hyppigste emittentnavn uden selskabsform og (publ) – til navnesøgning, når ISIN'et er ukendt for Yahoo."""
+    name = pd.Series(list(issuers)).mode().iat[0]
+    name = re.sub(r'\(publ\)|\(pub\b|[.,:]', ' ', name, flags=re.I)
+    return ' '.join(w for w in name.split() if w.lower() not in ('ab', 'aktiebolaget', 'asa', 'oyj', 'plc', 'ltd', 'inc'))
+
+
+def search_name(query: str) -> list[str]:
+    """Reserve, når ISIN-søgningen ikke giver et .ST-hit (typisk et ISIN, der er skiftet ved split eller omnotering).
+    Et hit bruges kun, hvis kurskontrollen i control_table holder."""
+    p = SEARCH_DIR / 'navn' / f'{quote(query, safe="")}.json'
+    if not p.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        body = http_get(f'https://query2.finance.yahoo.com/v1/finance/search?q={quote(query)}&quotesCount=10&newsCount=0', sec=False)
+        p.write_bytes(body or b'{}')
+    return _st_equities(p)
+
+
+def class_letter(instrument_name: str) -> str | None:
+    """Aktieklasse fra FI's instrumentnavn ('Investor AB ser. B', 'Volvo B') – sidste fritstående A–D."""
+    m = re.findall(r'(?<![\w&])([A-D])(?![\w&])', (instrument_name or '').upper())
+    return m[-1] if m else None
+
+
+def symbol_class(sym: str) -> str | None:
+    m = re.search(r'-([A-D])\.ST$', sym)
+    return m.group(1) if m else None
 
 
 # ---------------------------------------------------------------- FX og signaler
@@ -234,7 +281,8 @@ def build_signals(fi: pd.DataFrame) -> pd.DataFrame:
     r['pdmr_key'] = r.pdmr.map(norm_person)
     r['issuer_key'] = r.issuer.map(norm_issuer)
     g = r.groupby(['isin', 'pdmr_key', 'pub'], sort=False)
-    s = g.agg(issuer=('issuer', 'first'), issuer_key=('issuer_key', 'first'), pdmr=('pdmr', 'first'), position=('position', 'first'),
+    s = g.agg(issuer=('issuer', 'first'), issuer_key=('issuer_key', 'first'), iname=('iname', 'first'), pdmr=('pdmr', 'first'),
+              position=('position', 'first'),
               tday=('tday', 'min'), value_sek=('value_sek', lambda x: x.sum(min_count=len(x))),
               value_usd=('value_usd', lambda x: x.sum(min_count=len(x))), shares=('shares', lambda x: x.sum(min_count=len(x))),
               venue=('venue', 'first'), n_rows=('pub', 'size')).reset_index()
@@ -275,7 +323,8 @@ def fetch() -> None:
     isins = sorted(set(s.loc[s.candidate, 'isin']) - {''})
     print(f'FI: {len(fi)} rækker; kandidatsignaler ≥ $50k: {int(s.candidate.sum())}; ISIN: {len(isins)}', flush=True)
     for k, isin in enumerate(isins):
-        for sym in search_isin(isin):
+        syms = search_isin(isin) or search_name(name_query(s.loc[s['isin'] == isin, 'issuer']))
+        for sym in syms:
             fetch_chart(sym)
         if k % 100 == 0:
             print(f'Yahoo {k}/{len(isins)}', flush=True)
@@ -290,36 +339,45 @@ def _ratio(s, sig: pd.DataFrame) -> float:
     return float(np.median(x)) if x else float('nan')
 
 
+def _inside(r: float) -> bool:
+    return GUARD[0] <= r <= GUARD[1]
+
+
 def control_table(s: pd.DataFrame) -> pd.DataFrame:
-    """Alle ISIN med kandidatsignaler: auto-symbol (appens regel) og flag. Kun flaggede skrives til kontroltabellen."""
-    cands = s[s.candidate & (s.isin != '')]
-    last_fi = s.groupby('issuer_key').pub.max()
+    """ISIN → symbol for alle ISIN med kandidatsignaler.
+    1. ISIN-søgning (appens regel): første .ST-aktie. Kursforhold uden for GUARD → flag 'kursafvigelse' (manuel beslutning).
+    2. Intet ISIN-hit: navnesøgning; kun .ST-aktier med kursforhold inden for GUARD. Flere → aktieklassen fra instrumentnavnet;
+       stadig flere → flag 'flere kandidater efter navn' (manuel). Ingen → intet symbol (dækning, ikke tvetydigt).
+    Kursforhold = median(meddelelsens VWAP ÷ Yahoo ujusteret close på handelsdagen); bruges kun til at genkende papiret."""
+    cands = s[s.candidate & s['isin'].map(valid_isin)]  # ugyldigt ISIN (kontrolciffer) = intet symbol
     rows = []
     for isin, g in cands.groupby('isin'):
-        syms = search_isin(isin)
-        auto = syms[0] if syms else ''
-        names = sorted(set(g.issuer))
-        flags = []
-        if len(syms) > 1:
-            flags.append('flere .ST-aktier')
-        if len(set(g.issuer_key)) > 1:
-            flags.append('flere emittentnavne')
+        source, syms = 'isin', search_isin(isin)
+        if not syms:
+            source, syms = 'navn', search_name(name_query(g.issuer))
         ratios = {sym: _ratio(series(sym), g) for sym in syms}
-        r = ratios.get(auto, float('nan'))
-        if auto and not (GUARD[0] <= r <= GUARD[1]):
-            flags.append('ingen kurs på handelsdagene' if r != r else 'kursafvigelse')
-        if not syms and last_fi.get(g.issuer_key.iat[0], '') >= '2025-07-01':
-            flags.append('intet .ST-hit, men indberetter stadig')
-        rows.append({'isin': isin, 'emittent': ' | '.join(names), 'signaler': len(g), 'auto_symbol': auto,
-                     'kandidater': ' '.join(f'{k}={v:.2f}' if v == v else f'{k}=–' for k, v in ratios.items()),
-                     'kursforhold': round(r, 3) if r == r else None, 'flag': '; '.join(flags)})
+        auto, flag = '', ''
+        if source == 'isin':
+            auto = syms[0]
+            r = ratios[auto]
+            flag = '' if (_inside(r) or r != r) else 'kursafvigelse'  # NaN = ingen kurs på handelsdagene → dækning
+        else:
+            inside = [k for k in syms if _inside(ratios[k])]
+            if len(inside) > 1:
+                cl = class_letter(g.iname.mode().iat[0])
+                inside = [k for k in inside if symbol_class(k) == cl] or inside
+            auto = inside[0] if inside else ''
+            flag = 'flere kandidater efter navn' if len(inside) > 1 else ''
+        rows.append({'isin': isin, 'emittent': ' | '.join(g.issuer.value_counts().index[:3]), 'signaler': len(g), 'kilde': source,
+                     'auto_symbol': auto, 'kandidater': ' '.join(f'{k}={v:.2f}' if v == v else f'{k}=–' for k, v in ratios.items()),
+                     'kursforhold': round(ratios[auto], 3) if auto and ratios[auto] == ratios[auto] else None, 'flag': flag})
     return pd.DataFrame(rows)
 
 
 def symbol_map(table: pd.DataFrame) -> dict[str, str | None]:
     """ISIN → symbol: auto for uflaggede; flaggede kræver en beslutning i reports/isin-map-se.csv (symbol eller 'afvis')."""
     manual = pd.read_csv(MAP_CSV, dtype=str).fillna('') if MAP_CSV.exists() else pd.DataFrame(columns=['isin', 'beslutning'])
-    dec = dict(zip(manual.isin, manual.beslutning))
+    dec = dict(zip(manual['isin'], manual.beslutning))
     out = {}
     for r in table.itertuples():
         if not r.flag:
@@ -331,7 +389,8 @@ def symbol_map(table: pd.DataFrame) -> dict[str, str | None]:
 
 
 def write_control_csv(table: pd.DataFrame) -> pd.DataFrame:
-    flagged = table[table.flag != ''].copy()
+    """Kontroltabellen: flaggede ISIN (kræver beslutning) + alle navnematch (til gennemsyn). Beslutninger bevares ved genkørsel."""
+    flagged = table[(table.flag != '') | ((table.kilde == 'navn') & (table.auto_symbol != ''))].copy()
     old = pd.read_csv(MAP_CSV, dtype=str).fillna('') if MAP_CSV.exists() else pd.DataFrame(columns=['isin', 'beslutning', 'begrundelse'])
     flagged = flagged.merge(old[['isin', 'beslutning', 'begrundelse']], on='isin', how='left').fillna({'beslutning': '', 'begrundelse': ''})
     flagged.sort_values(['flag', 'signaler'], ascending=[True, False]).to_csv(MAP_CSV, index=False, encoding='utf-8', lineterminator='\n')
@@ -351,12 +410,16 @@ def build_units(s: pd.DataFrame, smap: dict) -> tuple[pd.DataFrame, pd.DataFrame
             status = 'intet symbol'
         elif (ser := series(sym)) is None:
             status = 'ingen kursdata'
+        elif ser[2].get('currency') != 'SEK':
+            status = 'ikke SEK-noteret'  # VWAP, ADV og afkast forudsætter SEK (fx Verisure i EUR)
         else:
             ei = entry_index(ser[3], r.anchor_utc, r.pub[:10], SE_TZ, SE_OPEN)
             if ei >= len(ser[3]):
                 status = 'entry ikke nået'
             elif bisect_right(ser[3], r.tday) == 0:
                 status = 'ingen kursdata'  # serien starter efter handelsdagen (afnoteret/ny ticker)
+            elif not (SIGNAL_GUARD[0] <= r.vwap_sek / raw_close_on(ser[0], ser[1], r.tday) <= SIGNAL_GUARD[1]):
+                status = 'kurs-mismatch'  # tastefejl (öre/kr., byttede felter) eller forkert ISIN i rækken
             else:
                 adv = raw_adv_usd(ser, ei, r.vwap_sek)
                 status = None if adv >= MIN_ADV else 'ADV < $500k'
@@ -371,7 +434,7 @@ def build_units(s: pd.DataFrame, smap: dict) -> tuple[pd.DataFrame, pd.DataFrame
         adv = raw_adv_usd(series(sym), ei, vwap)
         anchor = g.anchor_utc.max()
         pb = personal_buyers(cands, g.issuer_key.iat[0], anchor)
-        units.append({'symbol': sym, 'isin': g.isin.iat[0], 'issuer': g.issuer.iat[0], 'entry_date': ed, 'entry_idx': ei,
+        units.append({'symbol': sym, 'isin': g['isin'].iat[0], 'issuer': g.issuer.iat[0], 'entry_date': ed, 'entry_idx': ei,
                       'year': int(ed[:4]), 'week': iso_week(ed), 'anchor_utc': anchor.isoformat(), 'n_signals': len(g),
                       'value_usd': g.value_usd.sum(), 'vwap_sek': vwap, 'adv': adv, 'cost_pct': round_trip_pct(costs, adv, 'SEK'),
                       'liquidity': liquidity_bucket(costs, adv), 'small_mid': adv < SMALL_MID_ADV_USD,
@@ -392,7 +455,7 @@ def funnel(fi: pd.DataFrame, s: pd.DataFrame, cands: pd.DataFrame, u: pd.DataFra
         'signaler ≥ $50k': cands.groupby(cands.pub.str[:4]).size(),
         '+ kurs ≥ 10 SEK': cands[cands.status != 'kurs < 10 SEK'].groupby(cands.pub.str[:4]).size(),
         '+ symbol': cands[~cands.status.isin(['kurs < 10 SEK', 'intet symbol'])].groupby(cands.pub.str[:4]).size(),
-        '+ kursdata og entry': cands[cands.status.isin(['ok', 'ADV < $500k'])].groupby(cands.pub.str[:4]).size(),
+        '+ SEK-serie, kursdata, entry og signal-tjek': cands[cands.status.isin(['ok', 'ADV < $500k'])].groupby(cands.pub.str[:4]).size(),
         '+ ADV ≥ $500k (signaler)': cands[cands.status == 'ok'].groupby(cands.pub.str[:4]).size(),
         'enheder (ticker, entry-dag)': u.groupby(u.entry_date.str[:4]).size(),
         'heraf small/mid': u[u.small_mid].groupby(u.entry_date.str[:4]).size(),
@@ -412,12 +475,16 @@ def map_cmd() -> None:
     flagged = write_control_csv(table)
     smap = symbol_map(table)
     cands, u = build_units(s, smap)
+    off = set(table.loc[table.flag == 'kursafvigelse', 'isin'])
+    u['ratio_flag'] = u['isin'].isin(off)  # robusthed: manuelt godkendt trods kursafvigelse (mulig emissionsjusteret volumen)
     s.to_parquet(SE_DIR / 'signals.parquet')
     cands.to_parquet(SE_DIR / 'candidates.parquet')
     u.to_parquet(SE_DIR / 'units_pre.parquet')  # ingen udfald
     ins, hold = u[~u.holdout], u[u.holdout]
     print(funnel(fi, s, cands, u))
-    print(f'\nKontroltabel: {len(flagged)} flaggede ISIN ({(flagged.beslutning == "").sum()} uden beslutning) → {MAP_CSV}')
+    need = flagged[flagged['flag'] != '']
+    print(f'\nKontroltabel: {len(flagged)} rækker ({len(need)} flaggede, {(need.beslutning == "").sum()} uden beslutning; '
+          f'{len(flagged) - len(need)} navnematch til gennemsyn) → {MAP_CSV}')
     print(f'Status (kandidatsignaler):\n{cands.status.value_counts().to_string()}')
     for lab, d in (('in-sample 7/2016–2024', ins), ('holdout 2025–', hold)):
         t2 = d[d.small_mid & d.cluster]

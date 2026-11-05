@@ -197,6 +197,14 @@ def test_se_fi_parse_and_population():
     assert [se.role_se(p) for p in ('VD', 'Ekonomidirektör', 'Styrelseordförande', 'Styrelseledamot/suppleant', 'COO', '')] == \
            ['VD', 'CFO', 'ordförande', 'styrelseledamot', 'anden ledelse', 'ukendt']
     assert se.norm_issuer('Acme AB (publ)') == se.norm_issuer('ACME AB') == 'acme'
+    assert [se.class_letter(n) for n in ('Investor AB ser. B', 'Volvo B', 'H & M Hennes & Mauritz AB, B', 'Acme AB', 'SHB A')] == \
+           ['B', 'B', 'B', None, 'A']
+    assert se.symbol_class('INVE-B.ST') == 'B' and se.symbol_class('SAND.ST') is None
+    assert se.valid_isin('SE0000115446') and se.valid_isin('DK0062498333') and not se.valid_isin('SE0000115447')
+    assert not se.valid_isin('se0000115446') and not se.valid_isin('')
+    ez = df.assign(isin='EZ0BF93PW5V2')
+    assert not se.market_buy(ez).any()  # OTC-derivat-ISIN er ikke en aktie
+    assert se.name_query(['Wallenstam AB', 'Wallenstam AB (publ)', 'Wallenstam AB']) == 'Wallenstam'
 
 
 def test_se_cluster_window():
