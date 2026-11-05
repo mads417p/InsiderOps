@@ -6,6 +6,11 @@
 - Fase 5–7 er sat på pause. De genoptages kun, hvis ledgeren viser, at Claudes udvælgelse (H2) klarer sig markant bedre end populationen, eller hvis en ny hypotese præregistreres, før dens data findes.
 - Ledgeren kører videre (ca. $0,006 pr. scan).
 
+## Status 5.11.2026 – Sverige (fase 4-SE)
+- Præregistreret backtest af svenske insiderkøb 7/2016–2024 (prereg b599007) og holdout 2025–2026 (plan db33676), netto 5 dage mod ^OMXSBGI inkl. udbytte: Test 1 (alle) −0,79 % in-sample (brutto +0,22 %) og −1,11 % i holdout; Test 2 (clusters i small/mid cap) −1,31 % in-sample. Ingen test bestod. Se research/reports/backtest-se-v1.md.
+- Samlet konklusion: offentliggjorte insiderkøb giver ikke et nettoafkast for en dansk detailinvestor – hverken i USA eller Sverige, hverken for alle køb eller for de præregistrerede udvalg. Det stemmer med Hvide & Nielsen (2026) og Eckbo & Ødegaard (2025).
+- Der testes ikke flere varianter af samme signal (forking paths). Fase 5–7 forbliver på pause.
+
 ---
 
 Skrevet 4.11.2026 efter kode-audit (`docs/audit-2026-11-04.md`). Dokumentet er en arbejdsplan og en samling prompts til Claude Code. Det er en metode til at teste en strategi, ikke investeringsrådgivning.
