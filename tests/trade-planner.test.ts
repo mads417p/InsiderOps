@@ -3,6 +3,7 @@ import { generateTradeExecutionPlan } from '@/lib/trade-planner';
 import { verifyDkTradability } from '@/lib/market-enricher';
 import { convertCurrency, currencyForTicker, getFxRateToDkk, type LiveFxRates } from '@/lib/live-quote';
 import type { CouncilVerdict, InsiderTransaction } from '@/types/insider';
+import { loadCosts } from '@/lib/costs';
 
 const tx = (over: Partial<InsiderTransaction> = {}) =>
   ({ id: 't1', ticker: 'ACN', companyName: 'Accenture plc', pricePerShare: 250, ...over }) as InsiderTransaction;
@@ -43,6 +44,43 @@ describe('trade-planner uden opfundne tal', () => {
     expect(ol.tranche1.description).toMatch(/NOK 300/);
     const he = generateTradeExecutionPlan(tx({ ticker: 'NOKIA.HE', currentMarketPrice: 5, atr14d: 0.1 }), verdict, 25000, fx);
     expect(he.totalShares).toBe(Math.floor(25000 / (5 * 7.46)));
+  });
+});
+
+describe('trade-planner til rigtige handler (fase 9)', () => {
+  const costs = loadCosts();
+  // 260 USD × 6,65 = 1.729 DKK/aktie; likvid aktie (ADV $500 mio.)
+  const liquid = tx({ currentMarketPrice: 260, atr14d: 5, avgDailyDollarVolume: 5e8 });
+
+  it('én ordre som standard; trancher kun som valg', () => {
+    const one = generateTradeExecutionPlan(liquid, verdict, 25000, fx, { costs });
+    expect(one.tranche2.shares).toBe(0);
+    expect(one.tranche1.shares).toBe(one.totalShares);
+    expect(one.cost?.orders).toBe(2); // ét køb + ét salg
+    const two = generateTradeExecutionPlan(liquid, verdict, 25000, fx, { tranches: true, costs });
+    expect(two.tranche2.shares).toBeGreaterThan(0);
+    expect(two.cost?.orders).toBe(3);
+  });
+
+  it('to trancher koster mere end én ordre, når minimumskurtagen slår igennem', () => {
+    const one = generateTradeExecutionPlan(liquid, verdict, 10000, fx, { costs })!.cost!;
+    const two = generateTradeExecutionPlan(liquid, verdict, 10000, fx, { tranches: true, costs })!.cost!;
+    expect(two.dkk - one.dkk).toBe(25); // én ekstra minimumskurtage
+  });
+
+  it('advarer under ca. 16.700 kr. pr. ordre (US: 25 kr. / 0,15 %), ikke over', () => {
+    const small = generateTradeExecutionPlan(liquid, verdict, 10000, fx, { costs }).cost!;
+    expect(small.minFeeBelowDkk).toBe(16667);
+    expect(small.minFeeWarning).toBe(true);
+    const big = generateTradeExecutionPlan(liquid, verdict, 50000, fx, { costs }).cost!; // 85 → hele rammen
+    expect(big.minFeeWarning).toBe(false);
+    // 50.000 kr. → 28 aktier = 48.412 kr.; kurtage 2 × 0,15 % + 0 % FX + 0,1 % spread = 0,4 %
+    expect(big.pct).toBeCloseTo(0.4, 2);
+    expect(big.liquidityKnown).toBe(true);
+  });
+
+  it('uden costs-config ingen omkostningslinje (intet gæt)', () => {
+    expect(generateTradeExecutionPlan(liquid, verdict, 25000, fx).cost).toBeUndefined();
   });
 });
 

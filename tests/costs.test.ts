@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { costsFileSha256, loadCosts, roundTripCostPct, type CostsConfig } from '@/lib/costs';
 import { PREREG } from '@/lib/ledger-stats';
+import { roundTripCost } from '@/lib/round-trip';
 
 const c: CostsConfig = {
   version: 1,
@@ -45,5 +46,20 @@ describe('omkostninger (fase 3, 7)', () => {
     expect(roundTripCostPct(real, { currency: 'DKK', avgDailyDollarVolume: 6e7 })).toBeCloseTo(0.6, 10);
     // Sverige/Finland/Norge: automatisk veksling 0,25 % pr. handel
     expect(roundTripCostPct(real, { currency: 'SEK', avgDailyDollarVolume: 6e7 })).toBeCloseTo(0.6 + 0.5, 10);
+  });
+
+  it('roundTripCost: valgt handelsstørrelse og antal købsordrer (fase 9)', () => {
+    const real = loadCosts();
+    const us = (tradeSizeDkk: number, buyOrders = 1) =>
+      roundTripCost(real, { currency: 'USD', avgDailyDollarVolume: 6e7, tradeSizeDkk, buyOrders })!;
+    // 10.000 kr.: 2 × 25 kr. + 0,1 % spread = 60 kr. (0,6 %) – samme som prereg-tallet
+    expect(us(10000).dkk).toBeCloseTo(60, 6);
+    // 20.000 kr. over grænsen: 2 × 0,15 % + 0,1 % = 0,4 % = 80 kr.
+    expect(us(20000).pct).toBeCloseTo(0.4, 10);
+    // to købsordrer á 5.000 kr.: 3 × 25 kr. + 10 kr. spread = 85 kr.
+    expect(us(10000, 2).dkk).toBeCloseTo(85, 6);
+    expect(us(10000).minFeeBelowDkk).toBeCloseTo(16666.67, 1);
+    expect(roundTripCost(real, { currency: 'DKK', tradeSizeDkk: 10000 })!.minFeeBelowDkk).toBe(25000);
+    expect(roundTripCost(real, { currency: 'USD', tradeSizeDkk: 0 })).toBeUndefined();
   });
 });

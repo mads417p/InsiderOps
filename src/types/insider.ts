@@ -118,6 +118,15 @@ export interface TradeExecutionPlan {
   tranche1: TradeTranche;
   tranche2: TradeTranche;
   volatilityTag: string;
+  /** Forventet round-trip (køb + salg) efter config/costs.json; mangler ved ukendt marked/valuta. */
+  cost?: {
+    dkk: number;
+    pct: number;
+    orders: number; // købsordrer + én salgsordre
+    minFeeBelowDkk: number; // under dette beløb pr. ordre slår minimumskurtagen igennem
+    minFeeWarning: boolean;
+    liquidityKnown: boolean; // false → værste spread-spand er brugt
+  };
 }
 
 export type PaperTradeStatus = 'OPEN' | 'STOPPED_OUT' | 'TARGET_HIT' | 'CLOSED_MANUAL';

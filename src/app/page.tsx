@@ -46,6 +46,8 @@ import {
   TradeType,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
+import type { CostsConfig } from '@/lib/costs';
+import costsJson from '../../config/costs.json';
 import { collectRejected, isCeoCfoBuy, isModelScore, runwayLabel, scoreLabel, TONE_CLASS, verdictLabel } from '@/lib/ui-labels';
 import { NoEdgeBanner } from '@/components/NoEdgeBanner';
 import { RejectedNoisePanel } from '@/components/RejectedNoisePanel';
@@ -101,6 +103,11 @@ interface ScanResponse {
 
 const STORAGE_KEY = 'insiderops_verdicts_v1';
 const CAPITAL_STORAGE_KEY = 'insiderops_capital_frame_dkk';
+const TRANCHES_STORAGE_KEY = 'insiderops_use_tranches';
+// Samme fil som serveren bruger (costs.ts); kun til visning af forventede omkostninger i handelsplanen.
+const COSTS = costsJson as CostsConfig;
+const HOLD_NOTE =
+  'I backtesten var 63 handelsdage den eneste horisont, der ikke var negativ netto (USA in-sample, ikke bekræftet). Sverige-holdout 63 dage: −2,48 % netto.';
 
 /** Valutamærke for insiderens kurs (tx.currency) og for markedskursen (børsens valuta). */
 const curLabel = (c: string) => (c === 'USD' ? '$' : `${c} `);
@@ -221,6 +228,8 @@ export default function Dashboard() {
   const [showThinking, setShowThinking] = useState<boolean>(true);
   const [memoCopied, setMemoCopied] = useState<boolean>(false);
   const [maxCapitalDkk, setMaxCapitalDkk] = useState<number>(25000);
+  const [useTranches, setUseTranches] = useState(false); // én ordre som standard; to trancher fordobler købskurtagen
+  const planOpts = { tranches: useTranches, costs: COSTS };
   const [councilQueueRunning, setCouncilQueueRunning] = useState<boolean>(false);
   const [councilQueueProgress, setCouncilQueueProgress] = useState<{
     current: number;
@@ -360,7 +369,7 @@ ${verdict.synthesis}
 
 ## 6. Kvantitativ Eksekverings- & Risikoplan (Frie Midler)
 ${(() => {
-  const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk, fxRates);
+  const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk, fxRates, planOpts);
   if (plan.status === 'DO_NOT_TRADE') {
     return `- **Status:** 🛡️ Kapitalbeskyttelse aktiveret (${plan.reason})`;
   }
@@ -373,9 +382,14 @@ ${(() => {
 - **Target 1 (90d Modstand / 3.5x ATR):** $${plan.targetPrice1} (+${plan.targetReturnPct1}%)
 - **Risk / Reward Ratio:** 1 : ${plan.riskRewardRatio}
 
-### Tranche Opdeling:
-- **Tranche 1 (60%):** ${plan.tranche1.description} • ${plan.tranche1.allocationDkk.toLocaleString()} DKK
-- **Tranche 2 (40%):** ${plan.tranche2.description} • ${plan.tranche2.allocationDkk.toLocaleString()} DKK`;
+### Ordre og omkostninger:
+- **${plan.tranche2.shares > 0 ? 'Tranche 1' : 'Ordre'}:** ${plan.tranche1.description} • ${plan.tranche1.allocationDkk.toLocaleString()} DKK${
+    plan.tranche2.shares > 0 ? `\n- **Tranche 2:** ${plan.tranche2.description} • ${plan.tranche2.allocationDkk.toLocaleString()} DKK` : ''
+  }
+- **Forventet round-trip (costs.json):** ${plan.cost ? `${plan.cost.dkk.toLocaleString('da-DK')} kr. (${plan.cost.pct} %)` : 'mangler data'}${
+    plan.cost?.minFeeWarning ? ` – under ca. ${plan.cost.minFeeBelowDkk.toLocaleString('da-DK')} kr. pr. ordre slår minimumskurtagen igennem` : ''
+  }
+- **Holdeperiode:** ${HOLD_NOTE}`;
 })()}
 
 ---
@@ -464,6 +478,7 @@ ${verdict.judgeThinking}
           setMaxCapitalDkk(val);
         }
       }
+      setUseTranches(localStorage.getItem(TRANCHES_STORAGE_KEY) === '1');
     } catch {
       // ignore
     }
@@ -588,6 +603,15 @@ ${verdict.judgeThinking}
     setSearchTicker('');
     setActiveTickerQuery(null);
     fetchScan(source, null, { latest: true });
+  };
+
+  const handleToggleTranches = (on: boolean) => {
+    setUseTranches(on);
+    try {
+      localStorage.setItem(TRANCHES_STORAGE_KEY, on ? '1' : '0');
+    } catch {
+      // ignore
+    }
   };
 
   const handleSelectCapitalFrame = (amt: number) => {
@@ -1598,7 +1622,7 @@ ${verdict.judgeThinking}
                 return (
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                     {activeList.map(({ transaction: tx, verdict, savedAt }) => {
-                      const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk, fxRates);
+                      const plan = generateTradeExecutionPlan(tx, verdict, maxCapitalDkk, fxRates, planOpts);
                       const isDkk = tx.ticker.endsWith('.CO') || tx.exchange?.includes('Copenhagen');
                       const isSek = tx.ticker.endsWith('.ST') || tx.exchange?.includes('Stockholm');
                       const currSym = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';
@@ -1714,6 +1738,12 @@ ${verdict.judgeThinking}
                                     <span className="text-rose-300 font-bold">{currSym}{plan.stopLossPrice}</span> ({plan.stopLossRiskPct}%) • Target:{' '}
                                     <span className="text-emerald-300 font-bold">{currSym}{plan.targetPrice1}</span> (+{plan.targetReturnPct1}%) • R/R 1:{plan.riskRewardRatio}
                                   </div>
+                                  {plan.cost && (
+                                    <div className={`text-[10px] font-mono ${plan.cost.minFeeWarning ? 'text-amber-300' : 'text-slate-300'}`}>
+                                      Round-trip ≈ {plan.cost.dkk.toLocaleString('da-DK')} kr. ({plan.cost.pct.toLocaleString('da-DK')} %)
+                                      {plan.cost.minFeeWarning && ' ⚠️ minimumskurtage'}
+                                    </div>
+                                  )}
                                 </div>
                               ) : (
                                 <div className="p-2 rounded bg-slate-950/40 border border-slate-800 text-[11px] font-mono text-slate-400">
@@ -4001,7 +4031,7 @@ ${verdict.judgeThinking}
 
               {/* Quantitative Trade Execution, ATR Volatility & Position Sizing Plan */}
               {(() => {
-                const plan = generateTradeExecutionPlan(selectedTx, activeVerdict, maxCapitalDkk, fxRates);
+                const plan = generateTradeExecutionPlan(selectedTx, activeVerdict, maxCapitalDkk, fxRates, planOpts);
                 const isDkk = selectedTx.ticker.endsWith('.CO') || selectedTx.exchange?.includes('Copenhagen');
                 const isSek = selectedTx.ticker.endsWith('.ST') || selectedTx.exchange?.includes('Stockholm');
                 const currSym = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';
@@ -4017,7 +4047,7 @@ ${verdict.judgeThinking}
                         <div>
                           <div className="flex items-center gap-2">
                             <h4 className="text-xs font-mono font-bold tracking-wider text-slate-200">
-                              📐 QUANTITATIVE EXECUTION & RISK PLAN (FRIE MIDLER)
+                              📐 HANDELSPLAN & RISIKO (FRIE MIDLER)
                             </h4>
                             <span
                               className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
@@ -4032,7 +4062,7 @@ ${verdict.judgeThinking}
                             </span>
                           </div>
                           <p className="text-[11px] text-slate-400 font-mono mt-0.5">
-                            ATR-baseret stop-loss, positionsstørrelse & 2-tranche limit eksekvering
+                            ATR-baseret stop-loss og positionsstørrelse – én ordre som standard
                           </p>
                         </div>
                       </div>
@@ -4058,6 +4088,15 @@ ${verdict.judgeThinking}
                             );
                           })}
                         </div>
+                        <label className="flex items-center gap-1.5 text-[10px] font-mono text-slate-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={useTranches}
+                            onChange={(e) => handleToggleTranches(e.target.checked)}
+                            className="accent-cyan-500"
+                          />
+                          Del i to trancher (fordobler købskurtagen)
+                        </label>
 
                         {plan.status === 'ACTIVE_PLAN' && (
                           paperPortfolio[selectedTx.id] ? (
@@ -4118,7 +4157,9 @@ ${verdict.judgeThinking}
                               {plan.totalShares} aktier {!isDkk && `($${plan.recommendedAllocationUsd.toLocaleString('en-US')})`}
                             </div>
                             <div className="text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/60">
-                              T1: {plan.tranche1.shares} stk. | T2: {plan.tranche2.shares} stk.
+                              {plan.tranche2.shares > 0
+                                ? `T1: ${plan.tranche1.shares} stk. | T2: ${plan.tranche2.shares} stk.`
+                                : 'Én ordre'}
                             </div>
                           </div>
 
@@ -4174,13 +4215,48 @@ ${verdict.judgeThinking}
                           </div>
                         </div>
 
-                        {/* Tranche Eksekverings-Instruktioner */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                        {/* Omkostninger og holdeperiode (fase 9) */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div
+                            className={`p-3 rounded border space-y-1 text-[11px] font-mono ${
+                              plan.cost?.minFeeWarning ? 'bg-amber-950/30 border-amber-700/60' : 'bg-slate-950/70 border-slate-800'
+                            }`}
+                          >
+                            <div className="text-slate-400">Forventet round-trip (køb + salg, costs.json)</div>
+                            {plan.cost ? (
+                              <>
+                                <div className="text-base font-bold text-slate-100">
+                                  {plan.cost.dkk.toLocaleString('da-DK')} kr.{' '}
+                                  <span className="text-xs text-slate-300">({plan.cost.pct.toLocaleString('da-DK')} %)</span>
+                                </div>
+                                <div className="text-[10px] text-slate-400">
+                                  {plan.cost.orders} ordrer · kurtage, veksling og spread
+                                  {!plan.cost.liquidityKnown && ' · likviditet ukendt (værste spread-skøn brugt)'}
+                                </div>
+                                {plan.cost.minFeeWarning && (
+                                  <div className="text-amber-200">
+                                    ⚠️ Under ca. {plan.cost.minFeeBelowDkk.toLocaleString('da-DK')} kr. pr. ordre slår minimumskurtagen
+                                    igennem – kurtagen bliver relativt dyrere.
+                                  </div>
+                                )}
+                              </>
+                            ) : (
+                              <div className="text-slate-400">Mangler data (ukendt marked eller valuta i costs.json)</div>
+                            )}
+                          </div>
+                          <div className="p-3 rounded bg-slate-950/70 border border-slate-800 space-y-1 text-[11px] font-mono">
+                            <div className="text-slate-400">Holdeperiode</div>
+                            <p className="text-slate-200 leading-relaxed">{HOLD_NOTE}</p>
+                          </div>
+                        </div>
+
+                        {/* Ordre-instruktioner */}
+                        <div className={`grid grid-cols-1 gap-3 pt-1 ${plan.tranche2.shares > 0 ? 'md:grid-cols-2' : ''}`}>
                           <div className="p-3 rounded bg-emerald-950/20 border border-emerald-900/50 space-y-1.5">
                             <div className="flex items-center justify-between">
                               <span className="text-[11px] font-mono font-bold text-emerald-400 flex items-center gap-1.5">
                                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                                TRANCHE 1: 60% EKSEKVERING
+                                {plan.tranche2.shares > 0 ? 'TRANCHE 1: 60 %' : 'ÉN ORDRE'}
                               </span>
                               <span className="text-[11px] font-mono font-bold text-emerald-300">
                                 {plan.tranche1.allocationDkk.toLocaleString('da-DK')} DKK
@@ -4194,11 +4270,12 @@ ${verdict.judgeThinking}
                             </p>
                           </div>
 
+                          {plan.tranche2.shares > 0 && (
                           <div className="p-3 rounded bg-cyan-950/20 border border-cyan-900/50 space-y-1.5">
                             <div className="flex items-center justify-between">
                               <span className="text-[11px] font-mono font-bold text-cyan-400 flex items-center gap-1.5">
                                 <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
-                                TRANCHE 2: 40% PULLBACK LIMIT
+                                TRANCHE 2: 40 % LIMIT VED TILBAGEFALD
                               </span>
                               <span className="text-[11px] font-mono font-bold text-cyan-300">
                                 {plan.tranche2.allocationDkk.toLocaleString('da-DK')} DKK
@@ -4211,6 +4288,7 @@ ${verdict.judgeThinking}
                               Lægges som stående limit-ordre i bunden af ordrebogen for at gribe eventuelle intradag-dips.
                             </p>
                           </div>
+                          )}
                         </div>
                       </>
                     )}

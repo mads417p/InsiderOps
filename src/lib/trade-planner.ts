@@ -1,6 +1,8 @@
 import { InsiderTransaction, CouncilVerdict, TradeExecutionPlan } from '@/types/insider';
 import { currencyForTicker, getFxRateToDkk, type LiveFxRates } from '@/lib/live-quote';
 import { verdictLabel } from '@/lib/ui-labels';
+import { roundTripCost } from '@/lib/round-trip';
+import type { CostsConfig } from '@/lib/costs';
 
 /**
  * Beregner en komplet kvantitativ eksekverings- og risikoplan baseret på 14-dages ATR volatilitet,
@@ -11,7 +13,8 @@ export function generateTradeExecutionPlan(
   tx: InsiderTransaction,
   verdict: CouncilVerdict,
   maxCapitalDkk: number = 25000,
-  fx?: LiveFxRates | null
+  fx?: LiveFxRates | null,
+  opts: { tranches?: boolean; costs?: CostsConfig } = {}
 ): TradeExecutionPlan {
   // 1. Kapitalbeskyttelse: Afvis transaktioner med lav score eller PR-stunt
   if (verdict.asymmetryScore < 60 || verdict.verdict === 'PR STUNT / STØJ (IGNORER)') {
@@ -77,8 +80,9 @@ export function generateTradeExecutionPlan(
   const priceInDkk = currentPrice * fxToDkk;
   const totalShares = Math.max(1, Math.floor(recommendedAllocationDkk / priceInDkk));
 
-  // Opdel i Tranche 1 (60%) og Tranche 2 (40%)
-  const tranche1Shares = Math.max(1, Math.floor(totalShares * 0.6));
+  // Én ordre som standard: to trancher fordobler købskurtagen (minimumskurtagen betales to gange).
+  // Trancher (60/40) kun når brugeren vælger det.
+  const tranche1Shares = opts.tranches ? Math.max(1, Math.floor(totalShares * 0.6)) : totalShares;
   const tranche2Shares = Math.max(0, totalShares - tranche1Shares);
 
   const tranche1Dkk = Math.round(tranche1Shares * priceInDkk);
@@ -131,6 +135,19 @@ export function generateTradeExecutionPlan(
 
   const currPrefix = currency === 'USD' ? '$' : `${currency} `;
 
+  // Forventet round-trip for den faktiske ordrestørrelse (costs.json). Advarsel, når en købsordre er så lille,
+  // at minimumskurtagen slår igennem.
+  const buyOrders = tranche2Shares > 0 ? 2 : 1;
+  const rt = opts.costs
+    ? roundTripCost(opts.costs, {
+        currency,
+        avgDailyDollarVolume: tx.avgDailyDollarVolume,
+        tradeSizeDkk: totalShares * priceInDkk,
+        buyOrders,
+      })
+    : undefined;
+  const smallestBuyDkk = Math.min(tranche1Dkk, buyOrders === 2 ? tranche2Dkk : Infinity);
+
   return {
     status: 'ACTIVE_PLAN',
     recommendedAllocationDkk,
@@ -150,16 +167,30 @@ export function generateTradeExecutionPlan(
       price: currentPrice,
       allocationDkk: tranche1Dkk,
       allocationUsd: Math.round(tranche1Dkk / usdToDkk),
-      description: `Tranche 1 (60%): ${tranche1Shares} aktier @ ${currPrefix}${currentPrice} (Markedsåbning / Limit)`,
+      description:
+        buyOrders === 2
+          ? `Tranche 1 (60%): ${tranche1Shares} aktier @ ${currPrefix}${currentPrice} (Markedsåbning / Limit)`
+          : `Én ordre: ${tranche1Shares} aktier @ ${currPrefix}${currentPrice} (limit ved aktuel kurs)`,
     },
     tranche2: {
       shares: tranche2Shares,
       price: entryZoneMin,
       allocationDkk: tranche2Dkk,
       allocationUsd: Math.round(tranche2Dkk / usdToDkk),
-      description: `Tranche 2 (40%): ${tranche2Shares} aktier @ ${currPrefix}${entryZoneMin} (Pullback ordrebog)`,
+      description:
+        buyOrders === 2
+          ? `Tranche 2 (40%): ${tranche2Shares} aktier @ ${currPrefix}${entryZoneMin} (Pullback ordrebog)`
+          : 'Ingen anden tranche (én ordre)',
     },
     volatilityTag,
+    cost: rt && {
+      dkk: Math.round(rt.dkk),
+      pct: Number(rt.pct.toFixed(2)),
+      orders: buyOrders + 1,
+      minFeeBelowDkk: Math.round(rt.minFeeBelowDkk),
+      minFeeWarning: smallestBuyDkk < rt.minFeeBelowDkk,
+      liquidityKnown: rt.liquidityKnown,
+    },
   };
 }
 
