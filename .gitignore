@@ -46,3 +46,8 @@ next-env.d.ts
 # local persistent database
 data/*.json
 /data
+
+# fase 4 research (Python)
+research/data/
+research/.venv/
+__pycache__/
