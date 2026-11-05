@@ -1,4 +1,4 @@
-import { Bookmark, CheckCircle2 } from 'lucide-react';
+import { Bookmark, CheckCircle2, RefreshCw } from 'lucide-react';
 import type { InsiderTransaction, PaperTradePosition, TradeExecutionPlan } from '@/types/insider';
 import { BreakEven } from '@/components/BreakEven';
 import { btn, Card, Chip, Label } from '@/components/ui';
@@ -20,6 +20,8 @@ export function TradePlanCard({
   portfolioLoading,
   onOpenPaperTrade,
   holdNote,
+  onFetchFx,
+  fetchingFx = false,
 }: {
   tx: InsiderTransaction;
   plan: TradeExecutionPlan;
@@ -33,6 +35,9 @@ export function TradePlanCard({
   portfolioLoading: boolean;
   onOpenPaperTrade: () => void;
   holdNote: string;
+  /** Sættes kun, når planen mangler en målt valutakurs: henter live valuta (samme kald som "Opdatér kurser"). */
+  onFetchFx?: () => void;
+  fetchingFx?: boolean;
 }) {
   const active = plan.status === 'ACTIVE_PLAN';
   return (
@@ -66,6 +71,15 @@ export function TradePlanCard({
         <Card className="p-4">
           <p className="text-sm font-medium">Ingen ordre anbefales – kapitalbeskyttelse</p>
           <p className="mt-1 text-sm text-graphite">{plan.reason}</p>
+          {onFetchFx && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button type="button" onClick={onFetchFx} disabled={fetchingFx} className={btn.primary}>
+                <RefreshCw className={`size-4 ${fetchingFx ? 'animate-spin' : ''}`} aria-hidden />
+                {fetchingFx ? 'Henter valutakurser …' : 'Hent valutakurser'}
+              </button>
+              <span className="text-xs text-graphite">Henter live valuta og opdaterer åbne positioner. Derefter beregnes planen.</span>
+            </div>
+          )}
         </Card>
       ) : (
         <>

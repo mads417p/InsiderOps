@@ -4,7 +4,8 @@ import { resetAppData } from '@/lib/db';
 
 /**
  * POST /api/reset { confirm: "NULSTIL" } – kun fra knappen "Nulstil data".
- * Sletter domme og paper-positioner (backup i data/backups/ først). Scans, Nordnet-handler og signal-ledgeren bevares.
+ * Sletter domme og paper-positioner (backup i data/backups/ først). Scans, valutakurser, Nordnet-handler og
+ * signal-ledgeren bevares.
  */
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);

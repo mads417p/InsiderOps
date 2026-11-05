@@ -877,6 +877,9 @@ export default function Dashboard() {
   const gatekeeperKeySet = apiKeys.gatekeeperProvider === 'gemini' ? apiKeys.gemini : apiKeys.anthropic;
   const selectedScan = selectedTx ? items.find((i) => i.transaction.id === selectedTx.id) : undefined;
   const plan = selectedTx && activeVerdict ? generateTradeExecutionPlan(selectedTx, activeVerdict, maxCapitalDkk, fxRates, planOpts) : null;
+  // "Hent valutakurser" kun når det netop er valutaen, der blokerer planen (ikke score eller manglende kurs/ATR).
+  // ponytail: matcher trade-planners begrundelse; en blocker-kode i TradeExecutionPlan, hvis flere knapper kommer til.
+  const fxMissing = plan?.status === 'DO_NOT_TRADE' && !!plan.reason?.startsWith('Live valutakurs mangler');
 
   const errorNote = (message: string | null, clear: () => void) =>
     message && (
@@ -965,6 +968,8 @@ export default function Dashboard() {
                     portfolioLoading={portfolioLoading}
                     onOpenPaperTrade={() => handleOpenPaperTrade(selectedTx, plan)}
                     holdNote={HOLD_NOTE}
+                    onFetchFx={fxMissing ? handleRefreshPortfolioLivePnl : undefined}
+                    fetchingFx={portfolioRefreshing}
                   />
                   {portfolioErrorNote}
                   <CouncilDetails

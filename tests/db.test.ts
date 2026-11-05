@@ -102,7 +102,7 @@ describe('db.ts', () => {
 });
 
 describe('resetAppData', () => {
-  it('sletter domme og paper-positioner, bevarer scans og Nordnet-handler, og tager backup først', async () => {
+  it('sletter domme og paper-positioner, bevarer scans, valutakurser og Nordnet-handler, og tager backup først', async () => {
     const before = JSON.stringify({
       verdicts: { a: item('a'), b: item('b') },
       scanHistory: { unified: { source: 'unified', scannedAt: 't', items: [] } },
@@ -124,7 +124,7 @@ describe('resetAppData', () => {
     expect(after.verdicts).toEqual({});
     expect(Object.keys(after.paperPortfolio)).toEqual(['r1']);
     expect(Object.keys(after.scanHistory)).toEqual(['unified']);
-    expect(after.fxRates).toBeUndefined();
+    expect(after.fxRates).toEqual({ USD: 6.66 }); // valutakurser bevares, ellers kan handelsplanen ikke regne
     expect(after.portfolioRefreshedAt).toBeUndefined();
   });
 });

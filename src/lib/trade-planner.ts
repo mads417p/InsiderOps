@@ -37,7 +37,8 @@ export function generateTradeExecutionPlan(
   const fxToDkk = getFxRateToDkk(currency, fx);
   const usdToDkk = getFxRateToDkk('USD', fx);
   if (fxToDkk === undefined || usdToDkk === undefined) {
-    return doNotTrade(`Live valutakurs mangler (${currency}/DKK eller USD/DKK). Ingen handelsplan uden målt valutakurs.`);
+    const pair = currency === 'USD' ? 'USD/DKK' : `${currency}/DKK eller USD/DKK`;
+    return doNotTrade(`Live valutakurs mangler (${pair}). Ingen handelsplan uden målt valutakurs.`);
   }
 
   const currentPrice = tx.currentMarketPrice as number;

@@ -224,9 +224,10 @@ export function deletePaperTrade(id: string): Promise<boolean> {
 }
 
 /**
- * "Nulstil data": sletter alle domme og alle paper-positioner samt gemte valutakurser og opdateringstidspunkt.
- * Bevares: gemte scans, rigtige Nordnet-positioner (tradeType REAL_NORDNET) og signal-ledgeren (insiderops.db,
- * præregistreret og append-only). Den nuværende fil kopieres først til data/backups/, så det kan fortrydes.
+ * "Nulstil data": sletter alle domme og alle paper-positioner samt tidspunktet for sidste kursopdatering.
+ * Bevares: gemte scans, valutakurser (markedsdata med tidsstempel – uden dem kan handelsplanen ikke regne),
+ * rigtige Nordnet-positioner (tradeType REAL_NORDNET) og signal-ledgeren (insiderops.db, præregistreret og
+ * append-only). Den nuværende fil kopieres først til data/backups/, så det kan fortrydes.
  */
 export function resetAppData(): Promise<{ backup: string | null; verdicts: number; positions: number }> {
   return updateDb(async (db) => {
@@ -245,7 +246,6 @@ export function resetAppData(): Promise<{ backup: string | null; verdicts: numbe
     const positions = Object.keys(db.paperPortfolio).length - Object.keys(kept).length;
     db.verdicts = {};
     db.paperPortfolio = kept;
-    delete db.fxRates;
     delete db.portfolioRefreshedAt;
     return { backup, verdicts, positions };
   });
