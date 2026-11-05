@@ -4,8 +4,11 @@ import {
   PaperTradePosition,
   PaperTradeStatus,
   PortfolioSummary,
+  RealKpis,
   TradeType,
 } from '@/types/insider';
+import type { CostsConfig } from '@/lib/costs';
+import { orderCostDkk } from '@/lib/round-trip';
 import { currencyForTicker, getFxRateToDkk, type LiveFxRates } from '@/lib/live-quote';
 import { detect10b51, fetchOpenInsiderHtml, parseOpenInsiderTable } from '@/lib/sec-scanner';
 import { secFetch } from '@/lib/sec-client';
@@ -47,12 +50,31 @@ export function closePosition(
   exitPrice: number,
   exitFx: number,
   status: Exclude<PaperTradeStatus, 'OPEN'>,
-  closedAt = new Date().toISOString()
+  closedAt = new Date().toISOString(),
+  bench?: { spyNow: number | null; usdDkkNow?: number }
 ): PaperTradePosition {
   const invested = pos.shares * pos.entryPrice * pos.entryFxRateDkk;
   const realizedPnlDkk = Math.round(pos.shares * (exitPrice * exitFx - pos.entryPrice * pos.entryFxRateDkk));
+  // Alpha på lukketidspunktet, når SPY er hentet samtidig med exit-kursen; ellers beholdes sidste refresh-værdi.
+  const a = bench
+    ? computeAlphaDkk({
+        entryPrice: pos.entryPrice,
+        entryFx: pos.entryFxRateDkk,
+        price: exitPrice,
+        fxNow: exitFx,
+        spyEntry: pos.benchmarkEntryPrice,
+        usdDkkEntry: pos.entryUsdDkk,
+        spyNow: bench.spyNow,
+        usdDkkNow: bench.usdDkkNow,
+      })
+    : null;
   return {
     ...pos,
+    ...(a?.alphaPct != null && {
+      benchmarkCurrentPrice: bench!.spyNow ?? undefined,
+      benchmarkReturnPct: a.benchmarkReturnPct,
+      alphaPct: a.alphaPct,
+    }),
     status,
     exitPrice,
     exitFx,
@@ -165,6 +187,44 @@ export function computeSummary(positions: PaperTradePosition[], tradeType: Trade
     closedCount: closed.length,
     avgAlphaPct: weighted((p) => p.alphaPct as number),
     benchmarkReturnPct: weighted((p) => p.benchmarkReturnPct as number),
+  };
+}
+
+/**
+ * Egne KPI'er for REAL_NORDNET (fase 9) – virker mine copy trades?
+ * Omkostninger = Nordnet-tarif fra costs.json (kurtage + veksling) for købet og, for lukkede, salget.
+ * Spread tælles ikke: den ligger i de faktiske kurser, når de er rettet til Nordnet. Salg af åbne
+ * positioner er ikke betalt endnu og indgår ikke.
+ */
+export function computeRealKpis(positions: PaperTradePosition[], costs: CostsConfig): RealKpis {
+  const mine = positions.filter((p) => tradeTypeOf(p) === 'REAL_NORDNET');
+  const closed = mine.filter((p) => p.status !== 'OPEN');
+  let costsDkk = 0;
+  let costsMissing = 0;
+  for (const p of mine) {
+    const cur = currencyForTicker(p.ticker);
+    const buy = orderCostDkk(costs, cur, p.shares * p.entryPrice * p.entryFxRateDkk);
+    const sell =
+      p.status === 'OPEN' ? 0 : p.exitPrice && p.exitFx ? orderCostDkk(costs, cur, p.shares * p.exitPrice * p.exitFx) : undefined;
+    if (buy === undefined || sell === undefined) costsMissing++;
+    else costsDkk += buy + sell;
+  }
+  const investedDkk = Math.round(mine.reduce((s, p) => s + p.shares * p.entryPrice * p.entryFxRateDkk, 0));
+  const grossPnlDkk = mine.reduce((s, p) => s + (p.status === 'OPEN' ? p.pnlDkk || 0 : p.realizedPnlDkk ?? p.pnlDkk ?? 0), 0);
+  const netPnlDkk = Math.round(grossPnlDkk - costsDkk);
+  const withAlpha = mine.filter((p) => typeof p.alphaPct === 'number' && p.investedDkk > 0);
+  const w = withAlpha.reduce((s, p) => s + p.investedDkk, 0);
+  return {
+    openCount: mine.length - closed.length,
+    closedCount: closed.length,
+    investedDkk,
+    grossPnlDkk,
+    costsDkk: Math.round(costsDkk),
+    costsMissing,
+    netPnlDkk,
+    netPnlPct: investedDkk > 0 ? round2((netPnlDkk / investedDkk) * 100) : null,
+    alphaPct: w > 0 ? round2(withAlpha.reduce((s, p) => s + (p.alphaPct as number) * p.investedDkk, 0) / w) : null,
+    alphaCount: withAlpha.length,
   };
 }
 

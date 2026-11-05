@@ -201,6 +201,20 @@ export interface PaperTradePosition {
   realizedPnlPct?: number;
 }
 
+/** Egne KPI'er for rigtige Nordnet-handler (fase 9): åbne + lukkede, i DKK. */
+export interface RealKpis {
+  openCount: number;
+  closedCount: number;
+  investedDkk: number; // al investeret kapital (åbne + lukkede)
+  grossPnlDkk: number; // realiseret + urealiseret
+  costsDkk: number; // kurtage + veksling efter tarif: køb (alle) + salg (lukkede)
+  costsMissing: number; // positioner uden tarif for valutaen (tæller ikke med i costsDkk)
+  netPnlDkk: number;
+  netPnlPct: number | null; // null = intet investeret
+  alphaPct: number | null; // vægtet efter investeret DKK over positioner med kendt alpha; null = ingen
+  alphaCount: number;
+}
+
 export interface PortfolioSummary {
   tradeType: TradeType;
   totalInvestedDkk: number; // åbne positioner

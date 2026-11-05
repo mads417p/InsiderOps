@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { closePosition, computeAlphaDkk, computeSummary, mergeExitWarning, refreshPosition } from '@/lib/portfolio';
+import { closePosition, computeAlphaDkk, computeRealKpis, computeSummary, mergeExitWarning, refreshPosition } from '@/lib/portfolio';
+import { loadCosts } from '@/lib/costs';
 import { closeOnOrBefore, needsBackfill } from '../scripts/backfill-benchmark';
 import type { LiveFxRates } from '@/lib/live-quote';
 import type { PaperTradePosition } from '@/types/insider';
@@ -101,6 +102,46 @@ describe('computeSummary pr. type (audit 1.9)', () => {
   it('win rate tæller kun lukkede positioner; ingen lukkede → null', () => {
     expect(computeSummary(positions, 'PAPER').winRatePct).toBe(50);
     expect(computeSummary(positions, 'REAL_NORDNET').winRatePct).toBeNull();
+  });
+});
+
+describe('egne KPI-tal for REAL_NORDNET (fase 9)', () => {
+  const costs = loadCosts(); // US: 25 kr. min / 0,15 %, USD-FX 0 %; DKK: 25 kr. / 0,1 %
+  const real = (over: Partial<PaperTradePosition>) => pos({ tradeType: 'REAL_NORDNET', ...over });
+  const positions = [
+    // åben US: køb 7.000 kr. → 25 kr. (min); alpha 4 %
+    real({ id: 'r1', pnlDkk: 500, alphaPct: 4 }),
+    // lukket US: køb 7.000 → 25 kr., salg 10 × 120 × 7,1 = 8.520 → 25 kr.; alpha −2 %
+    real({ id: 'r2', status: 'CLOSED_MANUAL', exitPrice: 120, exitFx: 7.1, realizedPnlDkk: 1520, alphaPct: -2 }),
+    // lukket DKK-aktie: køb 40.000 kr. → 40 kr., salg 38.000 kr. → 38 kr. (0,1 %); ingen alpha
+    real({ id: 'r3', ticker: 'NOVO-B.CO', status: 'CLOSED_MANUAL', shares: 100, entryPrice: 400, entryFxRateDkk: 1, investedDkk: 40000, exitPrice: 380, exitFx: 1, realizedPnlDkk: -2000 }),
+    pos({ id: 'paper', pnlDkk: 9999, alphaPct: 50 }), // PAPER tæller ikke
+  ];
+
+  it('afkast, omkostninger, antal og alpha over åbne + lukkede', () => {
+    const k = computeRealKpis(positions, costs);
+    expect(k).toMatchObject({ openCount: 1, closedCount: 2, investedDkk: 54000, grossPnlDkk: 20, costsDkk: 153, costsMissing: 0 });
+    expect(k.netPnlDkk).toBe(20 - 153);
+    expect(k.netPnlPct).toBeCloseTo((-133 / 54000) * 100, 2);
+    expect(k.alphaPct).toBe(1); // (4 × 7.000 − 2 × 7.000) / 14.000
+    expect(k.alphaCount).toBe(2);
+  });
+
+  it('ingen rigtige handler → nuller og null, intet opfundet', () => {
+    expect(computeRealKpis([pos()], costs)).toMatchObject({ openCount: 0, closedCount: 0, costsDkk: 0, netPnlPct: null, alphaPct: null });
+  });
+
+  it('lukket uden exit-kurs tælles som manglende omkostning, ikke som 0 kr.', () => {
+    const k = computeRealKpis([real({ status: 'CLOSED_MANUAL', realizedPnlDkk: 0 })], costs);
+    expect(k.costsMissing).toBe(1);
+    expect(k.costsDkk).toBe(0);
+  });
+
+  it('lukning med SPY sætter alpha på lukketidspunktet; uden SPY beholdes den gamle', () => {
+    // aktie 100 → 110 (+10 %), SPY 500 → 525 (+5 %), samme USD/DKK → alpha 5
+    const withSpy = closePosition(pos({ alphaPct: 99 }), 110, 7, 'CLOSED_MANUAL', 'x', { spyNow: 525, usdDkkNow: 7 });
+    expect(withSpy).toMatchObject({ alphaPct: 5, benchmarkReturnPct: 5, benchmarkCurrentPrice: 525 });
+    expect(closePosition(pos({ alphaPct: 99 }), 110, 7, 'CLOSED_MANUAL', 'x').alphaPct).toBe(99);
   });
 });
 

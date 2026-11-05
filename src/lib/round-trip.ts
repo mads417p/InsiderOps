@@ -41,3 +41,15 @@ export function roundTripCost(
     liquidityKnown: adv !== undefined,
   };
 }
+
+/**
+ * Faktisk tarif for én ordre (kurtage + veksling) i DKK – til rigtige handler, hvor spread allerede ligger i kursen.
+ * Ukendt marked eller valuta → undefined.
+ */
+export function orderCostDkk(c: CostsConfig, currency: string, amountDkk: number): number | undefined {
+  const cur = currency.toUpperCase();
+  const fee = c.brokerage[MARKET_BY_CURRENCY[cur] ?? ''];
+  const fxPct = c.fxSpreadPctByCurrency[cur];
+  if (!fee || fxPct === undefined || !(amountDkk > 0)) return undefined;
+  return Math.max(fee.minDkk, (fee.pct / 100) * amountDkk) + (fxPct / 100) * amountDkk;
+}

@@ -4,12 +4,14 @@ import { fetchVerifiedLiveQuote, fetchLiveFxRates, getFxRateToDkk } from '@/lib/
 import {
   checkInsiderExitRadar,
   closePosition,
+  computeRealKpis,
   computeSummaries,
   mergeExitWarning,
   refreshPosition,
   tradeTypeOf,
 } from '@/lib/portfolio';
 import { PaperTradePosition } from '@/types/insider';
+import { loadCosts } from '@/lib/costs';
 import { idSchema, parseJson, portfolioPatchSchema, portfolioPostSchema } from '@/lib/api-schemas';
 
 /** Live SPY-kurs eller null – aldrig en hårdkodet reserve (755 gav før permanent forkert alpha). */
@@ -32,6 +34,7 @@ async function respondWithPortfolio(extra: Record<string, unknown> = {}) {
     positions,
     summaries,
     summary: summaries.PAPER, // bagudkompatibelt felt; brug summaries
+    realKpis: computeRealKpis(positions, loadCosts()),
     fxRates: await fetchLiveFxRates(),
     ...extra,
   });
@@ -199,8 +202,14 @@ export async function PATCH(request: Request) {
       if (!Object.hasOwn(existing, id)) {
         return NextResponse.json({ success: false, error: 'Position ikke fundet i porteføljen' }, { status: 404 });
       }
-      const [quote, fx] = await Promise.all([fetchVerifiedLiveQuote(existing[id].ticker), fetchLiveFxRates()]);
-      const exitPrice = Number(body.exitPrice) > 0 ? Number(body.exitPrice) : quote.price;
+      const manualExit = Number(body.exitPrice) > 0;
+      // ponytail: SPY hentes kun ved lukning til live kurs – ved manuel exit-kurs (historisk) beholdes sidste alpha.
+      const [quote, fx, spyPrice] = await Promise.all([
+        fetchVerifiedLiveQuote(existing[id].ticker),
+        fetchLiveFxRates(),
+        manualExit ? Promise.resolve(null) : fetchSpyPrice(),
+      ]);
+      const exitPrice = manualExit ? Number(body.exitPrice) : quote.price;
       const exitFx = getFxRateToDkk(quote.currency, fx);
       if (!(exitPrice > 0) || exitFx === undefined) {
         return NextResponse.json(
@@ -210,7 +219,14 @@ export async function PATCH(request: Request) {
       }
       const closed = await updateDb((db) => {
         if (!Object.hasOwn(db.paperPortfolio, id) || db.paperPortfolio[id].status !== 'OPEN') return null;
-        db.paperPortfolio[id] = closePosition(db.paperPortfolio[id], exitPrice, exitFx, 'CLOSED_MANUAL');
+        db.paperPortfolio[id] = closePosition(
+          db.paperPortfolio[id],
+          exitPrice,
+          exitFx,
+          'CLOSED_MANUAL',
+          undefined,
+          spyPrice ? { spyNow: spyPrice, usdDkkNow: getFxRateToDkk('USD', fx) } : undefined
+        );
         return db.paperPortfolio[id];
       });
       if (!closed) {

@@ -42,6 +42,7 @@ import {
   InsiderTransaction,
   PaperTradePosition,
   PortfolioSummary,
+  RealKpis,
   RejectedRow,
   TradeType,
 } from '@/types/insider';
@@ -50,6 +51,7 @@ import type { CostsConfig } from '@/lib/costs';
 import costsJson from '../../config/costs.json';
 import { collectRejected, isCeoCfoBuy, isModelScore, runwayLabel, scoreLabel, TONE_CLASS, verdictLabel } from '@/lib/ui-labels';
 import { NoEdgeBanner } from '@/components/NoEdgeBanner';
+import { RealKpiRow } from '@/components/RealKpiRow';
 import { RejectedNoisePanel } from '@/components/RejectedNoisePanel';
 import { MeasurementTab } from '@/components/MeasurementTab';
 import { latestValidatedVerdict } from '@/lib/verdicts';
@@ -196,6 +198,7 @@ export default function Dashboard() {
   const [paperPortfolio, setPaperPortfolio] = useState<Record<string, PaperTradePosition>>({});
   // Én opsummering pr. handelstype – PAPER og REAL_NORDNET blandes aldrig i KPI'erne.
   const [portfolioSummaries, setPortfolioSummaries] = useState<Partial<Record<TradeType, PortfolioSummary>>>({});
+  const [realKpis, setRealKpis] = useState<RealKpis | null>(null);
   // Live FX fra /api/portfolio – uden den laver trade-planneren ingen plan (ingen hårdkodede kurser).
   const [fxRates, setFxRates] = useState<LiveFxRates | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState<boolean>(false);
@@ -521,6 +524,7 @@ ${verdict.judgeThinking}
           });
           setPaperPortfolio(map);
           if (data.summaries) setPortfolioSummaries(data.summaries);
+        if (data.realKpis) setRealKpis(data.realKpis);
           if (data.fxRates) setFxRates(data.fxRates);
         }
       })
@@ -787,6 +791,7 @@ ${verdict.judgeThinking}
       if (res.ok && data.position) {
         setPaperPortfolio((prev) => ({ ...prev, [data.position.id]: data.position }));
         if (data.summaries) setPortfolioSummaries(data.summaries);
+        if (data.realKpis) setRealKpis(data.realKpis);
         if (data.fxRates) setFxRates(data.fxRates);
       } else {
         alert(`Positionen blev ikke oprettet: ${data.error || `HTTP ${res.status}`}`);
@@ -811,6 +816,7 @@ ${verdict.judgeThinking}
           });
           setPaperPortfolio(map);
           if (data.summaries) setPortfolioSummaries(data.summaries);
+        if (data.realKpis) setRealKpis(data.realKpis);
           if (data.fxRates) setFxRates(data.fxRates);
         }
       }
@@ -833,6 +839,7 @@ ${verdict.judgeThinking}
       if (res.ok && data.position) {
         setPaperPortfolio((prev) => ({ ...prev, [id]: data.position }));
         if (data.summaries) setPortfolioSummaries(data.summaries);
+        if (data.realKpis) setRealKpis(data.realKpis);
         if (data.fxRates) setFxRates(data.fxRates);
       } else {
         alert(`Positionen blev ikke lukket: ${data.error || `HTTP ${res.status}`}`);
@@ -876,6 +883,7 @@ ${verdict.judgeThinking}
         });
         setPaperPortfolio(map);
         if (data.summaries) setPortfolioSummaries(data.summaries);
+        if (data.realKpis) setRealKpis(data.realKpis);
           if (data.fxRates) setFxRates(data.fxRates);
         setEditingPosId(null);
       }
@@ -2736,9 +2744,11 @@ ${verdict.judgeThinking}
         {/* TAB 3: PAPER PORTEFØLJE & LIVE P&L */}
         {activeTab === 'portfolio' && (
           <div className="space-y-6">
-            {/* Top Portfolio KPI-Bar – én række pr. handelstype (PAPER altid, REAL_NORDNET når der er positioner) */}
-            {(['PAPER', 'REAL_NORDNET'] as const)
-              .filter((t) => t === 'PAPER' || (portfolioSummaries[t] && portfolioSummaries[t]!.openCount + portfolioSummaries[t]!.closedCount > 0))
+            {/* Egne KPI'er for rigtige Nordnet-handler (fase 9) */}
+            <RealKpiRow kpis={realKpis} />
+
+            {/* Paper-KPI-række (REAL_NORDNET har sin egen række ovenfor) */}
+            {(['PAPER'] as const)
               .map((kpiType, kpiIdx) => {
                 const portfolioSummary = portfolioSummaries[kpiType];
                 return (
