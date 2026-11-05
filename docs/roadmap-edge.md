@@ -1,5 +1,13 @@
 # InsiderOps – vejen mod en målbar edge
 
+## Status 5.11.2026 – konklusion efter fase 4
+- Backtest 2006–2024 og holdout 2025–2026 (låst plan, cdae2cb): insiderkøb giver en brutto-effekt (+0,56 % / +0,69 % på 5 dage), men netto efter omkostninger er den negativ (−0,34 % / −0,17 %). Det smalle udvalg (CEO/CFO + mere end 30 % under 52-ugers-toppen) bestod heller ikke på holdout. Se research/reports/backtest-v1.md.
+- Ingen rigtige penge på InsiderOps-signaler. Prereg-porten gælder fortsat.
+- Fase 5–7 er sat på pause. De genoptages kun, hvis ledgeren viser, at Claudes udvælgelse (H2) klarer sig markant bedre end populationen, eller hvis en ny hypotese præregistreres, før dens data findes.
+- Ledgeren kører videre (ca. $0,006 pr. scan).
+
+---
+
 Skrevet 4.11.2026 efter kode-audit (`docs/audit-2026-11-04.md`). Dokumentet er en arbejdsplan og en samling prompts til Claude Code. Det er en metode til at teste en strategi, ikke investeringsrådgivning.
 
 ---
