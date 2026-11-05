@@ -329,3 +329,84 @@ En feature er "holdbar", hvis forskellen har et 95 %-interval uden 0 over hele i
 | ADV < $5 mio. | 33,8 % | +0,09 % [-0,15 %; +0,34 %] | +0,26 % | -0,02 % | nej |
 
 Appen bør beregne disse live: CEO eller CFO, kursfald > 20 % de seneste 60 d, > 30 % under 52-ugers-top. ADV og likviditetsspand beregnes allerede, fordi de styrer omkostningen.
+
+## 13. Holdout 2025–2026
+
+Kørt 05.11.2026 efter `research/reports/holdout-plan.md` (commit cdae2cb 2026-11-05T12:54:50+01:00, sha256 81d992fd72e9…).
+`units.parquet` har sha256 984eecbaddfe… (planen: 984eecbaddfe…).
+Holdout-enheder har entry fra 2025-01-01 til 2026-04-01.
+Der er to bekræftende tests med Bonferroni: hver bestås, hvis den ensidede 97,5 %-nedre grænse er over 0 (uge-klynget).
+
+### Test 1 – basisstrategien
+
+| Mål | Værdi |
+|---|---|
+| Enheder / uger | 3.643 / 66 |
+| Gennemsnit netto 5 d mod SPY | -0,17 % |
+| SD pr. enhed | 8,53 % |
+| SE, uge-klynget | 0,247 % |
+| **Ensidet 97,5 %-nedre grænse (uge-klynget)** | **-0,65 %** |
+| Ensidet 95 %-nedre grænse, prereg-bootstrap (kun til orientering) | -0,58 % |
+| **Resultat** | **ikke bestået: nedre grænse ≤ 0** |
+
+### Test 2 – CEO/CFO-køb > 30 % under 52-ugers-toppen
+
+| Mål | Værdi |
+|---|---|
+| Enheder / uger | 484 / 61 |
+| Gennemsnit netto 5 d mod SPY | +0,24 % |
+| SD pr. enhed | 8,92 % |
+| SE, uge-klynget | 0,439 % |
+| **Ensidet 97,5 %-nedre grænse (uge-klynget)** | **-0,63 %** |
+| Ensidet 95 %-nedre grænse, prereg-bootstrap (kun til orientering) | -0,49 % |
+| **Resultat** | **ikke bestået: nedre grænse ≤ 0** |
+
+### Beskrivende (ingen konklusioner)
+
+Intervallerne er 95 % og uge-klyngede. Sidste kolonne er den ensidede 97,5 %-nedre grænse.
+
+**Basisstrategien:**
+
+| Horisont | N | Brutto mod SPY | Netto mod SPY | Netto mod IWM | Ensidet nedre grænse, netto SPY |
+|---|---|---|---|---|---|
+| 1 d | 3.643 | +0,35 % [+0,19 %; +0,50 %] | -0,51 % [-0,67 %; -0,36 %] | -0,57 % [-0,72 %; -0,42 %] | -0,67 % |
+| 5 d | 3.643 | +0,69 % [+0,21 %; +1,18 %] | -0,17 % [-0,65 %; +0,32 %] | -0,29 % [-0,67 %; +0,09 %] | -0,65 % |
+| 21 d | 3.643 | +1,32 % [+0,19 %; +2,44 %] | +0,46 % [-0,66 %; +1,58 %] | -0,35 % [-1,17 %; +0,48 %] | -0,66 % |
+| 63 d | 3.643 | +1,26 % [-0,65 %; +3,17 %] | +0,40 % [-1,50 %; +2,30 %] | -1,28 % [-2,70 %; +0,14 %] | -1,50 % |
+
+**Test 2-reglen:**
+
+| Horisont | N | Brutto mod SPY | Netto mod SPY | Netto mod IWM | Ensidet nedre grænse, netto SPY |
+|---|---|---|---|---|---|
+| 1 d | 484 | +0,98 % [+0,48 %; +1,47 %] | +0,11 % [-0,38 %; +0,61 %] | +0,08 % [-0,44 %; +0,59 %] | -0,38 % |
+| 5 d | 484 | +1,10 % [+0,23 %; +1,97 %] | +0,24 % [-0,63 %; +1,10 %] | +0,10 % [-0,59 %; +0,78 %] | -0,63 % |
+| 21 d | 484 | +2,40 % [+0,78 %; +4,03 %] | +1,54 % [-0,08 %; +3,16 %] | +0,63 % [-0,67 %; +1,92 %] | -0,08 % |
+| 63 d | 484 | +2,35 % [-0,24 %; +4,94 %] | +1,49 % [-1,10 %; +4,08 %] | -0,34 % [-3,37 %; +2,68 %] | -1,10 % |
+
+**Fortegn pr. feature** (forskel i netto 5 d med/uden flag, uge-klynget):
+
+| Feature | In-sample | Holdout [95 %] | Samme fortegn |
+|---|---|---|---|
+| opportunistisk køb (CMP) | +0,14 % | -0,40 % [-0,96 %; +0,16 %] | nej |
+| rutinekøb (CMP) | -0,14 % | -0,00 % [-0,94 %; +0,94 %] | ja |
+| CEO eller CFO | +0,31 % | +0,67 % [-0,06 %; +1,40 %] | ja |
+| director | -0,14 % | -0,22 % [-0,79 %; +0,36 %] | ja |
+| 10 %-ejer | -0,02 % | -0,39 % [-1,54 %; +0,75 %] | ja |
+| C-suite-titel | +0,20 % | +0,61 % [-0,10 %; +1,33 %] | ja |
+| ≥ 2 personlige købere/10 d | +0,06 % | +0,40 % [-0,27 %; +1,07 %] | ja |
+| fond/enhed | +0,23 % | -0,22 % [-1,09 %; +0,65 %] | nej |
+| køb til udbudskurs | +0,43 % | -0,39 % [-2,69 %; +1,91 %] | nej |
+| ny position eller > 100 % stigning | +0,09 % | -0,24 % [-0,93 %; +0,45 %] | nej |
+| kursfald > 20 % de seneste 60 d | +0,81 % | -0,45 % [-1,45 %; +0,55 %] | nej |
+| > 30 % under 52-ugers-top | +0,66 % | -0,20 % [-0,96 %; +0,55 %] | nej |
+| markedsværdi < $300 mio. | +0,38 % | +0,71 % [-0,71 %; +2,13 %] | ja |
+| ADV < $5 mio. | +0,09 % | -0,43 % [-1,14 %; +0,28 %] | nej |
+
+**Dækning 2025–2026** (survivorship):
+
+| År (filing) | Kandidater | Uden kursdata | Andel | Kurs-mismatch |
+|---|---|---|---|---|
+| 2025 | 4.580 | 205 | 4,5 % | 357 |
+| 2026 | 1.166 | 25 | 2,1 % | 93 |
+
+**Samlet:** Test 1 ikke bestået: nedre grænse ≤ 0; Test 2 ikke bestået: nedre grænse ≤ 0.
