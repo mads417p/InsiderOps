@@ -42,3 +42,17 @@ export function collectRejected(
  */
 export const isModelScore = (r: Pick<GatekeeperResult, 'scoreSource'>): boolean =>
   r.scoreSource === 'claude' || r.scoreSource === 'gemini';
+
+/**
+ * Visningsnavn for rådets dom. Kun visning – DB, ledger og LLM bruger stadig de rå værdier.
+ * Ingen dokumenteret edge (fase 4/4-SE), så UI siger "signal", aldrig "KØB".
+ */
+const VERDICT_LABEL: Record<string, string> = {
+  'STRONG ASYMMETRY (KØB)': 'Stærkt signal',
+  'MODERATE SIGNAL (OVERVÅG)': 'Overvåg',
+  'PR STUNT / STØJ (IGNORER)': 'Støj',
+};
+export const verdictLabel = (v: string): string => VERDICT_LABEL[v] ?? v;
+
+/** Samme grænser som scoren altid har brugt: ≥75 stærkt signal, ≥60 overvåg, ellers støj. */
+export const scoreLabel = (score: number): string => (score >= 75 ? 'Stærkt signal' : score >= 60 ? 'Overvåg' : 'Støj');

@@ -1,4 +1,5 @@
 import type { CouncilVerdict } from '@/types/insider';
+import { verdictLabel } from '@/lib/ui-labels';
 
 /** Nyeste validerede dom for positionens ticker, og om den afviger fra scoren ved åbning. */
 export function PositionVerdict({
@@ -16,7 +17,7 @@ export function PositionVerdict({
     );
   }
   const { verdict, at } = latest;
-  const action = verdict.verdict.match(/\(([^)]+)\)/)?.[1] ?? verdict.verdict;
+  const action = verdictLabel(verdict.verdict);
   const date = at && !isNaN(Date.parse(at)) ? new Date(at).toLocaleDateString('da-DK') : 'ukendt dato';
   const changed = verdict.asymmetryScore !== openedScore;
   return (

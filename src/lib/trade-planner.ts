@@ -1,5 +1,6 @@
 import { InsiderTransaction, CouncilVerdict, TradeExecutionPlan } from '@/types/insider';
 import { currencyForTicker, getFxRateToDkk, type LiveFxRates } from '@/lib/live-quote';
+import { verdictLabel } from '@/lib/ui-labels';
 
 /**
  * Beregner en komplet kvantitativ eksekverings- og risikoplan baseret på 14-dages ATR volatilitet,
@@ -15,7 +16,7 @@ export function generateTradeExecutionPlan(
   // 1. Kapitalbeskyttelse: Afvis transaktioner med lav score eller PR-stunt
   if (verdict.asymmetryScore < 60 || verdict.verdict === 'PR STUNT / STØJ (IGNORER)') {
     return doNotTrade(
-      `Asymmetry Score er ${verdict.asymmetryScore}/100 (${verdict.verdict}). Rådet fraråder kapitalallokering for at beskytte frie midler.`
+      `Asymmetri-score er ${verdict.asymmetryScore}/100 (${verdictLabel(verdict.verdict)}). Rådet fraråder kapitalallokering for at beskytte frie midler.`
     );
   }
 

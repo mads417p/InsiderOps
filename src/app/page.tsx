@@ -46,7 +46,8 @@ import {
   TradeType,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
-import { collectRejected, isModelScore, runwayLabel, TONE_CLASS } from '@/lib/ui-labels';
+import { collectRejected, isModelScore, runwayLabel, scoreLabel, TONE_CLASS, verdictLabel } from '@/lib/ui-labels';
+import { NoEdgeBanner } from '@/components/NoEdgeBanner';
 import { RejectedNoisePanel } from '@/components/RejectedNoisePanel';
 import { MeasurementTab } from '@/components/MeasurementTab';
 import { latestValidatedVerdict } from '@/lib/verdicts';
@@ -348,7 +349,7 @@ ${
 ---
 
 ## 5. The Council: CIO Dom & Asymmetry Score
-**Afgørelse:** ${verdict.verdict}  
+**Afgørelse:** ${verdictLabel(verdict.verdict)}
 **Asymmetry Score:** ${verdict.asymmetryScore}/100  
 **Overskrift:** ${verdict.headline}  
 
@@ -1502,7 +1503,8 @@ ${verdict.judgeThinking}
         {/* TAB 1: RADAR TABLE & TOP PICKS HUB */}
         {activeTab === 'radar' && (
           <div className="space-y-6">
-            {/* 🎯 RÅDETS AKTIVE KØBS-ANBEFALINGER (TOP PICKS) HUB */}
+            <NoEdgeBanner />
+            {/* 🎯 RÅDETS STÆRKE SIGNALER (TOP PICKS) HUB */}
             <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-2xl backdrop-blur-sm">
               {/* Header & Filter Tabs */}
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3.5 mb-4">
@@ -1513,14 +1515,14 @@ ${verdict.judgeThinking}
                   <div>
                     <div className="flex items-center gap-2">
                       <h2 className="font-mono text-sm sm:text-base font-bold text-slate-100 tracking-wider">
-                        🎯 RÅDETS AKTIVE KØBS-ANBEFALINGER (TOP PICKS)
+                        🎯 RÅDETS STÆRKE SIGNALER
                       </h2>
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700 text-emerald-300 font-bold">
-                        {buyRecommendations.length} KØB
+                        {buyRecommendations.length} stærke
                       </span>
                     </div>
                     <p className="text-xs text-slate-400 font-mono mt-0.5">
-                      Filtreret til aktier godkendt af The Council med asymmetri og positiv risikoprofil
+                      Aktier, rådet scorer højt – et signal, ikke en dokumenteret købsanbefaling
                     </p>
                   </div>
                 </div>
@@ -1536,7 +1538,7 @@ ${verdict.judgeThinking}
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    <span>🟢 Kun KØB-Anbefalinger ({buyRecommendations.length})</span>
+                    <span>🟢 Stærkt signal ≥75 ({buyRecommendations.length})</span>
                   </button>
                   <button
                     type="button"
@@ -1547,7 +1549,7 @@ ${verdict.judgeThinking}
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    <span>🟡 Overvåg / Afvent 60-74 ({watchRecommendations.length})</span>
+                    <span>🟡 Overvåg 60-74 ({watchRecommendations.length})</span>
                   </button>
                   <button
                     type="button"
@@ -1558,7 +1560,7 @@ ${verdict.judgeThinking}
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    <span>🔴 Afvist af Rådet &lt;60 ({rejectedRecommendations.length})</span>
+                    <span>🔴 Støj &lt;60 ({rejectedRecommendations.length})</span>
                   </button>
                 </div>
               </div>
@@ -1577,7 +1579,7 @@ ${verdict.judgeThinking}
                     <div className="py-8 text-center text-slate-400 font-mono text-xs border border-dashed border-slate-800 rounded-lg bg-slate-950/40">
                       {recommendationFilterTab === 'BUY' ? (
                         <div className="space-y-1">
-                          <p className="font-bold text-slate-300">Ingen aktive købs-anbefalinger fra Rådet endnu</p>
+                          <p className="font-bold text-slate-300">Ingen stærke signaler fra rådet endnu</p>
                           <p className="text-[11px] text-slate-500">
                             Vælg interessante aktier fra radaren nedenfor med afkrydsning og klik &apos;Send Valgte til Rådet&apos;!
                           </p>
@@ -1585,7 +1587,7 @@ ${verdict.judgeThinking}
                       ) : recommendationFilterTab === 'WATCH' ? (
                         <div>Ingen aktier i overvågningskategorien (score 60-74).</div>
                       ) : (
-                        <div>Ingen afviste aktier (score &lt;60).</div>
+                        <div>Ingen aktier vurderet som støj (score &lt;60).</div>
                       )}
                     </div>
                   );
@@ -1659,7 +1661,7 @@ ${verdict.judgeThinking}
                                       : 'bg-rose-950 border-rose-700 text-rose-300'
                                   }`}
                                 >
-                                  {isBuy ? '🟢 KØB' : isWatch ? '🟡 AFVENT' : '🔴 AFVIST'}{' '}
+                                  {isBuy ? '🟢 Stærkt signal' : isWatch ? '🟡 Overvåg' : '🔴 Støj'}{' '}
                                   ({verdict.previousScore && verdict.previousScore !== verdict.asymmetryScore ? `${verdict.previousScore} → ` : ''}
                                   {verdict.asymmetryScore}/100)
                                 </span>
@@ -2400,11 +2402,8 @@ ${verdict.judgeThinking}
                                           : 'bg-rose-950 border-rose-700 text-rose-300'
                                       }`}
                                     >
-                                      {saved.verdict.asymmetryScore >= 75
-                                        ? `🟢 ANBEFALET KØB (${saved.verdict.asymmetryScore}/100)`
-                                        : saved.verdict.asymmetryScore >= 60
-                                        ? `🟡 AFVENT / OVERVÅG (${saved.verdict.asymmetryScore}/100)`
-                                        : `🔴 AFVIST (${saved.verdict.asymmetryScore}/100)`}
+                                      {saved.verdict.asymmetryScore >= 75 ? '🟢' : saved.verdict.asymmetryScore >= 60 ? '🟡' : '🔴'}{' '}
+                                      {scoreLabel(saved.verdict.asymmetryScore)} ({saved.verdict.asymmetryScore}/100)
                                     </span>
                                   )}
                                 </div>
@@ -2521,7 +2520,7 @@ ${verdict.judgeThinking}
               <div className="flex flex-wrap items-center gap-3">
                 {/* Avg Alpha KPI Pill */}
                 <div className="px-3 py-1.5 rounded bg-slate-950 border border-slate-800 flex items-center gap-2 font-mono text-xs">
-                  <span className="text-slate-400">GNS. INSIDER ALPHA (STRONG BUY):</span>
+                  <span className="text-slate-400">GNS. INSIDER-ALPHA (STÆRKE SIGNALER):</span>
                   <span
                     className={`font-bold ${
                       avgStrongAlpha === null
@@ -3301,6 +3300,9 @@ ${verdict.judgeThinking}
           </div>
         )}
         <div id="council-chamber" className="mt-8">
+          <div className="mb-4">
+            <NoEdgeBanner />
+          </div>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-3 mb-4 gap-3">
             <div className="flex items-center gap-2">
               <Scale className="w-5 h-5 text-cyan-400" />
@@ -3596,7 +3598,7 @@ ${verdict.judgeThinking}
                           : 'bg-rose-950/80 border-rose-600 text-rose-300'
                       }`}
                     >
-                      {activeVerdict.verdict}
+                      {verdictLabel(activeVerdict.verdict)}
                     </div>
                   </div>
                 </div>
