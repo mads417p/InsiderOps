@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getPaperPortfolio, savePaperTrade, deletePaperTrade, updateDb } from '@/lib/db';
-import { fetchVerifiedLiveQuote, fetchLiveFxRates, getFxRateToDkk } from '@/lib/live-quote';
+import { getDatabase, getPaperPortfolio, deletePaperTrade, updateDb } from '@/lib/db';
+import { fetchVerifiedLiveQuote, fetchLiveFxRates, getFxRateToDkk, mergeFxRates } from '@/lib/live-quote';
 import {
   checkInsiderExitRadar,
   closePosition,
@@ -25,8 +25,10 @@ async function fetchSpyPrice(): Promise<number | null> {
   }
 }
 
+/** Svar med gemte data – ingen eksterne kald. Valutakurser er de senest gemte; refreshedAt er seneste "Opdatér". */
 async function respondWithPortfolio(extra: Record<string, unknown> = {}) {
-  const positions = Object.values(await getPaperPortfolio());
+  const db = await getDatabase();
+  const positions = Object.values(db.paperPortfolio);
   const summaries = computeSummaries(positions);
   return NextResponse.json({
     success: true,
@@ -35,32 +37,34 @@ async function respondWithPortfolio(extra: Record<string, unknown> = {}) {
     summaries,
     summary: summaries.PAPER, // bagudkompatibelt felt; brug summaries
     realKpis: computeRealKpis(positions, loadCosts()),
-    fxRates: await fetchLiveFxRates(),
+    fxRates: db.fxRates ?? null,
+    refreshedAt: db.portfolioRefreshedAt ?? null,
     ...extra,
   });
 }
 
+/**
+ * GET /api/portfolio: gemte positioner og valutakurser, ingen eksterne kald.
+ * GET /api/portfolio?refresh=true (kun knappen "Opdatér kurser & exit-radar"): live kurser, SPY, valuta og exit-radar.
+ */
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const noRefresh = searchParams.get('refresh') === 'false';
-    const checkExits = searchParams.get('checkExits') === 'true' || searchParams.get('refresh') === 'true';
 
-    const positions = Object.values(await getPaperPortfolio());
-    const openPositions = positions.filter((p) => p.status === 'OPEN');
-
-    if (!noRefresh && openPositions.length > 0) {
-      const [fx, spyPrice] = await Promise.all([fetchLiveFxRates(), fetchSpyPrice()]);
+    if (searchParams.get('refresh') === 'true') {
+      const openPositions = Object.values(await getPaperPortfolio()).filter((p) => p.status === 'OPEN');
+      const [fx, spyPrice] = await Promise.all([
+        fetchLiveFxRates(),
+        openPositions.length > 0 ? fetchSpyPrice() : Promise.resolve(null),
+      ]);
       const refreshed = await Promise.all(
         openPositions.map(async (pos) => {
           const [quote, exitCheck] = await Promise.all([
             fetchVerifiedLiveQuote(pos.ticker).catch(() => null),
-            checkExits ? checkInsiderExitRadar(pos) : Promise.resolve(undefined),
+            checkInsiderExitRadar(pos),
           ]);
           const next = refreshPosition(pos, { quote, fx, spyPrice });
-          next.insiderExitWarning = exitCheck
-            ? mergeExitWarning(pos.insiderExitWarning, exitCheck)
-            : pos.insiderExitWarning ?? { status: 'NOT_CHECKED', hasExit: false, message: 'Exit-radar ikke tjekket endnu' };
+          next.insiderExitWarning = mergeExitWarning(pos.insiderExitWarning, exitCheck);
           return next;
         })
       );
@@ -71,6 +75,8 @@ export async function GET(request: Request) {
         for (const pos of refreshed) {
           if (Object.hasOwn(db.paperPortfolio, pos.id)) db.paperPortfolio[pos.id] = pos;
         }
+        db.fxRates = mergeFxRates(db.fxRates, fx);
+        db.portfolioRefreshedAt = new Date().toISOString();
       });
     }
 
@@ -171,7 +177,10 @@ export async function POST(request: Request) {
       insiderExitWarning: { status: 'NOT_CHECKED', hasExit: false, message: 'Exit-radar ikke tjekket endnu' },
     };
 
-    await savePaperTrade(position);
+    await updateDb((db) => {
+      db.paperPortfolio[position.id] = position;
+      db.fxRates = mergeFxRates(db.fxRates, fxRates); // allerede hentet ved klikket – gem dem
+    });
     return respondWithPortfolio({ position });
   } catch (error) {
     console.error('Fejl i POST /api/portfolio:', error);
@@ -218,6 +227,7 @@ export async function PATCH(request: Request) {
         );
       }
       const closed = await updateDb((db) => {
+        db.fxRates = mergeFxRates(db.fxRates, fx); // allerede hentet ved klikket – gem dem
         if (!Object.hasOwn(db.paperPortfolio, id) || db.paperPortfolio[id].status !== 'OPEN') return null;
         db.paperPortfolio[id] = closePosition(
           db.paperPortfolio[id],

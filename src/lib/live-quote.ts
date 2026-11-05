@@ -94,6 +94,17 @@ export async function fetchLiveFxRates(): Promise<LiveFxRates> {
   return rates;
 }
 
+/**
+ * Nye kurser oven på de gemte: et par, der ikke kunne hentes nu, beholder sin sidst gemte kurs og dens fetchedAt.
+ * lastUpdated bliver det ældste pars tidspunkt, så "Senest opdateret" aldrig lover mere, end det ældste par holder.
+ */
+export function mergeFxRates(saved: LiveFxRates | undefined, fresh: LiveFxRates): LiveFxRates {
+  const merged: LiveFxRates = { ...saved, ...fresh };
+  const times = FX_PAIRS.map(({ key }) => merged[key]?.fetchedAt).filter((t): t is string => Boolean(t)).sort();
+  if (times[0]) merged.lastUpdated = times[0];
+  return merged;
+}
+
 /** Handelsvaluta ud fra Yahoo-tickerens suffiks: .CO DKK, .ST SEK, .HE EUR, .OL NOK, ellers USD. */
 export function currencyForTicker(ticker: string): 'DKK' | 'SEK' | 'EUR' | 'NOK' | 'USD' {
   const suffix = /\.(CO|ST|HE|OL)$/i.exec(ticker.trim())?.[1]?.toUpperCase();

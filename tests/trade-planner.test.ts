@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
 import { verifyDkTradability } from '@/lib/market-enricher';
-import { convertCurrency, currencyForTicker, getFxRateToDkk, type LiveFxRates } from '@/lib/live-quote';
+import { convertCurrency, currencyForTicker, getFxRateToDkk, mergeFxRates, type LiveFxRates } from '@/lib/live-quote';
 import type { CouncilVerdict, InsiderTransaction } from '@/types/insider';
 import { loadCosts } from '@/lib/costs';
 
@@ -146,5 +146,22 @@ describe('verifyDkTradability', () => {
     expect(r.isTradableInDK).toBeUndefined();
     expect(r.tradabilityReason).toMatch(/valutakurs DKK\/USD mangler/);
     expect(verifyDkTradability(dk, { ...cph, currentPrice: 400, avgDailyDollarVolume: 50_000_000 }, fx).isTradableInDK).toBe(true);
+  });
+});
+
+describe('mergeFxRates (gemte valutakurser)', () => {
+  it('et par, der fejlede nu, beholder sin gemte kurs, og lastUpdated er det ældste par', () => {
+    const saved: LiveFxRates = { ...fx, lastUpdated: '2026-11-04T12:00:00Z' };
+    const fresh: LiveFxRates = {
+      USD_DKK: { rate: 6.7, fetchedAt: '2026-11-05T09:00:00Z' },
+      EUR_DKK: { rate: 7.47, fetchedAt: '2026-11-05T09:00:00Z' },
+      fxIsLive: false,
+      lastUpdated: '2026-11-05T09:00:00Z',
+    };
+    const m = mergeFxRates(saved, fresh);
+    expect(m.USD_DKK?.rate).toBe(6.7);
+    expect(m.SEK_DKK).toEqual(q(0.68));
+    expect(m.lastUpdated).toBe('2026-11-04T12:00:00Z');
+    expect(mergeFxRates(undefined, fresh).lastUpdated).toBe('2026-11-05T09:00:00Z');
   });
 });

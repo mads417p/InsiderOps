@@ -1,12 +1,12 @@
 /**
- * Planlagt scan (fase 9): samme scan som "Scan Nu" i UI (kilde unified) – uden at dev-serveren skal køre.
+ * Manuel scan fra terminalen (fase 9): samme scan som "Scan Nu" i UI (kilde unified) – uden at dev-serveren skal køre.
  * Kører dev-serveren alligevel, sendes scannen til den, så kun én proces skriver i JSON-DB'en
  * (skrivekøen i db.ts dækker ikke to processer). Ellers køres route-handleren her i processen.
  *
  * Koster penge: gatekeeperen (Claude Haiku) og Nordic-udtrækket (Gemini) kaldes – prisen logges.
  * Rådet kører aldrig herfra.
  *
- * Kørsel (fra repo-roden): npm run scan     ·  planlagt: scripts/ops/run-job.ps1 -Job scan
+ * Kørsel (fra repo-roden): npm run scan     ·  med log: scripts/ops/run-job.ps1 -Job scan
  */
 import { existsSync } from 'node:fs';
 

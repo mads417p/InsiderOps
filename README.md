@@ -19,13 +19,13 @@ Systemet filtrerer automatisk markedsstøj (optioner, gaver, skatteafregninger, 
 
 ### Daglig rutine
 
-1. **14:45, hverdage (automatisk):** scan af SEC Form 4 og Nasdaq Nordic. Gatekeeperen (Claude Haiku) scorer rækkerne – ca. $0,01 pr. scan. Log: `data/logs/scan-<dato>.log`.
-2. **Åbn appen** (`start.bat`). Radar viser den seneste gemte scan. Brug hurtig-filteret **🎩 CEO/CFO-køb** eller et af de andre.
+1. **Scan selv (intet kører automatisk):** klik "Scan Nu" i appen eller kør `npm run scan`. Scanner SEC Form 4 og Nasdaq Nordic; gatekeeperen (Claude Haiku) scorer rækkerne – ca. $0,01 pr. scan.
+2. **Åbn appen** (`start.bat`). Indlæsning henter intet udefra: radaren viser den seneste gemte scan, og porteføljen de senest gemte kurser og valutakurser – alt med tidsstempel. Brug hurtig-filteret **🎩 CEO/CFO-køb** eller et af de andre.
 3. **Rådet (valgfrit):** markér rækker og klik "Send Valgte til Rådet". Koster Sonnet/Opus-kald og kører kun, når du klikker.
 4. **Handelsplanen** i rådskammeret: én ordre som standard, forventet round-trip i kr. og %, og en advarsel, når ordren er så lille, at minimumskurtagen slår igennem (USA ca. 16.700 kr., Norden 25.000 kr.).
 5. **Handl i Nordnet.** Opret positionen (📌), vælg "Nordnet Live" under *Redigér / Nordnet Match*, og ret kurs og antal til Nordnets.
-6. **22:30, hverdage (automatisk):** `npm run outcomes` beregner udfald for signal-ledgeren (fanen *Måling*).
-7. **Portefølje → Mine Nordnet-handler:** se, om dine egne copy trades virker.
+6. **Beregn udfald selv:** klik "Beregn udfald" på fanen *Måling* (eller kør `npm run outcomes`).
+7. **Portefølje → Mine Nordnet-handler:** klik "Opdatér kurser & exit-radar" for live kurser, og se, om dine egne copy trades virker.
 
 ### Hvad tallene betyder
 
@@ -57,27 +57,13 @@ Primær metrik: netto abnormalt afkast efter 5 handelsdage (DKK, efter omkostnin
 
 Rapporter: [`backtest-v1.md`](research/reports/backtest-v1.md) (USA), [`backtest-se-v1.md`](research/reports/backtest-se-v1.md) (Sverige), præregistreringer i [`docs/prereg.md`](docs/prereg.md) og [`research/reports/prereg-se.md`](research/reports/prereg-se.md).
 
-### Daglig drift (planlagte opgaver)
+### Kørsel fra terminalen
 
-To opgaver i Windows Task Scheduler under `\InsiderOps\` kører uden, at dev-serveren er åben:
+Intet kører af sig selv. Vil du scanne eller beregne udfald uden at åbne appen, så kør det selv:
 
-| Opgave | Tidspunkt | Kommando | Log |
-|---|---|---|---|
-| `Scan` | man–fre 14:45 | `npm run scan` | `data/logs/scan-<dato>.log` |
-| `Outcomes` | man–fre 22:30 | `npm run outcomes` | `data/logs/outcomes-<dato>.log` |
-
-```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ops/install-tasks.ps1
-```
-
-```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ops/uninstall-tasks.ps1
-```
-
-- Opgaverne kører som dig og kun, når du er logget ind (ingen gemt adgangskode). Var pc'en slukket eller i dvale, køres de, når den er tilgængelig igen. Pc'en vækkes ikke.
+- `npm run scan` eller `npm run outcomes`.
+- Med log i `data/logs/<job>-<dato>.log`: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ops/run-job.ps1 -Job scan` (eller `-Job outcomes`).
 - Kører dev-serveren, sender scan-jobbet scannen til den, så kun én proces skriver i databasen.
-- Kør et job i hånden med logning: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ops/run-job.ps1 -Job scan` (eller `-Job outcomes`). Uden logning: `npm run scan`.
-- Tjek status: `Get-ScheduledTask -TaskPath \InsiderOps\ | Get-ScheduledTaskInfo` (LastRunTime, LastTaskResult 0 = ok).
 
 ---
 
@@ -90,7 +76,7 @@ InsiderOps v2.0 udvider platformen fra ren Form 4 scanning til en komplet instit
 - **Short-Squeeze & Earnings Guard**: Realtime monitorering af **Short Interest** (% of Float), **Days to Cover** og næste regnskabsdato med automatisk helbredsklassificering (`FORTRESS_BALANCE`, `SOLID_RUNWAY`, `SHORT_SQUEEZE_SETUP`, `DILUTION_RISK`, `NEUTRAL`).
 - **S&P 500 (`SPY`) Alpha Benchmarking**: Hver porteføljeposition benchmarks live mod S&P 500 (`SPY`) fra åbningstidspunktet og viser netto Alpha (+/- %) på positions- og porteføljeniveau.
 - **Inline Nordnet Trade Editor (`PATCH /api/portfolio`)**: 1-kliks redigering af faktiske købskurser, kurtage/antal aktier og stop-loss/target, samt lynhurtig skift mellem `🧪 PAPER-TRADE` og `🏦 NORDNET LIVE HANDEL`.
-- **Insider-Exit Radar (`checkInsiderExitRadar`)**: Kontinuerlig overvågning af åbne positioner mod efterfølgende insider-salg (`Kode S`), der proaktivt advarer brugeren, hvis insidere tager gevinst eller flygter.
+- **Insider-Exit Radar (`checkInsiderExitRadar`)**: Tjekker åbne positioner for efterfølgende insider-salg (`Kode S`), når du klikker "Opdatér kurser & exit-radar", og advarer, hvis insidere tager gevinst eller flygter.
 - **Smart Sniper Filter-Presets**: Hurtige 1-klik presets i radaren:
   - `🎩 CEO/CFO-køb` (fase 9): køb, hvor CEO/VD eller CFO er køber – også i et cluster. Samme rolleregel som backtesten.
   - `💎 Under Insider Pris (Rabat-Zone)`: Viser godkendte, DK-handelbare aktier, hvor aktuel børskurs er under insiderens købskurs.

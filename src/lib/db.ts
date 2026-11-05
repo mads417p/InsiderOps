@@ -8,6 +8,7 @@ import {
   PaperTradePosition,
   RejectedRow,
 } from '@/types/insider';
+import type { LiveFxRates } from '@/lib/live-quote';
 
 export interface SavedVerdictItem {
   transaction: InsiderTransaction;
@@ -29,6 +30,8 @@ export interface DatabaseSchema {
   verdicts: Record<string, SavedVerdictItem>;
   scanHistory: Record<string, SavedScanItem>;
   paperPortfolio: Record<string, PaperTradePosition>;
+  fxRates?: LiveFxRates; // senest gemte valutakurser – hentes kun ved klik (Opdatér, åbn eller luk position)
+  portfolioRefreshedAt?: string; // seneste klik på "Opdatér kurser & exit-radar"
 }
 
 // Stien beregnes ved hvert kald (ikke ved import), så tests kan pege process.cwd() på en tmp-mappe.
@@ -84,7 +87,7 @@ async function readDb(): Promise<DatabaseSchema> {
     if (!isMockEntity(k)) paperPortfolio[k] = p;
   }
 
-  return { verdicts, scanHistory, paperPortfolio };
+  return { verdicts, scanHistory, paperPortfolio, fxRates: parsed.fxRates, portfolioRefreshedAt: parsed.portfolioRefreshedAt };
 }
 
 /**

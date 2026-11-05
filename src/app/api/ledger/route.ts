@@ -17,10 +17,13 @@ export async function GET() {
     } catch (e) {
       costsError = `config/costs.json kunne ikke læses: ${e instanceof Error ? e.message : String(e)}`;
     }
-    const stats = ledgerStats({ signals: listSignals(), outcomes: listOutcomes(), costs, now: new Date() });
+    const outcomes = listOutcomes();
+    const stats = ledgerStats({ signals: listSignals(), outcomes, costs, now: new Date() });
     // Frosne omkostninger (prereg): afviger filen, vises en advarsel; tallene beregnes stadig med filens satser.
     const costsMatchPrereg = costs?.version === PREREG.costsVersion && costsSha256 === PREREG.costsSha256;
-    return NextResponse.json({ success: true, ...stats, costsTodo: costs?.TODO ?? null, costsError, costsSha256, costsMatchPrereg });
+    // Seneste "Beregn udfald", der gav et nyt udfald (ISO-strenge sorterer kronologisk).
+    const lastOutcomeAt = outcomes.reduce<string | null>((m, o) => (m && m > o.computedAt ? m : o.computedAt), null);
+    return NextResponse.json({ success: true, ...stats, costsTodo: costs?.TODO ?? null, costsError, costsSha256, costsMatchPrereg, lastOutcomeAt });
   } catch (error) {
     console.error('Fejl i GET /api/ledger:', error);
     return NextResponse.json({ success: false, error: `Ledgeren kunne ikke læses: ${(error as Error).message}` }, { status: 500 });

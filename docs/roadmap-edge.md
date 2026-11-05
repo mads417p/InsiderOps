@@ -12,7 +12,7 @@
 - Der testes ikke flere varianter af samme signal (forking paths). Fase 5–7 forbliver på pause.
 
 ## Status 5.11.2026 – afsluttet
-Fase 9 er merget. InsiderOps bruges til at følge og copy-trade insiderkøb uden dokumenteret edge. Ledgeren måler videre; prereg v1 vurderes højst én gang om måneden og endeligt 4.5.2027.
+Fase 9 er merget. InsiderOps bruges til at følge og copy-trade insiderkøb uden dokumenteret edge. Ingen automatiske kørsler. Ledgeren får kun data, når jeg scanner manuelt; signaler set mere end 72 timer efter offentliggørelse tæller ikke i prereg-målingen. Prereg v1 vurderes højst én gang om måneden og endeligt 4.5.2027.
 
 ---
 

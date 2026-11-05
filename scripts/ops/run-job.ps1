@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Kører ét InsiderOps-job og logger til data\logs\<job>-<yyyy-MM-dd>.log (fase 9).
-  Bruges af de planlagte opgaver (install-tasks.ps1), men kan også køres i hånden.
+  Kun til manuel kørsel – InsiderOps har ingen planlagte opgaver.
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\run-job.ps1 -Job scan
 #>

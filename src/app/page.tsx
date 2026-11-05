@@ -199,8 +199,9 @@ export default function Dashboard() {
   // Én opsummering pr. handelstype – PAPER og REAL_NORDNET blandes aldrig i KPI'erne.
   const [portfolioSummaries, setPortfolioSummaries] = useState<Partial<Record<TradeType, PortfolioSummary>>>({});
   const [realKpis, setRealKpis] = useState<RealKpis | null>(null);
-  // Live FX fra /api/portfolio – uden den laver trade-planneren ingen plan (ingen hårdkodede kurser).
+  // Senest gemte valutakurser fra /api/portfolio – uden dem laver trade-planneren ingen plan (ingen hårdkodede kurser).
   const [fxRates, setFxRates] = useState<LiveFxRates | null>(null);
+  const [portfolioRefreshedAt, setPortfolioRefreshedAt] = useState<string | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState<boolean>(false);
   const [portfolioRefreshing, setPortfolioRefreshing] = useState<boolean>(false);
 
@@ -500,11 +501,12 @@ ${verdict.judgeThinking}
         setUseTranches(cachedTranches);
       });
 
-    // Indlæs altid friske realtids-kurser for paper-trading porteføljen ved indlæsning/F5
-    fetch(`/api/portfolio?refresh=true&_t=${Date.now()}`)
+    // Kun gemte positioner og valutakurser – ingen eksterne kald uden klik. Live kurser: knappen "Opdatér".
+    fetch('/api/portfolio', { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.positions) {
+          setPortfolioRefreshedAt(data.refreshedAt ?? null);
           const map: Record<string, PaperTradePosition> = {};
           data.positions.forEach((p: PaperTradePosition) => {
             if (!isMock(p.id)) {
@@ -808,6 +810,7 @@ ${verdict.judgeThinking}
       if (res.ok) {
         const data = await res.json();
         if (data.positions) {
+          setPortfolioRefreshedAt(data.refreshedAt ?? null);
           const map: Record<string, PaperTradePosition> = {};
           data.positions.forEach((p: PaperTradePosition) => {
             map[p.id] = p;
@@ -1443,10 +1446,7 @@ ${verdict.judgeThinking}
             </button>
 
             <button
-              onClick={() => {
-                setActiveTab('portfolio');
-                handleRefreshPortfolioLivePnl();
-              }}
+              onClick={() => setActiveTab('portfolio')}
               className={`px-4 py-2 font-mono text-xs font-bold tracking-wider border-b-2 transition-colors flex items-center gap-2 ${
                 activeTab === 'portfolio'
                   ? 'border-emerald-400 text-emerald-300 bg-slate-900/40'
@@ -2858,8 +2858,13 @@ ${verdict.judgeThinking}
                   className="mt-2 w-full py-1.5 px-3 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-700 text-xs font-mono text-cyan-300 flex items-center justify-center gap-1.5 transition-colors"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${portfolioRefreshing ? 'animate-spin' : ''}`} />
-                  <span>{portfolioRefreshing ? 'Henter kurser & radar...' : 'Opdatér Live P&L'}</span>
+                  <span>{portfolioRefreshing ? 'Henter kurser & radar...' : 'Opdatér kurser & exit-radar'}</span>
                 </button>
+                )}
+                {kpiIdx === 0 && (
+                  <div className="mt-1 text-[10px] text-slate-500 font-mono text-center">
+                    Senest opdateret {portfolioRefreshedAt ? formatDateTimeDk(portfolioRefreshedAt) : '–'}
+                  </div>
                 )}
               </div>
             </div>
@@ -4071,6 +4076,9 @@ ${verdict.judgeThinking}
                           </div>
                           <p className="text-[11px] text-slate-400 font-mono mt-0.5">
                             ATR-baseret stop-loss og positionsstørrelse – én ordre som standard
+                          </p>
+                          <p className="text-[10px] text-slate-500 font-mono">
+                            Valutakurser senest opdateret {fxRates?.lastUpdated ? formatDateTimeDk(fxRates.lastUpdated) : '–'}
                           </p>
                         </div>
                       </div>

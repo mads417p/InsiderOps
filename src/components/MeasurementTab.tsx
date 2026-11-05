@@ -10,6 +10,7 @@ type StatsResponse = LedgerStats & {
   costsError: string | null;
   costsSha256: string | null;
   costsMatchPrereg: boolean;
+  lastOutcomeAt: string | null;
 };
 type JobResponse = {
   success: boolean;
@@ -155,6 +156,12 @@ export function MeasurementTab() {
         >
           {running ? 'Beregner udfald…' : 'Beregn udfald'}
         </button>
+        <span className="text-slate-500">
+          Udfald senest beregnet{' '}
+          {stats.lastOutcomeAt
+            ? new Date(stats.lastOutcomeAt).toLocaleString('da-DK', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+            : '–'}
+        </span>
         {job && (
           <span className="text-slate-400">
             {job.inserted} nye udfald · {job.notReached} horisonter ikke nået · {job.missingData.length} mangler kursdata
