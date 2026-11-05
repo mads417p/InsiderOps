@@ -160,9 +160,9 @@ def holdout() -> None:
              *rows,
              horizon_table('Holdout – Test 1', u), horizon_table('Holdout – Test 2', test2(u)),
              '### Robusthed (kun beskrivende)', '', robustness(u),
-             '### Pr. likviditetsspand (beskrivende)', '', table('Holdout pr. likviditetsspand', u, 'liquidity', LIQ_ORDER),
+             table('Pr. likviditetsspand (beskrivende)', u, 'liquidity', LIQ_ORDER),
              '### Kursdækning 2025–2026', '', coverage(['2025', '2026']),
-             f'**Holdout-resultat:** {verdict_text(v1, v2)[0:]}', '']
+             f'**Holdout-resultat:** {verdict_text(v1, v2)}', '']
     text = REPORT.read_text(encoding='utf-8').split(HOLD_HEADER)[0].rstrip()
     REPORT.write_text(text + '\n\n' + '\n'.join(lines), encoding='utf-8', newline='\n')
     print(f'Holdout – Test 1: {v1}\nHoldout – Test 2: {v2}')

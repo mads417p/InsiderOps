@@ -41,3 +41,23 @@ Python-projekt adskilt fra appen. Det måler på SEC-data fra 2006 og frem, om U
 | Yahoo chart v8 | daglige kurser og split-events for aktier, SPY, IWM og USDDKK=X |
 
 Rapporter ligger i `reports/`.
+
+## Fase 4-SE: svenske insiderkøb (slank)
+
+Samme metode på Finansinspektionens insynsregister fra 4.7.2016. Reglerne står i `reports/prereg-se.md` (låst før afkast), og ISIN-beslutningerne i `reports/isin-map-se.csv`.
+
+```powershell
+.\research\run.ps1 -Step se fetch          # FI ugevis + FX + benchmarks + Yahoo-søgning og -kurser → research/data/se/ (cache)
+.\research\run.ps1 -Step se map            # kontroltabel, signaler og enheder UDEN udfald, filter-tragt, forventet N
+.\research\run.ps1 -Step se build          # udfald; nægter, hvis reports/prereg-se.md ikke er committet og uændret
+.\research\run.ps1 -Step se_analyze        # in-sample → reports/backtest-se-v1.md
+.\research\run.ps1 -Step se_analyze holdout  # kun med committet reports/holdout-plan-se.md
+```
+
+| Regel | Her |
+|---|---|
+| Entry = første åbning 09:00 Europe/Stockholm mindst 10 min efter FI-publiceringen | `common.entry_index(tz, open_hm)` |
+| Omkostninger `config/costs-v4.json` (v3 + SEK via valutakonto), sha256 `067e6ec4…` | `common.load_costs(*se.COSTS_V4)` |
+| Totalafkast: udbytte med ex-dato i (entry, exit] i Yahoos basis, mod brutto-indekset `^OMXSBGI` | `build._outcomes(div=…)` |
+| Niveau-filtre (≥ $50k, ≥ 10 SEK, ADV) bruger meddelelsens kurs; ADV = min(VWAP × ujusteret volumen, Yahoo close × volumen) | `se.build_signals`, `se.raw_adv_usd` |
+| ISIN → `.ST` (port af `mapIsinToYahooTicker` + navnesøgning med kurskontrol) | `se.control_table`, `se.symbol_map` |

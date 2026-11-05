@@ -172,3 +172,77 @@ Intervaller: 95 %, uge-klyngede. Spand med under 30 enheder vises som "for få".
 **Test 1:** ikke bestået: nedre grænse ≤ 0. **Test 2:** ikke bestået: nedre grænse ≤ 0.
 
 Kendte begrænsninger står i prereg-se.md afsnit 11. Desuden: handelsdage tælles efter aktiens egne Yahoo-bars, så en manglende bar (fx SAND.ST 17.6.2019) flytter exit én handelsdag.
+
+## 8. Holdout 2025–2026
+
+Kørt 05.11.2026 efter `research/reports/holdout-plan-se.md` (commit db33676, sha256 2a8dd5f0f027…). `units.parquet` sha256 0fe47da1680f…. Entry 2025-01-02 – 2026-11-04.
+
+Samme to tests og kriterier som in-sample (replikation).
+
+### Test 1 – basisstrategien
+
+| Mål | Værdi |
+|---|---|
+| Enheder / uger | 1.126 / 94 |
+| Gennemsnit netto 5 d mod ^OMXSBGI | -1,11 % |
+| SD pr. enhed | 3,92 % |
+| SE, uge-klynget | 0,173 % |
+| **Ensidet 97,5 %-nedre grænse (uge-klynget)** | **-1,45 %** |
+| Ensidet 95 %-nedre grænse, prereg-bootstrap (kun til orientering) | -1,40 % |
+| **Resultat** | **ikke bestået: nedre grænse ≤ 0** |
+
+### Test 2 – clusters (≥ 2 PDMR/10 d) i small/mid cap
+
+| Mål | Værdi |
+|---|---|
+| Enheder / uger | 120 / 53 |
+| Gennemsnit netto 5 d mod ^OMXSBGI | -1,54 % |
+| SD pr. enhed | 5,05 % |
+| SE, uge-klynget | 0,504 % |
+| **Ensidet 97,5 %-nedre grænse (uge-klynget)** | **-2,53 %** |
+| Ensidet 95 %-nedre grænse, prereg-bootstrap (kun til orientering) | -2,31 % |
+| **Resultat** | **kun beskrivende: 120 enheder < 150** |
+
+### Holdout – Test 1
+
+| Horisont | N | Brutto mod ^OMXSBGI | Netto mod ^OMXSBGI | Netto mod XACT-SMABOLAG.ST |
+|---|---|---|---|---|
+| 1 d | 1.130 | +0,10 % [-0,02 %; +0,22 %] | -0,94 % [-1,07 %; -0,82 %] | -0,90 % [-1,03 %; -0,77 %] |
+| 5 d | 1.126 | -0,07 % [-0,40 %; +0,27 %] | -1,11 % [-1,45 %; -0,77 %] | -0,90 % [-1,22 %; -0,58 %] |
+| 21 d | 1.090 | -0,56 % [-1,25 %; +0,12 %] | -1,61 % [-2,30 %; -0,93 %] | -0,82 % [-1,38 %; -0,25 %] |
+| 63 d | 1.010 | -1,44 % [-2,90 %; +0,02 %] | -2,48 % [-3,94 %; -1,03 %] | -0,09 % [-1,17 %; +1,00 %] |
+
+### Holdout – Test 2
+
+| Horisont | N | Brutto mod ^OMXSBGI | Netto mod ^OMXSBGI | Netto mod XACT-SMABOLAG.ST |
+|---|---|---|---|---|
+| 1 d | 120 | +0,31 % [-0,11 %; +0,73 %] | -1,03 % [-1,46 %; -0,60 %] | -0,95 % [-1,38 %; -0,53 %] |
+| 5 d | 120 | -0,20 % [-1,19 %; +0,79 %] | -1,54 % [-2,53 %; -0,56 %] | -1,08 % [-2,06 %; -0,10 %] |
+| 21 d | 119 | +0,44 % [-1,81 %; +2,69 %] | -0,90 % [-3,16 %; +1,36 %] | +0,10 % [-2,10 %; +2,30 %] |
+| 63 d | 106 | -0,63 % [-5,30 %; +4,03 %] | -1,93 % [-6,59 %; +2,73 %] | +0,69 % [-3,45 %; +4,83 %] |
+
+### Robusthed (kun beskrivende)
+
+| Udvalg | N | Netto 5 d [95 %] | Ensidet 97,5 %-nedre |
+|---|---|---|---|
+| Test 1, signal-tjek [0,5; 2] (`strict_ok`) | 1.125 | -1,11 % [-1,45 %; -0,77 %] | -1,45 % |
+| Test 2, signal-tjek [0,5; 2] (`strict_ok`) | 120 | -1,54 % [-2,53 %; -0,56 %] | -2,53 % |
+| Test 1 uden ISIN godkendt trods kursafvigelse (`ratio_flag`) | 1.122 | -1,11 % [-1,45 %; -0,77 %] | -1,45 % |
+
+### Pr. likviditetsspand (beskrivende)
+
+| Spand | N | Brutto 5 d | Netto 5 d | Netto 21 d |
+|---|---|---|---|---|
+| $0–1 mio. | 186 | -0,06 % [-0,94 %; +0,82 %] | -1,76 % [-2,64 %; -0,88 %] | -2,57 % [-4,21 %; -0,93 %] |
+| $1–5 mio. | 442 | -0,09 % [-0,58 %; +0,39 %] | -1,19 % [-1,68 %; -0,71 %] | -1,50 % [-2,43 %; -0,57 %] |
+| $5–50 mio. | 384 | -0,20 % [-0,65 %; +0,26 %] | -1,00 % [-1,45 %; -0,54 %] | -1,98 % [-3,02 %; -0,94 %] |
+| ≥ $50 mio. | 114 | +0,46 % [+0,03 %; +0,88 %] | -0,14 % [-0,57 %; +0,28 %] | +0,91 % [-0,21 %; +2,03 %] |
+
+### Kursdækning 2025–2026
+
+| År (publicering) | Kandidater | Uden kurser | Andel |
+|---|---|---|---|
+| 2025 | 1.023 | 92 | 9,0 % |
+| 2026 | 981 | 82 | 8,4 % |
+
+**Holdout-resultat:** **Test 1:** ikke bestået: nedre grænse ≤ 0. **Test 2:** kun beskrivende: 120 enheder < 150.
