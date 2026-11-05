@@ -2,7 +2,8 @@ import { AlertTriangle, ExternalLink, Loader2, Pencil, ShieldAlert, ShieldCheck 
 import type { CouncilVerdict, PaperTradePosition, PaperTradeStatus } from '@/types/insider';
 import { PositionVerdict } from '@/components/PositionVerdict';
 import { btn, Card, Chip, input, type Tone } from '@/components/ui';
-import { formatDateTimeDk, formatQuoteTime, stripEmoji, TONE_CLASS } from '@/lib/ui-labels';
+import { curLabel, formatDateTimeDk, formatQuoteTime, stripEmoji, TONE_CLASS } from '@/lib/ui-labels';
+import { currencyForTicker } from '@/lib/live-quote';
 
 /** Samme form som editForm-state i page.tsx. */
 export interface PositionEditForm {
@@ -51,11 +52,10 @@ export function PositionCard({
   onSaveEdit,
   onClosePaperTrade,
 }: PositionCardProps) {
-  // Afledte værdier – samme formler som i page.tsx.
-  const isDkk = pos.ticker.endsWith('.CO') || pos.exchange?.includes('Copenhagen');
-  const isSek = pos.ticker.endsWith('.ST') || pos.exchange?.includes('Stockholm');
-  const currSym = isDkk ? 'DKK ' : isSek ? 'SEK ' : '$';
-  const currencyCode = isDkk ? 'DKK' : isSek ? 'SEK' : 'USD';
+  // Samme valuta som serveren regner positionen i (portfolio.ts: currencyForTicker) – også EUR (.HE) og NOK (.OL).
+  const currencyCode = currencyForTicker(pos.ticker);
+  const currSym = curLabel(currencyCode);
+  const isDkk = currencyCode === 'DKK';
 
   // Stop-loss -> entry -> kursmål på én skala
   const minP = pos.stopLossPrice > 0 ? pos.stopLossPrice : pos.entryPrice * 0.85;

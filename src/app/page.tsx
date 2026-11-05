@@ -84,6 +84,8 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   // Rådsfejl vises for brugeren – der findes ingen simuleret eller fallback-dom.
   const [councilError, setCouncilError] = useState<string | null>(null);
+  // Fejl ved oprettelse/lukning af en position vises i siden (tidligere alert()).
+  const [portfolioError, setPortfolioError] = useState<string | null>(null);
   const [items, setItems] = useState<ScanItem[]>([]);
   // Rækker afvist allerede i scan-pipelinen (kode, beløb, handelbarhed, Norden) – de er ikke i items.
   const [scanRejected, setScanRejected] = useState<RejectedRow[]>([]);
@@ -481,6 +483,7 @@ export default function Dashboard() {
   ) => {
     if (plan.status !== 'ACTIVE_PLAN' || plan.recommendedAllocationDkk <= 0) return;
     setPortfolioLoading(true);
+    setPortfolioError(null);
     try {
       const posPayload = {
         id: tx.id,
@@ -510,10 +513,11 @@ export default function Dashboard() {
         if (data.realKpis) setRealKpis(data.realKpis);
         if (data.fxRates) setFxRates(data.fxRates);
       } else {
-        alert(`Positionen blev ikke oprettet: ${data.error || `HTTP ${res.status}`}`);
+        setPortfolioError(`Positionen blev ikke oprettet: ${data.error || `HTTP ${res.status}`}`);
       }
     } catch (e) {
       console.error('Fejl ved oprettelse af paper-trade:', e);
+      setPortfolioError(`Positionen blev ikke oprettet: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setPortfolioLoading(false);
     }
@@ -546,6 +550,7 @@ export default function Dashboard() {
 
   // Lukning sletter ikke: positionen får CLOSED_MANUAL med exit-kurs, exit-FX og realiseret P&L.
   const handleClosePaperTrade = async (id: string) => {
+    setPortfolioError(null);
     try {
       const res = await fetch('/api/portfolio', {
         method: 'PATCH',
@@ -559,10 +564,11 @@ export default function Dashboard() {
         if (data.realKpis) setRealKpis(data.realKpis);
         if (data.fxRates) setFxRates(data.fxRates);
       } else {
-        alert(`Positionen blev ikke lukket: ${data.error || `HTTP ${res.status}`}`);
+        setPortfolioError(`Positionen blev ikke lukket: ${data.error || `HTTP ${res.status}`}`);
       }
     } catch (e) {
       console.error('Fejl ved lukning af paper-trade position:', e);
+      setPortfolioError(`Positionen blev ikke lukket: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -618,7 +624,84 @@ export default function Dashboard() {
   );
   const unjudgedHighCount = unjudgedHighItems.length;
 
-  // 2. Afvikling af The Council på brugerens valgte rækker (Multi-Select Queue)
+  // 2. Rådskø: kører rådet på transaktionerne én ad gangen og gemmer hver dom. Fælles for "Send til rådet"
+  //    (valgte rækker) og auto-køen; de adskiller sig kun i queueRule, forceRefresh og tekst.
+  const runCouncilQueue = async (
+    txs: InsiderTransaction[],
+    opts: { queueRule?: string; refreshJudged: boolean; labelPrefix: string; logLabel: string; onDone?: () => void }
+  ) => {
+    setCouncilQueueRunning(true);
+    setActiveTab('radar');
+    let currentHistory = { ...verdictHistory };
+    const completed: Array<{ tx: InsiderTransaction; verdict: CouncilVerdict }> = [];
+    const failures: string[] = [];
+    setCouncilError(null);
+
+    try {
+      for (let i = 0; i < txs.length; i++) {
+        const tx = txs[i];
+        setCouncilQueueProgress({
+          current: i + 1,
+          total: txs.length,
+          ticker: tx.ticker,
+          label: `${opts.labelPrefix}${tx.ticker} (${i + 1}/${txs.length})...`,
+        });
+
+        const res = await fetch('/api/council', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: tx.id,
+            judgeTier,
+            // Valgte rækker med en gammel dom gen-vurderes med frisk kurs; auto-køen har kun rækker uden dom.
+            forceRefresh: opts.refreshJudged && Boolean(currentHistory[tx.id]),
+            queueRule: opts.queueRule, // logges i signal-ledgeren
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.verdict) {
+            const enrichedTx = data.transaction || tx;
+            const newRecord: SavedVerdictItem = {
+              transaction: enrichedTx,
+              verdict: data.verdict,
+              savedAt: new Date().toISOString(),
+            };
+            currentHistory = { ...currentHistory, [tx.id]: newRecord };
+            setVerdictHistory(currentHistory);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(currentHistory));
+            } catch (storageErr) {
+              console.warn(storageErr);
+            }
+            completed.push({ tx: enrichedTx, verdict: data.verdict });
+          }
+        } else {
+          failures.push(`${tx.ticker}: ${await readCouncilError(res)}`);
+        }
+      }
+
+      if (failures.length > 0) {
+        setCouncilError(`${failures.length} råd fejlede – ingen dom gemt for dem. ${failures.join(' · ')}`);
+      }
+
+      if (completed.length > 0) {
+        completed.sort((a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore);
+        const best = completed[0];
+        setSelectedTx(best.tx);
+        setActiveVerdict(best.verdict);
+      }
+      opts.onDone?.();
+    } catch (err) {
+      console.error(`Fejl under afvikling af ${opts.logLabel}:`, err);
+    } finally {
+      setCouncilQueueRunning(false);
+      setCouncilQueueProgress(null);
+    }
+  };
+
+  // Valgte rækker (multi-select): findes rækken ikke i scannen, bruges den gemte doms transaktion.
   const handleRunCouncilOnSelected = async () => {
     if (councilQueueRunning || loading || selectedRowIds.length === 0) return;
 
@@ -631,154 +714,24 @@ export default function Dashboard() {
         selectedTransactions.push(verdictHistory[id].transaction);
       }
     }
-
     if (selectedTransactions.length === 0) return;
 
-    setCouncilQueueRunning(true);
-    setActiveTab('radar');
-    let currentHistory = { ...verdictHistory };
-    const completed: Array<{ tx: InsiderTransaction; verdict: CouncilVerdict }> = [];
-    const failures: string[] = [];
-    setCouncilError(null);
-
-    try {
-      for (let i = 0; i < selectedTransactions.length; i++) {
-        const tx = selectedTransactions[i];
-        setCouncilQueueProgress({
-          current: i + 1,
-          total: selectedTransactions.length,
-          ticker: tx.ticker,
-          label: `Analyserer ${tx.ticker} (${i + 1}/${selectedTransactions.length})...`,
-        });
-
-        const hasOldVerdict = Boolean(currentHistory[tx.id]);
-
-        const res = await fetch('/api/council', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: tx.id,
-            judgeTier,
-            forceRefresh: hasOldVerdict,
-            queueRule: 'manuel',
-          }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data.verdict) {
-            const enrichedTx = data.transaction || tx;
-            const newRecord: SavedVerdictItem = {
-              transaction: enrichedTx,
-              verdict: data.verdict,
-              savedAt: new Date().toISOString(),
-            };
-            currentHistory = { ...currentHistory, [tx.id]: newRecord };
-            setVerdictHistory(currentHistory);
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(currentHistory));
-            } catch (storageErr) {
-              console.warn(storageErr);
-            }
-            completed.push({ tx: enrichedTx, verdict: data.verdict });
-          }
-        } else {
-          failures.push(`${tx.ticker}: ${await readCouncilError(res)}`);
-        }
-      }
-
-      if (failures.length > 0) {
-        setCouncilError(`${failures.length} råd fejlede – ingen dom gemt for dem. ${failures.join(' · ')}`);
-      }
-
-      if (completed.length > 0) {
-        completed.sort((a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore);
-        const best = completed[0];
-        setSelectedTx(best.tx);
-        setActiveVerdict(best.verdict);
-      }
-      setSelectedRowIds([]);
-    } catch (err) {
-      console.error('Fejl under afvikling af rådskø:', err);
-    } finally {
-      setCouncilQueueRunning(false);
-      setCouncilQueueProgress(null);
-    }
+    await runCouncilQueue(selectedTransactions, {
+      queueRule: 'manuel',
+      refreshJudged: true,
+      labelPrefix: 'Analyserer ',
+      logLabel: 'rådskø',
+      onDone: () => setSelectedRowIds([]),
+    });
   };
 
-  // 3. Analyser alle uvurderede HIGH signaler automatisk
+  // 3. Auto-kø: alle uvurderede rækker, som rangreglen har udvalgt.
   const handleAnalyzeAllUnjudgedHigh = async () => {
     if (councilQueueRunning || loading || unjudgedHighCount === 0) return;
-
-    setCouncilQueueRunning(true);
-    setActiveTab('radar');
-    let currentHistory = { ...verdictHistory };
-    const completed: Array<{ tx: InsiderTransaction; verdict: CouncilVerdict }> = [];
-    const failures: string[] = [];
-    setCouncilError(null);
-
-    try {
-      for (let i = 0; i < unjudgedHighItems.length; i++) {
-        const item = unjudgedHighItems[i];
-        const tx = item.transaction;
-
-        setCouncilQueueProgress({
-          current: i + 1,
-          total: unjudgedHighItems.length,
-          ticker: tx.ticker,
-          label: `Auto-kø: analyserer ${tx.ticker} (${i + 1}/${unjudgedHighItems.length})...`,
-        });
-
-        const res = await fetch('/api/council', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: tx.id,
-            judgeTier,
-            forceRefresh: false,
-            queueRule: autoQueue?.rule, // logges i signal-ledgeren
-          }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data.verdict) {
-            const enrichedTx = data.transaction || tx;
-            const newRecord: SavedVerdictItem = {
-              transaction: enrichedTx,
-              verdict: data.verdict,
-              savedAt: new Date().toISOString(),
-            };
-            currentHistory = { ...currentHistory, [tx.id]: newRecord };
-            setVerdictHistory(currentHistory);
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(currentHistory));
-            } catch (storageErr) {
-              console.warn(storageErr);
-            }
-            completed.push({ tx: enrichedTx, verdict: data.verdict });
-          }
-        } else {
-          failures.push(`${tx.ticker}: ${await readCouncilError(res)}`);
-        }
-      }
-
-      if (failures.length > 0) {
-        setCouncilError(`${failures.length} råd fejlede – ingen dom gemt for dem. ${failures.join(' · ')}`);
-      }
-
-      if (completed.length > 0) {
-        completed.sort((a, b) => b.verdict.asymmetryScore - a.verdict.asymmetryScore);
-        const best = completed[0];
-        setSelectedTx(best.tx);
-        setActiveVerdict(best.verdict);
-      }
-    } catch (err) {
-      console.error('Fejl under afvikling af auto-køen:', err);
-    } finally {
-      setCouncilQueueRunning(false);
-      setCouncilQueueProgress(null);
-    }
+    await runCouncilQueue(
+      unjudgedHighItems.map((item) => item.transaction),
+      { queueRule: autoQueue?.rule, refreshJudged: false, labelPrefix: 'Auto-kø: analyserer ', logLabel: 'auto-køen' }
+    );
   };
 
   // KPI Beregninger
@@ -906,15 +859,18 @@ export default function Dashboard() {
   const selectedScan = selectedTx ? items.find((i) => i.transaction.id === selectedTx.id) : undefined;
   const plan = selectedTx && activeVerdict ? generateTradeExecutionPlan(selectedTx, activeVerdict, maxCapitalDkk, fxRates, planOpts) : null;
 
-  const councilErrorNote = councilError && (
-    <div role="alert" className="flex items-start gap-2 rounded-md border border-loss/50 bg-surface p-3 text-sm">
-      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-loss" aria-hidden />
-      <span className="flex-1">{councilError}</span>
-      <button type="button" onClick={() => setCouncilError(null)} className="text-graphite hover:text-ink" aria-label="Luk fejlbesked">
-        <X className="size-4" />
-      </button>
-    </div>
-  );
+  const errorNote = (message: string | null, clear: () => void) =>
+    message && (
+      <div role="alert" className="flex items-start gap-2 rounded-md border border-loss/50 bg-surface p-3 text-sm">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-loss" aria-hidden />
+        <span className="flex-1">{message}</span>
+        <button type="button" onClick={clear} className="text-graphite hover:text-ink" aria-label="Luk fejlbesked">
+          <X className="size-4" />
+        </button>
+      </div>
+    );
+  const councilErrorNote = errorNote(councilError, () => setCouncilError(null));
+  const portfolioErrorNote = errorNote(portfolioError, () => setPortfolioError(null));
 
   return (
     <AppShell
@@ -988,6 +944,7 @@ export default function Dashboard() {
                     onOpenPaperTrade={() => handleOpenPaperTrade(selectedTx, plan)}
                     holdNote={HOLD_NOTE}
                   />
+                  {portfolioErrorNote}
                   <CouncilDetails
                     verdict={activeVerdict}
                     contextNotes={selectedTx.contextNotes}
@@ -1011,6 +968,7 @@ export default function Dashboard() {
           </div>
         )}
         {councilErrorNote}
+        {portfolioErrorNote}
         {councilQueueRunning && councilQueueProgress && (
           <div role="status" className="flex items-center gap-2 rounded-md border border-line bg-surface p-3 text-sm">
             <Loader2 className="size-4 shrink-0 animate-spin text-accent" aria-hidden />
@@ -1023,7 +981,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      <div className={error || councilError || councilQueueRunning ? 'mt-5' : ''}>
+      <div className={error || councilError || portfolioError || councilQueueRunning ? 'mt-5' : ''}>
         {activeTab === 'radar' && (
           <RadarTab
             loading={loading}
