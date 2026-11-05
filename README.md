@@ -13,6 +13,74 @@ Systemet filtrerer automatisk markedsstøj (optioner, gaver, skatteafregninger, 
 
 ---
 
+## 🧭 Sådan bruger du InsiderOps
+
+> **Ingen dokumenteret edge.** Backtesten (USA 2006–2026, Sverige 2016–2026) gav negativt nettoafkast efter omkostninger på 5 dage. Copy trading forventes at give omtrent markedsafkast minus omkostninger. InsiderOps er et værktøj til at *følge* insiderkøb og måle dine egne handler – ikke en dokumenteret strategi. Detaljer i [`research/reports/`](research/reports/).
+
+### Daglig rutine
+
+1. **14:45, hverdage (automatisk):** scan af SEC Form 4 og Nasdaq Nordic. Gatekeeperen (Claude Haiku) scorer rækkerne – ca. $0,01 pr. scan. Log: `data/logs/scan-<dato>.log`.
+2. **Åbn appen** (`start.bat`). Radar viser den seneste gemte scan. Brug hurtig-filteret **🎩 CEO/CFO-køb** eller et af de andre.
+3. **Rådet (valgfrit):** markér rækker og klik "Send Valgte til Rådet". Koster Sonnet/Opus-kald og kører kun, når du klikker.
+4. **Handelsplanen** i rådskammeret: én ordre som standard, forventet round-trip i kr. og %, og en advarsel, når ordren er så lille, at minimumskurtagen slår igennem (USA ca. 16.700 kr., Norden 25.000 kr.).
+5. **Handl i Nordnet.** Opret positionen (📌), vælg "Nordnet Live" under *Redigér / Nordnet Match*, og ret kurs og antal til Nordnets.
+6. **22:30, hverdage (automatisk):** `npm run outcomes` beregner udfald for signal-ledgeren (fanen *Måling*).
+7. **Portefølje → Mine Nordnet-handler:** se, om dine egne copy trades virker.
+
+### Hvad tallene betyder
+
+| Tal | Betydning |
+|---|---|
+| Asymmetri-score (0–100) | Gatekeeperens eller rådets vurdering af købet. Ikke en afkastprognose – backtesten fandt ingen regel, der slog de naive baselines efter omkostninger. |
+| Stærkt signal / Overvåg / Støj | Rådets dom (≥ 75 / 60–74 / < 60). Kun visning – i databasen hedder de stadig `STRONG ASYMMETRY (KØB)` osv. |
+| Forventet round-trip | Kurtage ved køb og salg (min. 25 kr. eller 0,15 % i USA / 0,10 % i Norden) + valutaspread + spread/slippage efter aktiens likviditet. Fra `config/costs.json`. To trancher = én minimumskurtage mere. |
+| Alpha mod SPY | Positionens afkast i DKK minus SPY's afkast i DKK i samme periode, i procentpoint. |
+| Netto afkast (Mine Nordnet-handler) | Realiseret + urealiseret afkast minus kurtage og veksling efter Nordnet-tariffen. Spread er allerede med i dine faktiske kurser. Salg af åbne positioner er ikke betalt endnu og ikke trukket fra. |
+| Måling-fanen | Signal-ledgerens udfald efter 1, 5, 21 og 63 handelsdage, netto efter omkostninger, med usikkerhedsintervaller. |
+
+### Konklusioner fra fase 4 (USA) og 4-SE (Sverige)
+
+Primær metrik: netto abnormalt afkast efter 5 handelsdage (DKK, efter omkostninger) mod SPY (USA) eller ^OMXSBGI (Sverige). "Bestået" kræver, at den ensidede 97,5 %-nedre grænse ligger over 0.
+
+| Marked og periode | Test | Enheder | Netto 5 d | Resultat |
+|---|---|---|---|---|
+| USA in-sample 2006–2024 | alle køb | 34.842 | −0,34 % [−0,60; −0,08] | negativ |
+| USA holdout 2025–2026 | Test 1: basisstrategien | 3.643 | −0,17 % (nedre grænse −0,65 %) | ikke bestået |
+| USA holdout 2025–2026 | Test 2: CEO/CFO-køb > 30 % under 52-ugers-toppen | 484 | +0,24 % (nedre grænse −0,63 %) | ikke bestået |
+| Sverige in-sample 2016–2024 | Test 1: basisstrategien | 3.017 | −0,79 % (nedre grænse −1,08 %) | ikke bestået |
+| Sverige in-sample 2016–2024 | Test 2: clusters i small/mid cap | 281 | −1,31 % (nedre grænse −2,09 %) | ikke bestået |
+| Sverige holdout 2025–2026 | Test 1: basisstrategien | 1.126 | −1,11 % (nedre grænse −1,45 %) | ikke bestået |
+
+- **Før omkostninger** er der en kort, positiv reaktion (USA +0,56 % på 5 dage), men kurtage, valuta og spread æder den.
+- **63 handelsdage** var den eneste horisont, der ikke var negativ netto: USA in-sample +0,31 % [−0,42; +1,05], USA holdout +0,40 % [−1,50; +2,30] – ingen af dem signifikant. Sverige-holdout 63 dage: −2,48 % [−3,94; −1,03].
+- **Konsekvens:** forvent markedsafkast minus omkostninger. Handl få og store ordrer frem for mange små.
+
+Rapporter: [`backtest-v1.md`](research/reports/backtest-v1.md) (USA), [`backtest-se-v1.md`](research/reports/backtest-se-v1.md) (Sverige), præregistreringer i [`docs/prereg.md`](docs/prereg.md) og [`research/reports/prereg-se.md`](research/reports/prereg-se.md).
+
+### Daglig drift (planlagte opgaver)
+
+To opgaver i Windows Task Scheduler under `\InsiderOps\` kører uden, at dev-serveren er åben:
+
+| Opgave | Tidspunkt | Kommando | Log |
+|---|---|---|---|
+| `Scan` | man–fre 14:45 | `npm run scan` | `data/logs/scan-<dato>.log` |
+| `Outcomes` | man–fre 22:30 | `npm run outcomes` | `data/logs/outcomes-<dato>.log` |
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ops/install-tasks.ps1
+```
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ops/uninstall-tasks.ps1
+```
+
+- Opgaverne kører som dig og kun, når du er logget ind (ingen gemt adgangskode). Var pc'en slukket eller i dvale, køres de, når den er tilgængelig igen. Pc'en vækkes ikke.
+- Kører dev-serveren, sender scan-jobbet scannen til den, så kun én proces skriver i databasen.
+- Kør et job i hånden med logning: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ops/run-job.ps1 -Job scan` (eller `-Job outcomes`). Uden logning: `npm run scan`.
+- Tjek status: `Get-ScheduledTask -TaskPath \InsiderOps\ | Get-ScheduledTaskInfo` (LastRunTime, LastTaskResult 0 = ok).
+
+---
+
 ## 🚀 Hvad er nyt i InsiderOps v2.0 Quant Terminal?
 
 InsiderOps v2.0 udvider platformen fra ren Form 4 scanning til en komplet institutionel kvantitativ investerings- og porteføljeterminal:
@@ -24,6 +92,7 @@ InsiderOps v2.0 udvider platformen fra ren Form 4 scanning til en komplet instit
 - **Inline Nordnet Trade Editor (`PATCH /api/portfolio`)**: 1-kliks redigering af faktiske købskurser, kurtage/antal aktier og stop-loss/target, samt lynhurtig skift mellem `🧪 PAPER-TRADE` og `🏦 NORDNET LIVE HANDEL`.
 - **Insider-Exit Radar (`checkInsiderExitRadar`)**: Kontinuerlig overvågning af åbne positioner mod efterfølgende insider-salg (`Kode S`), der proaktivt advarer brugeren, hvis insidere tager gevinst eller flygter.
 - **Smart Sniper Filter-Presets**: Hurtige 1-klik presets i radaren:
+  - `🎩 CEO/CFO-køb` (fase 9): køb, hvor CEO/VD eller CFO er køber – også i et cluster. Samme rolleregel som backtesten.
   - `💎 Under Insider Pris (Rabat-Zone)`: Viser godkendte, DK-handelbare aktier, hvor aktuel børskurs er under insiderens købskurs.
   - `🔥 C-Suite + Cluster Conviction`: Isolerer tunge CEO/CFO handler eller handler med $\ge 2$ samtidige insidere over \$100.000.
 - **1-Klik Desktop Launcher (`Start-InsiderOps.bat`)**: Start hele terminalen og Turbopack-serveren med ét enkelt dobbeltklik fra skrivebordet med automatisk browser-start på `http://localhost:3000`.
