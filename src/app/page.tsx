@@ -46,7 +46,7 @@ import {
   TradeType,
 } from '@/types/insider';
 import { generateTradeExecutionPlan } from '@/lib/trade-planner';
-import { collectRejected, isModelScore, runwayLabel, scoreLabel, TONE_CLASS, verdictLabel } from '@/lib/ui-labels';
+import { collectRejected, isCeoCfoBuy, isModelScore, runwayLabel, scoreLabel, TONE_CLASS, verdictLabel } from '@/lib/ui-labels';
 import { NoEdgeBanner } from '@/components/NoEdgeBanner';
 import { RejectedNoisePanel } from '@/components/RejectedNoisePanel';
 import { MeasurementTab } from '@/components/MeasurementTab';
@@ -163,7 +163,7 @@ export default function Dashboard() {
   const [source, setSource] = useState<'unified' | 'csuite' | 'live' | 'nordic' | 'mock'>('unified');
   const [regionFilter, setRegionFilter] = useState<'all' | 'us' | 'nordic'>('all');
   const [quickFilter, setQuickFilter] = useState<
-    'all' | 'csuite' | 'cluster_discount' | 'below_insider' | 'csuite_cluster'
+    'all' | 'ceo_cfo' | 'csuite' | 'cluster_discount' | 'below_insider' | 'csuite_cluster'
   >('all');
   const [searchTicker, setSearchTicker] = useState<string>('');
   const [activeTickerQuery, setActiveTickerQuery] = useState<string | null>(null);
@@ -1119,6 +1119,7 @@ ${verdict.judgeThinking}
     if (regionFilter === 'nordic' && !isNordicTx(i.transaction)) return false;
 
     // 2. Hurtig-filter
+    if (quickFilter === 'ceo_cfo') return isCeoCfoBuy(i.transaction);
     if (quickFilter === 'csuite') {
       return i.transaction.isExecutiveOfficer === true;
     }
@@ -1138,6 +1139,7 @@ ${verdict.judgeThinking}
     return true;
   });
 
+  const ceoCfoCount = baseFiltered.filter((i) => isCeoCfoBuy(i.transaction)).length;
   const cSuiteCount = baseFiltered.filter((i) => i.transaction.isExecutiveOfficer === true).length;
   const clusterDiscountCount = baseFiltered.filter((i) =>
     Boolean(i.transaction.isClusterBuy || i.transaction.isTradingBelowInsiderPrice)
@@ -1798,6 +1800,18 @@ ${verdict.judgeThinking}
                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
                     {baseFiltered.length}
                   </span>
+                </button>
+                <button
+                  onClick={() => setQuickFilter('ceo_cfo')}
+                  title="Køb, hvor CEO/VD eller CFO er køber (også i et cluster). Samme rolleregel som backtesten."
+                  className={`px-3 py-1 rounded transition-colors flex items-center gap-1.5 ${
+                    quickFilter === 'ceo_cfo'
+                      ? 'bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/40 shadow-sm shadow-cyan-950'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  <span>🎩 CEO/CFO-køb</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-cyan-300">{ceoCfoCount}</span>
                 </button>
                 <button
                   onClick={() => setQuickFilter('csuite')}

@@ -56,3 +56,12 @@ export const verdictLabel = (v: string): string => VERDICT_LABEL[v] ?? v;
 
 /** Samme grænser som scoren altid har brugt: ≥75 stærkt signal, ≥60 overvåg, ellers støj. */
 export const scoreLabel = (score: number): string => (score >= 75 ? 'Stærkt signal' : score >= 60 ? 'Overvåg' : 'Støj');
+
+// Samme rolle-regler som research (common.py CEO_RE/CFO_RE, se.py VD/CFO) – plus danske, norske og finske titler.
+const CEO_CFO_RE =
+  /(?<![\p{L}\p{N}])(ceo|chief executive|cfo|chief financial|vd|verkställande|koncernchef|ekonomichef|finanschef|ekonomidirekt\p{L}*|finansdirekt\p{L}*|økonomidirekt\p{L}*|administrerende direktør|adm\. ?direktør|konsernsjef|toimitusjohtaja|talousjohtaja|managing director|finance director)(?![\p{L}\p{N}])/iu;
+
+/** Radar-preset "CEO/CFO-køb": lead-insiderens titel eller en af cluster-købernes. */
+export function isCeoCfoBuy(t: Pick<InsiderTransaction, 'insiderTitle' | 'clusterBuyers'>): boolean {
+  return [t.insiderTitle, ...(t.clusterBuyers ?? []).map((b) => b.title)].some((title) => CEO_CFO_RE.test(title ?? ''));
+}
