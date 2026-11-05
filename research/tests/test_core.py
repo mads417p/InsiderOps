@@ -115,6 +115,33 @@ def test_app_filters_mirrored():
     assert is_entity_name('Third Rock Ventures V, L.P.') and not is_entity_name('Jane Doe')
 
 
+def test_parity_with_app_outcomes_fixture():
+    """Samme fixture og forventninger som tests/outcomes.test.ts (appen): entry-dage og AR i DKK."""
+    import json
+    from build import _outcomes
+    raw = json.loads((Path(__file__).resolve().parents[2] / 'tests' / 'fixtures' / 'yahoo-daily-2025-11.json').read_text(encoding='utf-8'))
+
+    def series(sym):
+        r = raw[sym]
+        js = {'chart': {'result': [{'meta': {'exchangeTimezoneName': r['tz']}, 'timestamp': r['timestamp'],
+                                    'indicators': {'quote': [{'open': r['open'], 'close': r['close']}]}}]}}
+        bars, splits, meta = parse_chart(js)
+        return bars, unadjust_factor(bars.date, splits), meta, bars.date.tolist()
+
+    spy, iwm, usd = series('SPY'), series('IWM'), series('USDDKK=X')
+    d = spy[3]
+    for anchor, want in [('2025-11-24T09:42', '2025-11-24'), ('2025-11-24T14:25', '2025-11-25'), ('2025-11-24T14:20', '2025-11-24'),
+                         ('2025-11-24T21:30', '2025-11-25'), ('2025-11-22T12:00', '2025-11-24'), ('2025-11-27T10:00', '2025-11-28')]:
+        assert d[entry_index(d, UTC(anchor), anchor[:10])] == want, anchor
+    ei = entry_index(d, UTC('2025-11-26T22:00'), '2025-11-26')
+    o = _outcomes(spy, ei, spy, iwm, usd, cost=0.0)
+    assert (d[ei], o['exit_5']) == ('2025-11-28', '2025-12-04')
+    ret_dkk = (684.39 * 6.4008) / (680.86 * 6.4381) - 1
+    iwm_dkk = ((251.82 / 248.01) * 6.4008) / 6.4381 - 1
+    assert abs(o['gross_5']) < 1e-12  # aktien er SPY selv
+    assert abs(o['gross_iwm_5'] - (ret_dkk - iwm_dkk)) < 1e-10
+
+
 if __name__ == '__main__':
     tests = [f for k, f in sorted(globals().items()) if k.startswith('test_')]
     for t in tests:

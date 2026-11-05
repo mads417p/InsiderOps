@@ -22,8 +22,13 @@ from pathlib import Path
 from statistics import NormalDist
 from zoneinfo import ZoneInfo
 
+import sys
+
 import numpy as np
 import pandas as pd
+
+sys.stderr.reconfigure(encoding='utf-8')
+sys.stdout.reconfigure(encoding='utf-8')  # Windows-konsollen (cp1252) kan ikke skrive ≥, – og æøå, når output pipes
 
 RESEARCH = Path(__file__).resolve().parents[1]
 REPO = RESEARCH.parent
@@ -73,6 +78,25 @@ ENTITY_WORDS = (' llc', ' lp', ' l.p.', ' fund', ' trust', ' capital', ' partner
 FUND_NAME_WORDS = ('fund', 'trust', 'income shares', 'closed-end')
 OFFERING_PRICE_TOLERANCE = 0.006
 OFFERING_WINDOW_DAYS = 7
+
+
+_OFFER_PRICE_RES = [re.compile(p, re.I) for p in (
+    r'offering price (?:of|is|was|will be)?\s*\$\s?(\d[\d,]*(?:\.\d+)?)\s*per share',
+    r'per share (?:purchase )?price (?:of|equal to)\s*\$\s?(\d[\d,]*(?:\.\d+)?)',
+    r'price to (?:the )?public of \$\s?(\d[\d,]*(?:\.\d+)?)\s*per share')]
+
+
+def extract_offering_prices(html_or_text: str) -> list[float]:
+    """offering-check.ts extractOfferingPrices: faste kurser pr. aktie fra et 424B-prospekt."""
+    text = re.sub(r'<[^>]+>', ' ', html_or_text)
+    text = re.sub(r'\s+', ' ', text.replace('&#160;', ' ').replace('&nbsp;', ' ').replace('&#8195;', ' ').replace('&#36;', '$'))
+    out = set()
+    for rx in _OFFER_PRICE_RES:
+        for m in rx.finditer(text):
+            p = float(m.group(1).replace(',', ''))
+            if 0 < p < 100_000:
+                out.add(p)
+    return sorted(out)
 
 
 def is_plan_footnote(text: str) -> bool:
