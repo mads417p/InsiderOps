@@ -1,17 +1,15 @@
-import { AlertTriangle } from 'lucide-react';
+import { Info } from 'lucide-react';
 
-/** Fast ærligheds-banner (fase 9). Tallene står i research/reports – banneret kan ikke lukkes. */
-export function NoEdgeBanner() {
+/** Fast ærligheds-linje (fase 9). Tallene står i research/reports – den kan ikke lukkes. Rolig information, ikke en advarsel. */
+export function NoEdgeBanner({ compact = false }: { compact?: boolean }) {
   return (
-    <div role="note" className="flex gap-3 items-start rounded-lg border border-amber-600/60 bg-amber-950/40 px-4 py-3 text-xs text-amber-100">
-      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" aria-hidden />
+    <div role="note" className={`flex items-start gap-2 text-graphite ${compact ? 'text-xs' : 'border-b border-line pb-3 text-sm'}`}>
+      <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
       <p className="leading-relaxed">
-        <strong className="text-amber-300">Ingen dokumenteret edge:</strong> backtest (USA 2006–2026, Sverige 2016–2026) gav
+        <span className="font-medium text-ink">Ingen dokumenteret edge:</span> backtest (USA 2006–2026, Sverige 2016–2026) gav
         negativt nettoafkast efter omkostninger på 5 dage. Copy trading forventes at give omtrent markedsafkast minus
         omkostninger.{' '}
-        <span className="text-amber-300/80 font-mono">
-          Kilde: research/reports/backtest-v1.md og research/reports/backtest-se-v1.md
-        </span>
+        <span className="text-xs">Kilde: research/reports/backtest-v1.md og research/reports/backtest-se-v1.md</span>
       </p>
     </div>
   );

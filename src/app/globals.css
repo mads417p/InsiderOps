@@ -1,11 +1,91 @@
 @import "tailwindcss";
 
+/* "Register": køligt papir, blæk og registerblå. Farver er variabler, så mørk tilstand kun skifter værdierne. */
 :root {
-  --background: #020617;
-  --foreground: #f8fafc;
+  --paper: #eef1ee;
+  --surface: #fafbf9;
+  --ink: #1c2430;
+  --graphite: #5a6370;
+  --line: #ccd3cd;
+  --accent: #2b5a8a;
+  --on-accent: #ffffff;
+  --gain: #2f7a57;
+  --loss: #a9473b;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #14181d;
+    --surface: #1b2027;
+    --ink: #e4e7ea;
+    --graphite: #9aa3ae;
+    --line: #2c333c;
+    --accent: #8fb4de;
+    --on-accent: #14181d;
+    --gain: #6fbf97;
+    --loss: #e08a7e;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #14181d;
+  --surface: #1b2027;
+  --ink: #e4e7ea;
+  --graphite: #9aa3ae;
+  --line: #2c333c;
+  --accent: #8fb4de;
+  --on-accent: #14181d;
+  --gain: #6fbf97;
+  --loss: #e08a7e;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-graphite: var(--graphite);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-gain: var(--gain);
+  --color-loss: var(--loss);
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-cond: var(--font-plex-cond), var(--font-plex-sans), ui-sans-serif, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
 }
 
 body {
-  background-color: var(--background);
-  color: var(--foreground);
+  background-color: var(--paper);
+  color: var(--ink);
+}
+
+/* Alle beløb, procenter, kurser og tidsstempler står i mono med tabulære tal. */
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button,
+a,
+input,
+select {
+  transition: color 150ms, background-color 150ms, border-color 150ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

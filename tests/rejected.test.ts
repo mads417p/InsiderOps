@@ -49,8 +49,8 @@ describe('runway-label (fase 2.5, 4)', () => {
   it('ukendt runway er "Runway ukendt" i grå – aldrig "Ingen udvandingsfare"', () => {
     expect(runwayLabel({ estimatedRunwayMonths: undefined, isCashFlowPositive: undefined })).toEqual({ text: 'Runway ukendt', tone: 'unknown' });
     expect(runwayLabel({ estimatedRunwayMonths: null, isCashFlowPositive: undefined }).tone).toBe('good');
-    expect(runwayLabel({ estimatedRunwayMonths: 5, isCashFlowPositive: false })).toEqual({ text: '⚠️ Akut emissionsrisiko', tone: 'bad' });
-    expect(runwayLabel({ estimatedRunwayMonths: 24, isCashFlowPositive: false })).toEqual({ text: '🛡️ Ingen udvandingsfare', tone: 'good' });
+    expect(runwayLabel({ estimatedRunwayMonths: 5, isCashFlowPositive: false })).toEqual({ text: 'Akut emissionsrisiko', tone: 'bad' });
+    expect(runwayLabel({ estimatedRunwayMonths: 24, isCashFlowPositive: false })).toEqual({ text: 'Ingen udvandingsfare', tone: 'good' });
     expect(runwayLabel({ estimatedRunwayMonths: undefined, isCashFlowPositive: true }).tone).toBe('good');
   });
 });

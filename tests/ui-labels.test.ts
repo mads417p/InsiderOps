@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isCeoCfoBuy, scoreLabel, verdictLabel } from '@/lib/ui-labels';
+import { isCeoCfoBuy, scoreLabel, stripEmoji, verdictLabel } from '@/lib/ui-labels';
 
 describe('verdictLabel / scoreLabel (kun visning)', () => {
   it('oversætter rådets tre domme og lader ukendte stå', () => {
@@ -37,5 +37,14 @@ describe('isCeoCfoBuy', () => {
 
   it('tæller en CEO/CFO blandt cluster-køberne', () => {
     expect(isCeoCfoBuy(t('Director', ['Director', 'CFO']))).toBe(true);
+  });
+});
+
+describe('stripEmoji (kun visning)', () => {
+  it('fjerner emojis, variationsvælgere og flag, men beholder tal og tegn', () => {
+    expect(stripEmoji('💎 Discount Zone (Handler 12.3% under)')).toBe('Discount Zone (Handler 12.3% under)');
+    expect(stripEmoji('⚠️ Cash: $1M • Burn: -$2M')).toBe('Cash: $1M • Burn: -$2M');
+    expect(stripEmoji('🇩🇰 Novo – 1. gang')).toBe('Novo – 1. gang');
+    expect(stripEmoji(undefined)).toBe('');
   });
 });

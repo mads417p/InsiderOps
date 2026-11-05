@@ -341,3 +341,16 @@ export interface CouncilVerdict {
   priceAtEvaluation?: number; // aktiens markedskurs da dommen blev afsagt
   previousScore?: number; // hvis aktien bliver gen-vurderet, gem den forrige asymmetryScore så vi kan vise udviklingen, f.eks. 81 -> 85
 }
+
+/** Én række i radaren: transaktion + gatekeeperens resultat (UI). */
+export interface ScanItem {
+  transaction: InsiderTransaction;
+  result: GatekeeperResult;
+}
+
+/** En gemt rådsdom med den transaktion, den blev afsagt på (UI). */
+export interface SavedVerdictItem {
+  transaction: InsiderTransaction;
+  verdict: CouncilVerdict;
+  savedAt: string;
+}

@@ -1,20 +1,14 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { IBM_Plex_Mono, IBM_Plex_Sans, IBM_Plex_Sans_Condensed } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+const plexSans = IBM_Plex_Sans({ variable: "--font-plex-sans", subsets: ["latin", "latin-ext"], weight: "variable" });
+const plexCond = IBM_Plex_Sans_Condensed({ variable: "--font-plex-cond", subsets: ["latin", "latin-ext"], weight: "600" });
+const plexMono = IBM_Plex_Mono({ variable: "--font-plex-mono", subsets: ["latin", "latin-ext"], weight: ["400", "500"] });
 
 export const metadata: Metadata = {
-  title: "INSIDER//OPS | Insiderkøb og AI-råd",
-  description: "Kvantitativ scanner og multi-agent råd til analyse af insider-handler og informationsasymmetri.",
+  title: "InsiderOps – insiderkøb og AI-råd",
+  description: "Scanner og multi-agent råd til analyse af insiderkøb. Ingen dokumenteret edge.",
 };
 
 export default function RootLayout({
@@ -25,11 +19,9 @@ export default function RootLayout({
   return (
     <html
       lang="da"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
+      className={`${plexSans.variable} ${plexCond.variable} ${plexMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-slate-950 text-slate-100 antialiased font-sans">
-        {children}
-      </body>
+      <body className="min-h-full bg-paper text-ink font-sans">{children}</body>
     </html>
   );
 }

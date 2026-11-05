@@ -1,63 +1,94 @@
 import type { RealKpis } from '@/types/insider';
+import { Card, Label } from '@/components/ui';
 
 const kr = (n: number) => `${n > 0 ? '+' : ''}${n.toLocaleString('da-DK')} kr.`;
-const tone = (n: number | null) => (n === null ? 'text-slate-400' : n >= 0 ? 'text-emerald-400' : 'text-rose-400');
+const tone = (n: number | null) => (n === null ? 'text-graphite' : n >= 0 ? 'text-gain' : 'text-loss');
 
 /** Egne KPI'er for rigtige Nordnet-handler (fase 9): virker mine copy trades? */
 export function RealKpiRow({ kpis }: { kpis: RealKpis | null }) {
   const count = kpis ? kpis.openCount + kpis.closedCount : 0;
   return (
-    <div className="space-y-1.5">
-      <div className="text-[11px] font-mono font-bold text-slate-400 uppercase">🏦 Mine Nordnet-handler</div>
+    <section aria-labelledby="real-kpi-title" className="@container space-y-3">
+      <h2 id="real-kpi-title" className="text-base font-semibold">
+        Mine Nordnet-handler
+      </h2>
       {!kpis || count === 0 ? (
-        <div className="p-4 rounded-lg bg-slate-900/70 border border-slate-800 text-xs font-mono text-slate-400">
-          Ingen rigtige handler endnu. Registrér en handel som &quot;Nordnet Live&quot; under Redigér, og ret kurs og antal
-          til dem fra Nordnet.
-        </div>
+        <Card className="p-4 text-sm text-graphite">
+          Ingen rigtige handler endnu. Registrér en handel som &quot;Nordnet Live&quot; under Redigér, og ret kurs og antal til dem fra Nordnet.
+        </Card>
       ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Card title="AFKAST (DKK, NETTO)" sub={`Brutto ${kr(kpis.grossPnlDkk)} · investeret ${kpis.investedDkk.toLocaleString('da-DK')} kr.`}>
+        <dl className="grid gap-3 @md:grid-cols-2 @4xl:grid-cols-4">
+          <Kpi
+            title="Afkast (DKK, netto)"
+            sub={
+              <>
+                Brutto <span className="font-mono">{kr(kpis.grossPnlDkk)}</span> · investeret{' '}
+                <span className="font-mono">{kpis.investedDkk.toLocaleString('da-DK')} kr.</span>
+              </>
+            }
+          >
             <span className={tone(kpis.netPnlDkk)}>{kr(kpis.netPnlDkk)}</span>
             {kpis.netPnlPct !== null && (
-              <span className={`text-sm ml-2 ${tone(kpis.netPnlPct)}`}>
+              <span className={`ml-2 text-sm ${tone(kpis.netPnlPct)}`}>
                 ({kpis.netPnlPct > 0 ? '+' : ''}
                 {kpis.netPnlPct.toLocaleString('da-DK')} %)
               </span>
             )}
-          </Card>
-          <Card
-            title="ALPHA MOD SPY"
-            sub={kpis.alphaPct === null ? 'Mangler data (SPY ved entry)' : `Vægtet over ${kpis.alphaCount} handler, åbne + lukkede`}
-          >
-            <span className={tone(kpis.alphaPct)}>
-              {kpis.alphaPct === null ? 'N/A' : `${kpis.alphaPct > 0 ? '+' : ''}${kpis.alphaPct.toLocaleString('da-DK')} %-point`}
-            </span>
-          </Card>
-          <Card title="ANTAL HANDLER" sub={`${kpis.openCount} åbne · ${kpis.closedCount} lukkede`}>
-            <span className="text-slate-100">{count}</span>
-          </Card>
-          <Card
-            title="SAMLEDE OMKOSTNINGER"
+          </Kpi>
+          <Kpi
+            title="Alpha mod SPY"
             sub={
-              kpis.costsMissing > 0
-                ? `${kpis.costsMissing} handel(er) uden tarif – ikke medregnet`
-                : 'Kurtage + veksling (Nordnet-tarif). Spread ligger i dine kurser.'
+              kpis.alphaPct === null ? (
+                'Mangler data (SPY ved entry)'
+              ) : (
+                <>
+                  Vægtet over <span className="font-mono">{kpis.alphaCount}</span> handler, åbne + lukkede
+                </>
+              )
             }
           >
-            <span className="text-amber-300">{kpis.costsDkk.toLocaleString('da-DK')} kr.</span>
-          </Card>
-        </div>
+            <span className={tone(kpis.alphaPct)}>
+              {kpis.alphaPct === null ? '–' : `${kpis.alphaPct > 0 ? '+' : ''}${kpis.alphaPct.toLocaleString('da-DK')} %-point`}
+            </span>
+          </Kpi>
+          <Kpi
+            title="Antal handler"
+            sub={
+              <>
+                <span className="font-mono">{kpis.openCount}</span> åbne · <span className="font-mono">{kpis.closedCount}</span> lukkede
+              </>
+            }
+          >
+            <span className="text-ink">{count}</span>
+          </Kpi>
+          <Kpi
+            title="Samlede omkostninger"
+            sub={
+              kpis.costsMissing > 0 ? (
+                <>
+                  <span className="font-mono">{kpis.costsMissing}</span> handel(er) uden tarif – ikke medregnet
+                </>
+              ) : (
+                'Kurtage + veksling (Nordnet-tarif). Spread ligger i dine kurser.'
+              )
+            }
+          >
+            <span className="text-ink">{kpis.costsDkk.toLocaleString('da-DK')} kr.</span>
+          </Kpi>
+        </dl>
       )}
-    </div>
+    </section>
   );
 }
 
-function Card({ title, sub, children }: { title: string; sub: string; children: React.ReactNode }) {
+function Kpi({ title, sub, children }: { title: string; sub: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg space-y-1">
-      <div className="text-slate-400 text-xs font-mono">{title}</div>
-      <div className="text-2xl font-mono font-bold">{children}</div>
-      <div className="text-[11px] text-slate-400 font-mono">{sub}</div>
-    </div>
+    <Card className="space-y-1 p-4">
+      <dt>
+        <Label>{title}</Label>
+      </dt>
+      <dd className="font-mono text-xl">{children}</dd>
+      <dd className="text-xs text-graphite">{sub}</dd>
+    </Card>
   );
 }
