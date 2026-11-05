@@ -8,16 +8,26 @@ import { roundTripCostPct, type CostsConfig } from '@/lib/costs';
  */
 export const PREREG = {
   version: 'v1',
-  scoreThreshold: 50, // primær population: gatekeeper-score ≥ 50 (Claude)
+  firstSignalAt: '2026-11-04T21:59:32.062Z', // første signal i ledgeren; 6-måneders-fristen regnes herfra
   primaryHorizon: 5,
+  primaryBenchmark: 'SPY',
+  secondaryBenchmark: 'IWM', // Russell 2000
+  scoreThreshold: 50, // sekundært: score ≥ 50 mod hele populationen (H1 har ingen score-tærskel)
   freshHours: 72, // detectedAt − filedAt (UTC) ≤ 72 t
   goLiveHorizon: 21,
-  goLiveMinUnits: 60,
+  goLiveMinUnits: 150,
+  interimConfidence: 0.99, // månedlige vurderinger før fristen: ensidet 99 %
+  finalConfidence: 0.95, // endelig vurdering efter fristen: ensidet 95 %
+  finalAfterMonths: 6,
   minUnitsForConclusion: 30, // under dette vises "for få til konklusioner" pr. spand
   bootstrapResamples: 10_000,
   bootstrapSeed: 20261104,
+  costsVersion: 3, // config/costs.json er frosset: version + sha256 (LF-linjeskift)
+  costsSha256: 'fad087e981ecdcf8c9e6dcea4d9037a2362abbc1e2d9c9683d45f380433cc7f0',
 } as const;
 
+export type Benchmark = 'SPY' | 'IWM';
+const BENCHMARKS: Benchmark[] = ['SPY', 'IWM'];
 const HORIZONS = [1, 5, 21, 63] as const;
 
 /** Analyseenhed: (ticker, entry-dag). Signaler på samme aktie samme dag har samme kursforløb → én enhed. */
@@ -27,7 +37,8 @@ export interface Unit {
   entryDate: string;
   week: string; // ISO-uge for entry-dagen (klynge i bootstrap)
   score: number; // maks Claude-score blandt enhedens signaler
-  net: Partial<Record<number, number>>; // abnormalt afkast i DKK minus round-trip-omkostning, pr. horisont
+  net: Record<Benchmark, Partial<Record<number, number>>>; // abnormalt afkast i DKK − round-trip-omkostning
+  gross: Partial<Record<number, number>>; // abnormalt afkast i DKK mod SPY før omkostninger (sekundær)
 }
 
 export function isoWeek(date: string): string {
@@ -58,9 +69,13 @@ export function buildUnits(signals: SignalRow[], outcomes: OutcomeRow[], costs: 
     if (costPct === undefined) continue; // ukendt omkostning → ingen nettotal (intet gæt)
     const entryDate = outs[0].entryDate;
     const key = `${s.ticker}|${entryDate}`;
-    const unit = units.get(key) ?? { key, ticker: s.ticker, entryDate, week: isoWeek(entryDate), score: -1, net: {} };
+    const unit = units.get(key) ?? { key, ticker: s.ticker, entryDate, week: isoWeek(entryDate), score: -1, net: { SPY: {}, IWM: {} }, gross: {} };
     unit.score = Math.max(unit.score, s.gatekeeperScore!);
-    for (const o of outs) unit.net[o.horizon] ??= o.abnormalDkk - costPct / 100;
+    for (const o of outs) {
+      unit.net.SPY[o.horizon] ??= o.abnormalDkk - costPct / 100;
+      unit.gross[o.horizon] ??= o.abnormalDkk;
+      if (o.abnormalIwmDkk !== null && o.abnormalIwmDkk !== undefined) unit.net.IWM[o.horizon] ??= o.abnormalIwmDkk - costPct / 100;
+    }
     units.set(key, unit);
   }
   return [...units.values()];
@@ -87,7 +102,8 @@ export interface Summary {
   mean: number | null;
   ciLow: number | null; // 2,5 %
   ciHigh: number | null; // 97,5 %
-  lowerOneSided95: number | null; // 5 %
+  lowerOneSided95: number | null; // 5 %-percentil
+  lowerOneSided99: number | null; // 1 %-percentil
   hitRate: number | null; // andel med netto > 0
 }
 
@@ -107,6 +123,7 @@ export function summarize(points: Array<{ week: string; value: number }>, resamp
     ciLow: null,
     ciHigh: null,
     lowerOneSided95: null,
+    lowerOneSided99: null,
     hitRate: n ? points.filter((p) => p.value > 0).length / n : null,
   };
   if (weeks.length < 2) return base;
@@ -124,7 +141,7 @@ export function summarize(points: Array<{ week: string; value: number }>, resamp
   }
   means.sort((a, b) => a - b);
   const q = (p: number) => means[Math.min(means.length - 1, Math.floor(p * means.length))];
-  return { ...base, ciLow: q(0.025), ciHigh: q(0.975), lowerOneSided95: q(0.05) };
+  return { ...base, ciLow: q(0.025), ciHigh: q(0.975), lowerOneSided95: q(0.05), lowerOneSided99: q(0.01) };
 }
 
 const bucketOf = (score: number) => {
@@ -143,11 +160,19 @@ function weekdaysSince(fromIso: string, now: Date): number {
   return n;
 }
 
+/** Fristen for den endelige vurdering (første signal + 6 måneder). Før den: interim-vurdering med 99 %. */
+export function finalAssessmentFrom(): Date {
+  const d = new Date(PREREG.firstSignalAt);
+  d.setUTCMonth(d.getUTCMonth() + PREREG.finalAfterMonths);
+  return d;
+}
+
 export function ledgerStats(input: { signals: SignalRow[]; outcomes: OutcomeRow[]; costs: CostsConfig | null; now: Date; resamples?: number }) {
   const { signals, outcomes, costs, now } = input;
   const resamples = input.resamples ?? PREREG.bootstrapResamples;
   const units = buildUnits(signals, outcomes, costs);
   const has = new Set(outcomes.map((o) => `${o.signalId}|${o.horizon}`));
+  const H = PREREG.primaryHorizon;
 
   // Mangler udfald: horisonten burde være nået (skøn: hverdage siden anker > h + 2), men der er ingen række.
   const missingOutcomes = signals.filter((s) =>
@@ -157,37 +182,59 @@ export function ledgerStats(input: { signals: SignalRow[]; outcomes: OutcomeRow[
   const perWeek = new Map<string, number>();
   for (const s of signals) perWeek.set(isoWeek(s.detectedAt), (perWeek.get(isoWeek(s.detectedAt)) ?? 0) + 1);
 
-  const point = (u: Unit, h: number) => ({ week: u.week, value: u.net[h]! });
-  const withH = (h: number) => units.filter((u) => u.net[h] !== undefined);
+  const withH = (h: number, b: Benchmark = 'SPY') => units.filter((u) => u.net[b][h] !== undefined);
+  const points = (us: Unit[], h: number, b: Benchmark = 'SPY') => us.map((u) => ({ week: u.week, value: u.net[b][h]! }));
 
   const byBucket = Object.fromEntries(
-    HORIZONS.map((h) => {
-      const groups = new Map<string, Unit[]>();
-      for (const u of withH(h)) groups.set(bucketOf(u.score), [...(groups.get(bucketOf(u.score)) ?? []), u]);
-      return [
-        h,
-        [...groups.entries()]
-          .sort(([a], [b]) => parseInt(a) - parseInt(b))
-          // ponytail: 2.000 resamples pr. spand holder fanen hurtig; go-live-tallene bruger prereg-antallet.
-          .map(([bucket, us]) => ({ bucket, ...summarize(us.map((u) => point(u, h)), Math.min(resamples, 2_000)) })),
-      ];
-    })
-  );
+    BENCHMARKS.map((b) => [
+      b,
+      Object.fromEntries(
+        HORIZONS.map((h) => {
+          const groups = new Map<string, Unit[]>();
+          for (const u of withH(h, b)) groups.set(bucketOf(u.score), [...(groups.get(bucketOf(u.score)) ?? []), u]);
+          return [
+            h,
+            [...groups.entries()]
+              .sort(([x], [y]) => parseInt(x) - parseInt(y))
+              // ponytail: 2.000 resamples pr. spand holder fanen hurtig; go-live-tallene bruger prereg-antallet.
+              .map(([bucket, us]) => ({ bucket, ...summarize(points(us, h, b), Math.min(resamples, 2_000)) })),
+          ];
+        })
+      ),
+    ])
+  ) as Record<Benchmark, Record<string, Array<Summary & { bucket: string }>>>;
 
-  const above = (h: number) => withH(h).filter((u) => u.score >= PREREG.scoreThreshold);
-  const primary = summarize(above(PREREG.primaryHorizon).map((u) => point(u, PREREG.primaryHorizon)), resamples);
+  // H1: hele populationen (ingen score-tærskel). Sekundært: score ≥ 50 og IWM som benchmark.
+  const primary = {
+    SPY: summarize(points(withH(H), H), resamples),
+    IWM: summarize(points(withH(H, 'IWM'), H, 'IWM'), resamples),
+  };
+  const aboveThreshold = summarize(points(withH(H).filter((u) => u.score >= PREREG.scoreThreshold), H), resamples);
+  // Sekundært: bruttoafkast (abnormalt mod SPY før omkostninger) for hele populationen pr. horisont.
+  const gross = Object.fromEntries(
+    HORIZONS.map((h) => [
+      h,
+      summarize(
+        units.filter((u) => u.gross[h] !== undefined).map((u) => ({ week: u.week, value: u.gross[h]! })),
+        Math.min(resamples, 2_000)
+      ),
+    ])
+  ) as Record<string, Summary>;
 
-  // Go-live: stikprøven er enheder over tærsklen med fuldt 21-dages udfald; primær metrik (5 d netto) på dem.
-  const goLiveSample = above(PREREG.goLiveHorizon).filter((u) => u.net[PREREG.primaryHorizon] !== undefined);
-  const goLivePrimary = summarize(goLiveSample.map((u) => point(u, PREREG.primaryHorizon)), resamples);
-  // Top mod bund: øverste og nederste tredjedel efter score blandt alle enheder med fuldt 21-dages udfald.
-  const ranked = withH(PREREG.goLiveHorizon)
-    .filter((u) => u.net[PREREG.primaryHorizon] !== undefined)
-    .sort((a, b) => a.score - b.score);
+  // Go-live: stikprøven er alle enheder med fuldt 21-dages udfald; primær metrik (5 d netto mod SPY) på dem.
+  const goLiveSample = withH(PREREG.goLiveHorizon).filter((u) => u.net.SPY[H] !== undefined);
+  const goLivePrimary = summarize(points(goLiveSample, H), resamples);
+  // Sanity-tjek (punktestimat, sekundært – ikke en del af porten): øverste mod nederste tredjedel efter score.
+  const ranked = [...goLiveSample].sort((a, b) => a.score - b.score);
   const third = Math.floor(ranked.length / 3);
-  const bottom = third > 0 ? summarize(ranked.slice(0, third).map((u) => point(u, PREREG.primaryHorizon)), resamples) : null;
-  const top = third > 0 ? summarize(ranked.slice(-third).map((u) => point(u, PREREG.primaryHorizon)), resamples) : null;
-  const enough = goLiveSample.length >= PREREG.goLiveMinUnits;
+  const bottom = third > 0 ? summarize(points(ranked.slice(0, third), H), resamples) : null;
+  const top = third > 0 ? summarize(points(ranked.slice(-third), H), resamples) : null;
+  const sanityTopAboveBottom = top && bottom && top.mean !== null && bottom.mean !== null ? top.mean > bottom.mean : null;
+
+  const finalFrom = finalAssessmentFrom();
+  const phase: 'interim' | 'endelig' = now >= finalFrom ? 'endelig' : 'interim';
+  const confidence = phase === 'endelig' ? PREREG.finalConfidence : PREREG.interimConfidence;
+  const lowerBound = phase === 'endelig' ? goLivePrimary.lowerOneSided95 : goLivePrimary.lowerOneSided99;
 
   return {
     prereg: PREREG,
@@ -195,6 +242,7 @@ export function ledgerStats(input: { signals: SignalRow[]; outcomes: OutcomeRow[
       signals: signals.length,
       scoredClaude: signals.filter((s) => s.scoreSource === 'claude').length,
       eligible: signals.filter(isEligible).length,
+      eligibleAboveThreshold: signals.filter((s) => isEligible(s) && (s.gatekeeperScore ?? -1) >= PREREG.scoreThreshold).length,
       units: units.length,
       unitsWithOutcome: Object.fromEntries(HORIZONS.map((h) => [h, withH(h).length])),
       missingOutcomes,
@@ -202,19 +250,20 @@ export function ledgerStats(input: { signals: SignalRow[]; outcomes: OutcomeRow[
     perWeek: [...perWeek.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([week, count]) => ({ week, count })),
     byBucket,
     primary,
+    aboveThreshold,
+    gross,
     topVsBottom: { top, bottom },
     goLive: {
+      phase,
+      finalFrom: finalFrom.toISOString(),
+      confidence,
       units: goLiveSample.length,
       required: PREREG.goLiveMinUnits,
-      lowerOneSided95: goLivePrimary.lowerOneSided95,
-      topBeatsBottom: top && bottom && top.mean !== null && bottom.mean !== null ? top.mean > bottom.mean : null,
-      met:
-        enough &&
-        goLivePrimary.lowerOneSided95 !== null &&
-        goLivePrimary.lowerOneSided95 > 0 &&
-        top !== null &&
-        bottom !== null &&
-        (top.mean ?? -Infinity) > (bottom.mean ?? Infinity),
+      mean: goLivePrimary.mean,
+      lowerBound,
+      sanityTopAboveBottom,
+      // Porten bedømmer basisstrategien (H1); scoren indgår ikke (sanity-tjekket vises kun).
+      met: goLiveSample.length >= PREREG.goLiveMinUnits && lowerBound !== null && lowerBound > 0,
     },
   };
 }

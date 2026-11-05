@@ -1,16 +1,22 @@
 {
-  "TODO": "Pladsholdere (konservative skøn). Ret kurtage, FX-spread og handelsstørrelse til dine egne Nordnet-satser, og slet så denne linje.",
-  "version": 1,
-  "note": "Handelsomkostninger for en dansk detailinvestor. Bruges af appen (src/lib/costs.ts) og research/ (fase 4). Alle pct-felter er i procent (0.25 = 0,25 %). Kurtage og FX-spread gælder pr. handel (én vej); spread/slippage er for hele round-trip'en.",
-  "assumedTradeSizeDkk": 20000,
+  "version": 3,
+  "source": "Nordnet prisklasse Standard, typisk handelsstørrelse 10.000 kr., US-aktier via USD-valutakonto, nordiske aktier uden for DKK med automatisk veksling (oplyst af Mads 5.11.2026). Spread/slippage er konservative skøn, ikke Nordnet-satser.",
+  "note": "Handelsomkostninger for en dansk detailinvestor. Bruges af appen (src/lib/costs.ts) og research/ (fase 4). Alle pct-felter er i procent (0.25 = 0,25 %). Kurtage og FX-spread gælder pr. handel (én vej); spread/slippage er for hele round-trip'en. USD 0 %: US-aktier handles fra USD-valutakontoen, så der veksles ikke pr. handel; selve vekslingen DKK→USD til kontoen koster 0,15 % én gang og indgår ikke i round-trip. Frosset af docs/prereg.md (version + sha256): en ændring kræver en ny prereg-version.",
+  "assumedTradeSizeDkk": 10000,
   "brokerage": {
-    "US": { "minDkk": 39, "pct": 0.15 },
-    "CPH": { "minDkk": 29, "pct": 0.1 },
-    "STO": { "minDkk": 29, "pct": 0.1 },
-    "HEL": { "minDkk": 29, "pct": 0.1 },
-    "OSL": { "minDkk": 29, "pct": 0.1 }
+    "US": { "minDkk": 25, "pct": 0.15 },
+    "CPH": { "minDkk": 25, "pct": 0.1 },
+    "STO": { "minDkk": 25, "pct": 0.1 },
+    "HEL": { "minDkk": 25, "pct": 0.1 },
+    "OSL": { "minDkk": 25, "pct": 0.1 }
   },
-  "fxSpreadPct": 0.25,
+  "fxSpreadPctByCurrency": {
+    "USD": 0,
+    "SEK": 0.25,
+    "EUR": 0.25,
+    "NOK": 0.25,
+    "DKK": 0
+  },
   "roundTripSpreadSlippagePctByLiquidity": [
     { "minAvgDailyUsd": 50000000, "pct": 0.1 },
     { "minAvgDailyUsd": 5000000, "pct": 0.3 },

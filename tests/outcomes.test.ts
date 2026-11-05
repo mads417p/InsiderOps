@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeLedger, listOutcomes, recordSignals } from '@/lib/ledger';
-import { computeMissingOutcomes, computeOutcome, toSeries, type BarSeries } from '@/lib/outcomes';
+import { computeMissingOutcomes, computeOutcome, regularOpen, toSeries, type BarSeries } from '@/lib/outcomes';
 import type { InsiderTransaction } from '@/types/insider';
 
 // Rigtige Yahoo-dagsdata 19.11–5.12.2025 (hentet 4.11.2026): SPY lukket torsdag 27.11 (Thanksgiving),
@@ -14,6 +14,7 @@ const series = (sym: string): BarSeries => toSeries(sym, raw[sym].tz, raw[sym].t
 const spy = series('SPY');
 const novo = series('NOVO-B.CO');
 const usdDkk = series('USDDKK=X');
+const iwm = series('IWM');
 const NOW = new Date('2025-12-06T12:00:00Z');
 
 const sig = (detectedAt: string, currency = 'USD') => ({ id: 's1', currency, detectedAt, scoredAt: null });
@@ -29,22 +30,32 @@ describe('udfald: entry-dag (fase 3, 4 og 8)', () => {
   });
 
   it('onsdag aften før Thanksgiving → entry fredag; 5 handelsdage springer helligdag og weekend over', () => {
-    const r = computeOutcome({ signal: sig('2025-11-26T22:00:00Z'), horizon: 5, stock: spy, spy, fx: usdDkk, usdDkk, now: NOW });
+    const r = computeOutcome({ signal: sig('2025-11-26T22:00:00Z'), horizon: 5, stock: spy, spy, iwm, fx: usdDkk, usdDkk, now: NOW });
     expect(r.status).toBe('beregnet');
     if (r.status !== 'beregnet') return;
     expect([r.row.entryDate, r.row.exitDate]).toEqual(['2025-11-28', '2025-12-04']);
     // USD → DKK med USDDKK-close på entry- og exit-datoen
     expect(r.row.retDkk).toBeCloseTo((684.39 * 6.4008) / (680.86 * 6.4381) - 1, 10);
     expect([r.row.fxEntry, r.row.fxExit]).toEqual([6.4381, 6.4008]);
+    // IWM (sekundært benchmark) i samme vindue og valuta
+    expect([r.row.iwmEntryDate, r.row.iwmEntry, r.row.iwmExitDate, r.row.iwmExit]).toEqual(['2025-11-28', 248.01, '2025-12-04', 251.82]);
+    expect(r.row.iwmRetDkk).toBeCloseTo(((251.82 / 248.01) * 6.4008) / 6.4381 - 1, 10);
+    expect(r.row.abnormalIwmDkk).toBeCloseTo(r.row.retDkk - r.row.iwmRetDkk!, 12);
+  });
+
+  it('mangler IWM, beregnes udfaldet stadig mod SPY, og IWM-felterne er NULL', () => {
+    const r = computeOutcome({ signal: sig('2025-11-21T21:30:00Z'), horizon: 1, stock: spy, spy, fx: usdDkk, usdDkk, now: NOW });
+    expect(r.status === 'beregnet' && [r.row.iwmRetUsd, r.row.abnormalIwmDkk]).toEqual([null, null]);
   });
 
   it('nordisk aktie i DKK: ingen FX; SPY lukket i hele vinduet → SPY-afkast 0', () => {
-    const r = computeOutcome({ signal: sig('2025-11-26T17:00:00Z', 'DKK'), horizon: 1, stock: novo, spy, fx: null, usdDkk, now: NOW });
+    const r = computeOutcome({ signal: sig('2025-11-26T17:00:00Z', 'DKK'), horizon: 1, stock: novo, spy, iwm, fx: null, usdDkk, now: NOW });
     expect(r.status).toBe('beregnet');
     if (r.status !== 'beregnet') return;
     expect([r.row.entryDate, r.row.entryPrice, r.row.exitPrice]).toEqual(['2025-11-27', 310, 310.9]);
     expect(r.row.retDkk).toBeCloseTo(r.row.retLocal, 12);
     expect(r.row.spyRetUsd).toBe(0);
+    expect(r.row.iwmRetUsd).toBe(0); // IWM også lukket på Thanksgiving
     expect(r.row.abnormalLocal).toBeNull(); // kun meningsfuld for USD-aktier
     expect(r.row.abnormalDkk).toBeCloseTo(310.9 / 310 - 1, 10);
   });
@@ -71,6 +82,39 @@ describe('udfald: entry-dag (fase 3, 4 og 8)', () => {
       horizon: 1, stock: spy, spy, fx: usdDkk, usdDkk, now: NOW,
     });
     expect(r.status === 'beregnet' && r.row.entryDate).toBe('2025-11-25');
+  });
+});
+
+describe('entry-regel: første ordinære åbning ≥ anker + 10 min (prereg afsnit 5)', () => {
+  const entry = (anchor: string, stock = spy, currency = 'USD') => {
+    const r = computeOutcome({ signal: sig(anchor, currency), horizon: 1, stock, spy, fx: currency === 'DKK' ? null : usdDkk, usdDkk, now: NOW });
+    return r.status === 'beregnet' ? r.row.entryDate : r.status;
+  };
+
+  it('US: anker 09:42 UTC (før åbning) → samme dags åbning 14:30 UTC', () => {
+    expect(entry('2025-11-24T09:42:00Z')).toBe('2025-11-24');
+  });
+
+  it('US: anker 14:25 UTC (5 min før åbning) → næste handelsdag; præcis 10 min før → samme dag', () => {
+    expect(entry('2025-11-24T14:25:00Z')).toBe('2025-11-25');
+    expect(entry('2025-11-24T14:20:00Z')).toBe('2025-11-24');
+  });
+
+  it('US: anker efter lukning → næste handelsdag; weekend → mandag; Thanksgiving → fredag', () => {
+    expect(entry('2025-11-24T21:30:00Z')).toBe('2025-11-25');
+    expect(entry('2025-11-22T12:00:00Z')).toBe('2025-11-24'); // lørdag
+    expect(entry('2025-11-27T10:00:00Z')).toBe('2025-11-28'); // torsdag = helligdag i USA
+  });
+
+  it('Norden: anker 07:40 UTC → samme dags åbning (København 09:00 = 08:00 UTC); 07:55 UTC → næste dag', () => {
+    expect(entry('2025-11-27T07:40:00Z', novo, 'DKK')).toBe('2025-11-27');
+    expect(entry('2025-11-27T07:55:00Z', novo, 'DKK')).toBe('2025-11-28');
+  });
+
+  it('ordinære åbningstider pr. børs', () => {
+    expect([regularOpen('AAPL'), regularOpen('NOVO-B.CO'), regularOpen('VOLV-B.ST'), regularOpen('EQNR.OL'), regularOpen('NOKIA.HE')]).toEqual([
+      '09:30', '09:00', '09:00', '09:00', '10:00',
+    ]);
   });
 });
 
@@ -101,6 +145,7 @@ describe('udfaldsjob mod ledgeren', () => {
     expect(first.fetchErrors).toEqual([{ symbol: 'GONE', error: 'Yahoo GONE svarede 404' }]);
     expect(first.missingData.filter((m) => m.signalId === 'acc:2:2')).toHaveLength(4);
     expect(listOutcomes().every((o) => o.signalId === 'acc:1:1')).toBe(true);
+    expect(listOutcomes().every((o) => o.abnormalIwmDkk !== null)).toBe(true); // IWM hentes af jobbet
 
     const again = await computeMissingOutcomes({ now: NOW, fetcher });
     expect(again.inserted).toBe(0);

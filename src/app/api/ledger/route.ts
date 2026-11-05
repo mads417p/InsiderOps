@@ -1,7 +1,7 @@
 import { connection, NextResponse } from 'next/server';
 import { listOutcomes, listSignals } from '@/lib/ledger';
-import { ledgerStats } from '@/lib/ledger-stats';
-import { loadCosts, type CostsConfig } from '@/lib/costs';
+import { ledgerStats, PREREG } from '@/lib/ledger-stats';
+import { costsFileSha256, loadCosts, type CostsConfig } from '@/lib/costs';
 import { computeMissingOutcomes } from '@/lib/outcomes';
 
 /** Måling-fanen: statistik over signal-ledgeren (ingen live-kald). */
@@ -10,13 +10,17 @@ export async function GET() {
   try {
     let costs: CostsConfig | null = null;
     let costsError: string | null = null;
+    let costsSha256: string | null = null;
     try {
       costs = loadCosts();
+      costsSha256 = costsFileSha256();
     } catch (e) {
       costsError = `config/costs.json kunne ikke læses: ${e instanceof Error ? e.message : String(e)}`;
     }
     const stats = ledgerStats({ signals: listSignals(), outcomes: listOutcomes(), costs, now: new Date() });
-    return NextResponse.json({ success: true, ...stats, costsTodo: costs?.TODO ?? null, costsError });
+    // Frosne omkostninger (prereg): afviger filen, vises en advarsel; tallene beregnes stadig med filens satser.
+    const costsMatchPrereg = costs?.version === PREREG.costsVersion && costsSha256 === PREREG.costsSha256;
+    return NextResponse.json({ success: true, ...stats, costsTodo: costs?.TODO ?? null, costsError, costsSha256, costsMatchPrereg });
   } catch (error) {
     console.error('Fejl i GET /api/ledger:', error);
     return NextResponse.json({ success: false, error: `Ledgeren kunne ikke læses: ${(error as Error).message}` }, { status: 500 });

@@ -1,9 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { LedgerStats, Summary } from '@/lib/ledger-stats';
+import type { Benchmark, LedgerStats, Summary } from '@/lib/ledger-stats';
 
-type StatsResponse = LedgerStats & { success: boolean; error?: string; costsTodo: string | null; costsError: string | null };
+type StatsResponse = LedgerStats & {
+  success: boolean;
+  error?: string;
+  costsTodo: string | null;
+  costsError: string | null;
+  costsSha256: string | null;
+  costsMatchPrereg: boolean;
+};
 type JobResponse = {
   success: boolean;
   error?: string;
@@ -81,6 +88,7 @@ export function MeasurementTab() {
   const [job, setJob] = useState<JobResponse | null>(null);
   const [running, setRunning] = useState(false);
   const [horizon, setHorizon] = useState(5);
+  const [benchmark, setBenchmark] = useState<Benchmark>('SPY');
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -118,15 +126,22 @@ export function MeasurementTab() {
   if (!stats) return <div className="text-xs font-mono text-slate-400">Henter måling…</div>;
 
   const p = stats.prereg;
-  const buckets = (stats.byBucket as Record<string, Array<Summary & { bucket: string }>>)[String(horizon)] ?? [];
-  const calib = (stats.byBucket as Record<string, Array<Summary & { bucket: string }>>)[String(p.primaryHorizon)] ?? [];
-  const tooSmall = stats.goLive.units < p.goLiveMinUnits;
+  const buckets = stats.byBucket[benchmark][String(horizon)] ?? [];
+  const calib = stats.byBucket.SPY[String(p.primaryHorizon)] ?? [];
+  const gl = stats.goLive;
+  const tooSmall = gl.units < p.goLiveMinUnits;
 
   return (
     <div className="space-y-5 font-mono text-xs">
       {stats.costsTodo && (
         <div className="p-3 rounded border border-amber-700 bg-amber-950/40 text-amber-200">
           ⚠️ Omkostningerne i config/costs.json er pladsholdere: {stats.costsTodo}
+        </div>
+      )}
+      {!stats.costsError && !stats.costsMatchPrereg && (
+        <div className="p-3 rounded border border-rose-800 bg-rose-950/40 text-rose-300">
+          ⚠️ config/costs.json afviger fra den frosne version i prereg {p.version} (version {p.costsVersion}, sha256 {p.costsSha256.slice(0, 12)}…;
+          nu {stats.costsSha256?.slice(0, 12)}…). Ændrede omkostninger kræver en ny prereg-version.
         </div>
       )}
       {stats.costsError && <div className="p-3 rounded border border-rose-800 bg-rose-950/40 text-rose-300">{stats.costsError}</div>}
@@ -152,7 +167,7 @@ export function MeasurementTab() {
         {[
           ['SIGNALER I LEDGEREN', stats.totals.signals],
           ['CLAUDE-SCOREDE', stats.totals.scoredClaude],
-          [`I POPULATIONEN (≤ ${p.freshHours} t)`, stats.totals.eligible],
+          [`I POPULATIONEN (≤ ${p.freshHours} t)`, `${stats.totals.eligible} (${stats.totals.eligibleAboveThreshold} ≥ ${p.scoreThreshold})`],
           [`ENHEDER MED ${p.primaryHorizon} D-UDFALD`, stats.totals.unitsWithOutcome[p.primaryHorizon] ?? 0],
           ['MANGLER UDFALD', stats.totals.missingOutcomes],
         ].map(([label, value]) => (
@@ -163,15 +178,22 @@ export function MeasurementTab() {
         ))}
       </div>
 
-      <div className={`p-3 rounded border ${stats.goLive.met ? 'border-emerald-700 bg-emerald-950/30' : 'border-slate-800 bg-slate-900/60'}`}>
-        <div className="font-bold text-slate-200">Go-live-port (prereg {p.version})</div>
+      <div className={`p-3 rounded border ${gl.met ? 'border-emerald-700 bg-emerald-950/30' : 'border-slate-800 bg-slate-900/60'}`}>
+        <div className="font-bold text-slate-200">
+          Go-live-port (prereg {p.version}, {gl.phase === 'interim' ? 'interim-vurdering' : 'endelig vurdering'}, ensidet {Math.round(gl.confidence * 100)} %)
+        </div>
         <div className="mt-1 text-slate-300">
-          Enheder med score ≥ {p.scoreThreshold} og fuldt {p.goLiveHorizon}-dages udfald: {stats.goLive.units} / {stats.goLive.required} ·
-          nedre ensidet 95 %-grænse ({p.primaryHorizon} d netto): {pct(stats.goLive.lowerOneSided95)} · top-tredjedel slår bund:{' '}
-          {stats.goLive.topBeatsBottom === null ? '–' : stats.goLive.topBeatsBottom ? 'ja' : 'nej'} →{' '}
-          <span className={stats.goLive.met ? 'text-emerald-300 font-bold' : 'text-amber-300 font-bold'}>
-            {stats.goLive.met ? 'OPFYLDT' : 'IKKE OPFYLDT'}
-          </span>
+          Enheder med fuldt {p.goLiveHorizon}-dages udfald: {gl.units} / {gl.required} · gns. {p.primaryHorizon} d netto mod {p.primaryBenchmark}: {pct(gl.mean)} ·
+          nedre grænse: {pct(gl.lowerBound)} →{' '}
+          <span className={gl.met ? 'text-emerald-300 font-bold' : 'text-amber-300 font-bold'}>{gl.met ? 'OPFYLDT' : 'IKKE OPFYLDT'}</span>
+        </div>
+        <div className="mt-1 text-slate-400">
+          Sekundært (indgår ikke i porten): brutto før omkostninger {pct(stats.gross[String(p.primaryHorizon)]?.mean)} · sanity-tjek, top-tredjedel efter
+          score over bund (punktestimat): {gl.sanityTopAboveBottom === null ? '–' : gl.sanityTopAboveBottom ? 'ja' : 'nej'}. Ved go-live handles
+          basisstrategien; scoren må først udvælge handler, når H2 er dokumenteret.
+        </div>
+        <div className="mt-1 text-slate-500">
+          Månedlige vurderinger før {gl.finalFrom.slice(0, 10)} bruger ensidet {Math.round(p.interimConfidence * 100)} %; den endelige bruger {Math.round(p.finalConfidence * 100)} %.
         </div>
         {tooSmall && (
           <div className="mt-1 text-amber-300/90">
@@ -182,7 +204,16 @@ export function MeasurementTab() {
 
       <div>
         <div className="flex items-center gap-2 mb-2">
-          <span className="text-slate-300 font-bold">Netto abnormalt afkast (DKK, efter omkostninger) pr. score-spand</span>
+          <span className="text-slate-300 font-bold">Netto abnormalt afkast (DKK, efter omkostninger) pr. score-spand mod</span>
+          {(['SPY', 'IWM'] as const).map((b) => (
+            <button
+              key={b}
+              onClick={() => setBenchmark(b)}
+              className={`px-2 py-0.5 rounded border ${benchmark === b ? 'border-cyan-500 text-cyan-300' : 'border-slate-700 text-slate-400'}`}
+            >
+              {b === p.secondaryBenchmark ? `${b} (sekundær)` : b}
+            </button>
+          ))}
           {[1, 5, 21, 63].map((h) => (
             <button
               key={h}
@@ -221,8 +252,20 @@ export function MeasurementTab() {
               ))}
               {horizon === p.primaryHorizon && (
                 <tr className="border-t border-slate-700">
-                  <td className="py-1.5 px-3 text-cyan-300">≥ {p.scoreThreshold} (primær)</td>
-                  <SummaryCells s={stats.primary} minN={p.minUnitsForConclusion} />
+                  <td className="py-1.5 px-3 text-cyan-300">Alle ({benchmark === p.primaryBenchmark ? 'primær H1' : 'sekundær'})</td>
+                  <SummaryCells s={stats.primary[benchmark]} minN={p.minUnitsForConclusion} />
+                </tr>
+              )}
+              {horizon === p.primaryHorizon && benchmark === p.primaryBenchmark && (
+                <tr className="border-t border-slate-800/80">
+                  <td className="py-1.5 px-3 text-slate-300">≥ {p.scoreThreshold} (sekundær)</td>
+                  <SummaryCells s={stats.aboveThreshold} minN={p.minUnitsForConclusion} />
+                </tr>
+              )}
+              {benchmark === p.primaryBenchmark && stats.gross[String(horizon)] && (
+                <tr className="border-t border-slate-800/80">
+                  <td className="py-1.5 px-3 text-slate-300">Alle, brutto før omkostninger (sekundær)</td>
+                  <SummaryCells s={stats.gross[String(horizon)]} minN={p.minUnitsForConclusion} />
                 </tr>
               )}
             </tbody>

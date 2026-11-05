@@ -1,14 +1,22 @@
-import { HORIZONS, insertOutcome, listOutcomes, listSignals, type OutcomeRow, type SignalRow } from '@/lib/ledger';
+import { HORIZONS, insertOutcome, listOutcomes, listSignals, zonedToUtc, type OutcomeRow, type SignalRow } from '@/lib/ledger';
 
 /**
  * Udfaldsjob (fase 3, 4): beregner manglende udfald for 1/5/21/63 handelsdage, når horisonten er nået.
- * Entry = åbningskurs første handelsdag EFTER ankeret (børsens lokale dato); exit = lukkekurs på handelsdag h
- * (entry-dagen er dag 1). Handelsdage = de dage, der findes kurser for, så weekender og helligdage aldrig
- * kræver en kalender. Manglende kurs giver ingen række (aldrig 0), og et beregnet udfald overskrives ikke.
+ * Entry = åbningskurs ved den første ordinære åbning mindst 10 minutter efter ankeret (prereg afsnit 5);
+ * exit = lukkekurs på handelsdag h (entry-dagen er dag 1). Handelsdage = de dage, der findes kurser for, så
+ * weekender og helligdage aldrig kræver en kalender. Manglende kurs giver ingen række (aldrig 0), og et
+ * beregnet udfald overskrives ikke.
  */
 
 export const OUTCOME_DATA_SOURCE = 'Yahoo chart v8 interval=1d (open/close, split-justeret, ekskl. udbytte)';
 const MAX_FX_STALE_DAYS = 7;
+export const MIN_ENTRY_LEAD_MS = 10 * 60_000; // åbningen skal ligge mindst 10 min efter ankeret
+
+/** Ordinær åbningstid i børsens tidszone ud fra Yahoo-suffikset: US 09:30, CPH/STO/OSL 09:00, HEL 10:00. */
+export function regularOpen(symbol: string): string {
+  const suffix = /\.(CO|ST|OL|HE)$/i.exec(symbol.trim())?.[1]?.toUpperCase();
+  return suffix === 'HE' ? '10:00' : suffix ? '09:00' : '09:30';
+}
 
 export interface DailyBar {
   date: string; // børsens lokale dato (YYYY-MM-DD)
@@ -86,6 +94,24 @@ function fxOn(fx: BarSeries | null, date: string): number | undefined {
 export const anchorFor = (s: Pick<SignalRow, 'detectedAt' | 'scoredAt'>) =>
   s.scoredAt && s.scoredAt > s.detectedAt ? s.scoredAt : s.detectedAt;
 
+type BenchmarkWindow = { entryDate: string; entry: number; exitDate: string; exit: number; retUsd: number };
+
+/**
+ * Benchmark (SPY, IWM) i aktiens kalendervindue: open første handelsdag ≥ entry, close sidste ≤ exit.
+ * Handlede benchmarken slet ikke i vinduet (fx en nordisk 1-dags-horisont på Thanksgiving), er ændringen 0.
+ */
+function benchmarkWindow(s: BarSeries, entryDate: string, exitDate: string): BenchmarkWindow | undefined {
+  const w = s.bars.filter((b) => b.date >= entryDate && b.date <= exitDate);
+  if (w.length === 0) {
+    const prev = closeOnOrBefore(s.bars, exitDate);
+    return prev ? { entryDate: prev.date, entry: prev.close, exitDate: prev.date, exit: prev.close, retUsd: 0 } : undefined;
+  }
+  const first = w[0];
+  const last = w[w.length - 1];
+  if (first.open === null || last.close === null) return undefined;
+  return { entryDate: first.date, entry: first.open, exitDate: last.date, exit: last.close, retUsd: last.close / first.open - 1 };
+}
+
 export type OutcomeResult = { status: 'beregnet'; row: OutcomeRow } | { status: 'ikke-nået' } | { status: 'mangler-data'; reason: string };
 
 export function computeOutcome(p: {
@@ -93,14 +119,20 @@ export function computeOutcome(p: {
   horizon: number;
   stock: BarSeries;
   spy: BarSeries;
+  iwm?: BarSeries; // sekundært benchmark; mangler den, bliver IWM-felterne NULL
   fx: BarSeries | null; // valuta→DKK; null for DKK-aktier
   usdDkk: BarSeries;
   now: Date;
 }): OutcomeResult {
   const anchorAt = anchorFor(p.signal);
-  const anchorLocal = localDate(anchorAt, p.stock.timeZone);
+  // Et signal set før åbning kunne købes ved samme dags åbning; dag 1 er der, hvor reaktionen er størst.
+  const open = regularOpen(p.stock.symbol);
+  const earliest = Date.parse(anchorAt) + MIN_ENTRY_LEAD_MS;
   const bars = finalBars(p.stock, p.now);
-  const entryIdx = bars.findIndex((b) => b.date > anchorLocal);
+  const entryIdx = bars.findIndex((b) => {
+    const openAt = zonedToUtc(`${b.date}T${open}:00`, p.stock.timeZone);
+    return openAt !== undefined && Date.parse(openAt) >= earliest;
+  });
   if (entryIdx < 0) return { status: 'ikke-nået' };
   const exitIdx = entryIdx + p.horizon - 1;
   if (exitIdx >= bars.length) return { status: 'ikke-nået' };
@@ -110,26 +142,14 @@ export function computeOutcome(p: {
   if (entry.open === null) return { status: 'mangler-data', reason: `åbningskurs mangler ${entry.date}` };
   if (exit.close === null) return { status: 'mangler-data', reason: `lukkekurs mangler ${exit.date}` };
 
-  // SPY og FX skal også være færdige til og med exit-datoen (NY ligger bag CPH; FX handler døgnet rundt).
-  for (const s of [p.spy, p.usdDkk, ...(p.fx ? [p.fx] : [])]) {
+  // Benchmarks og FX skal også være færdige til og med exit-datoen (NY ligger bag CPH; FX handler døgnet rundt).
+  for (const s of [p.spy, p.usdDkk, ...(p.fx ? [p.fx] : []), ...(p.iwm ? [p.iwm] : [])]) {
     if (localDate(p.now, s.timeZone) <= exit.date) return { status: 'ikke-nået' };
   }
 
-  // SPY i samme kalendervindue: open første SPY-dag ≥ entry, close sidste ≤ exit. Handlede SPY slet ikke
-  // i vinduet (fx en nordisk 1-dags-horisont på Thanksgiving), er SPY's kursændring 0.
-  const window = p.spy.bars.filter((b) => b.date >= entry.date && b.date <= exit.date);
-  let spyEntry: { date: string; price: number } | undefined;
-  let spyExit: { date: string; price: number } | undefined;
-  if (window.length === 0) {
-    const prev = closeOnOrBefore(p.spy.bars, exit.date);
-    if (prev) spyEntry = spyExit = { date: prev.date, price: prev.close };
-  } else {
-    const first = window[0];
-    const last = window[window.length - 1];
-    if (first.open !== null) spyEntry = { date: first.date, price: first.open };
-    if (last.close !== null) spyExit = { date: last.date, price: last.close };
-  }
-  if (!spyEntry || !spyExit) return { status: 'mangler-data', reason: 'SPY-kurs mangler i vinduet' };
+  const spy = benchmarkWindow(p.spy, entry.date, exit.date);
+  if (!spy) return { status: 'mangler-data', reason: 'SPY-kurs mangler i vinduet' };
+  const iwm = p.iwm ? benchmarkWindow(p.iwm, entry.date, exit.date) : undefined;
 
   // Valuta på aktiens entry- og exit-dato for både aktien og SPY (samme kalendervindue).
   const fxEntry = fxOn(p.fx, entry.date);
@@ -142,8 +162,9 @@ export function computeOutcome(p: {
 
   const retLocal = exit.close / entry.open - 1;
   const retDkk = (exit.close * fxExit) / (entry.open * fxEntry) - 1;
-  const spyRetUsd = spyExit.price / spyEntry.price - 1;
-  const spyRetDkk = ((1 + spyRetUsd) * usdExit) / usdEntry - 1;
+  const toDkk = (retUsd: number) => ((1 + retUsd) * usdExit) / usdEntry - 1;
+  const spyRetDkk = toDkk(spy.retUsd);
+  const iwmRetDkk = iwm ? toDkk(iwm.retUsd) : null;
   const currency = p.signal.currency.toUpperCase();
 
   return {
@@ -161,16 +182,23 @@ export function computeOutcome(p: {
       fxEntry,
       fxExit,
       retDkk,
-      spyEntryDate: spyEntry.date,
-      spyEntry: spyEntry.price,
-      spyExitDate: spyExit.date,
-      spyExit: spyExit.price,
+      spyEntryDate: spy.entryDate,
+      spyEntry: spy.entry,
+      spyExitDate: spy.exitDate,
+      spyExit: spy.exit,
       usdDkkEntry: usdEntry,
       usdDkkExit: usdExit,
-      spyRetUsd,
+      spyRetUsd: spy.retUsd,
       spyRetDkk,
       abnormalDkk: retDkk - spyRetDkk,
-      abnormalLocal: currency === 'USD' ? retLocal - spyRetUsd : null,
+      abnormalLocal: currency === 'USD' ? retLocal - spy.retUsd : null,
+      iwmEntryDate: iwm?.entryDate ?? null,
+      iwmEntry: iwm?.entry ?? null,
+      iwmExitDate: iwm?.exitDate ?? null,
+      iwmExit: iwm?.exit ?? null,
+      iwmRetUsd: iwm?.retUsd ?? null,
+      iwmRetDkk,
+      abnormalIwmDkk: iwmRetDkk === null ? null : retDkk - iwmRetDkk,
       dataSource: OUTCOME_DATA_SOURCE,
       computedAt: p.now.toISOString(),
     },
@@ -216,6 +244,7 @@ export async function computeMissingOutcomes(opts: { now?: Date; write?: boolean
     const from = anchorFor(s);
     need(s.ticker, from);
     need('SPY', from);
+    need('IWM', from);
     need('USDDKK=X', from);
     if (FX_SYMBOL[s.currency]) need(FX_SYMBOL[s.currency], from);
   }
@@ -239,7 +268,7 @@ export async function computeMissingOutcomes(opts: { now?: Date; write?: boolean
         result.missingData.push({ signalId: s.id, horizon, reason: 'kursdata kunne ikke hentes' });
         continue;
       }
-      const r = computeOutcome({ signal: s, horizon, stock, spy, fx, usdDkk, now });
+      const r = computeOutcome({ signal: s, horizon, stock, spy, iwm: series.get('IWM'), fx, usdDkk, now });
       if (r.status === 'ikke-nået') result.notReached++;
       else if (r.status === 'mangler-data') result.missingData.push({ signalId: s.id, horizon, reason: r.reason });
       else if (opts.write === false || insertOutcome(r.row)) result.inserted++;

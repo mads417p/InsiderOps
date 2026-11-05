@@ -130,6 +130,10 @@ const MIGRATIONS = [
   ${noChange('outcomes', 'UPDATE')}
   ${noChange('outcomes', 'DELETE')}
   `,
+  // 2: IWM (Russell 2000) som sekundært benchmark (prereg v1). NULL = IWM-kurs manglede; SPY er primær.
+  ['iwmEntryDate TEXT', 'iwmEntry REAL', 'iwmExitDate TEXT', 'iwmExit REAL', 'iwmRetUsd REAL', 'iwmRetDkk REAL', 'abnormalIwmDkk REAL']
+    .map((c) => `ALTER TABLE outcomes ADD COLUMN ${c};`)
+    .join('\n'),
 ];
 
 function migrate(db: DatabaseSync): void {
@@ -453,6 +457,13 @@ export interface OutcomeRow {
   spyRetDkk: number;
   abnormalDkk: number;
   abnormalLocal: number | null;
+  iwmEntryDate: string | null;
+  iwmEntry: number | null;
+  iwmExitDate: string | null;
+  iwmExit: number | null;
+  iwmRetUsd: number | null;
+  iwmRetDkk: number | null;
+  abnormalIwmDkk: number | null;
   dataSource: string;
   computedAt: string;
 }
