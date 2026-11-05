@@ -11,6 +11,9 @@
 - Samlet konklusion: offentliggjorte insiderkøb giver ikke et nettoafkast for en dansk detailinvestor – hverken i USA eller Sverige, hverken for alle køb eller for de præregistrerede udvalg. Det stemmer med Hvide & Nielsen (2026) og Eckbo & Ødegaard (2025).
 - Der testes ikke flere varianter af samme signal (forking paths). Fase 5–7 forbliver på pause.
 
+## Status 5.11.2026 – afsluttet
+Fase 9 er merget. InsiderOps bruges til at følge og copy-trade insiderkøb uden dokumenteret edge. Ledgeren måler videre; prereg v1 vurderes højst én gang om måneden og endeligt 4.5.2027.
+
 ---
 
 Skrevet 4.11.2026 efter kode-audit (`docs/audit-2026-11-04.md`). Dokumentet er en arbejdsplan og en samling prompts til Claude Code. Det er en metode til at teste en strategi, ikke investeringsrådgivning.

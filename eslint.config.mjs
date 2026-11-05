@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Pythons virtuelle miljø til research/ (tredjepartskode)
+    "research/.venv/**",
   ]),
 ]);
 
