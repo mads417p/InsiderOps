@@ -218,6 +218,24 @@ def test_se_cluster_window():
     assert se.personal_buyers(c, 'x', t('2025-01-11T08:01')) == 3  # 1.1. falder ud, men a købte igen 10.1.
 
 
+def test_se_adv_min_of_two():
+    import se
+    n = 25
+    dates = [f'2025-01-{d:02d}' for d in range(1, n + 1)]
+    fx = pd.DataFrame({'date': dates, 'open': [10.0] * n, 'close': [10.0] * n, 'volume': [0.0] * n})
+    se._bars_cache[se.FX_USD] = ((fx, np.ones(n), {}, dates), [])  # 10 SEK pr. USD
+    try:
+        def adv(close, vol, vwap, factor=1.0):
+            bars = pd.DataFrame({'date': dates, 'open': [close] * n, 'close': [close] * n, 'volume': [vol] * n})
+            return se.raw_adv_usd((bars, np.full(n, factor), {}, dates), 21, vwap)
+        assert abs(adv(100.0, 1000.0, 100.0) - 10_000) < 1e-9  # ingen justering: (a) = (b)
+        assert abs(adv(50.0, 1000.0, 100.0) - 5_000) < 1e-9  # emission: kun kurs justeret → (b) er lavest
+        assert abs(adv(50.0, 2000.0, 100.0) - 10_000) < 1e-9  # emission: kurs og volumen justeret → (b) = sand omsætning
+        assert abs(adv(50.0, 2000.0, 100.0, factor=2.0) - 10_000) < 1e-9  # split 2:1 efter: (a) = (b)
+    finally:
+        se._bars_cache.pop(se.FX_USD, None)
+
+
 def test_se_dividend_window():
     from build import _outcomes
     dates = ['2025-05-05', '2025-05-06', '2025-05-07', '2025-05-08', '2025-05-09', '2025-05-12', '2025-05-13']

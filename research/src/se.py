@@ -40,7 +40,8 @@ MIN_TEST_N = 150  # færre enheder = kun beskrivende
 COSTS_V4 = ('costs-v4.json', 4, '067e6ec4e2d3a4b95b7ac8847a4fb4c9554de4819bc1c82447b56ed198b7199b')
 BENCH, BENCH2, FX_DKK, FX_USD = '^OMXSBGI', 'XACT-SMABOLAG.ST', 'SEKDKK=X', 'USDSEK=X'
 GUARD = (0.75, 1.33)  # ISIN-niveau: median(meddelelsens kurs ÷ Yahoo ujusteret close på handelsdagen); uden for = kontroltabellen
-SIGNAL_GUARD = (0.5, 2.0)  # signal-niveau: uden for = 'kurs-mismatch' (bredt, så emissionsjusterede serier ikke smides ud)
+SIGNAL_GUARD = (0.5, 10.0)  # signal-niveau (primær): uden for = 'kurs-mismatch'; øvre 10 beholder emissionsjusterede serier
+STRICT_GUARD = (0.5, 2.0)  # robusthed (kun beskrivende)
 
 BUY, SHARE, OUTSIDE, CANCELLED = 'Förvärv', 'Aktie', 'Utanför handelsplats', 'Makulerad'
 NON_SHARE_RE = re.compile(r'option|teckningsr|\bbt[au]\b|warrant|konvertib|obligation|\bto\s?\d|\bts\b|interim|certifikat|'
@@ -302,14 +303,18 @@ def personal_buyers(cands: pd.DataFrame, issuer_key: str, anchor_utc: datetime) 
 
 
 def raw_adv_usd(s, ei: int, vwap_sek: float) -> float:
-    """ADV(20) = gns. ujusteret volumen (Yahoo ÷ split-faktor) over de 20 bars før entry × meddelelsens VWAP, i USD."""
+    """ADV(20) i USD over de 20 bars før entry (close > 0, volumen > 0) = minimum af
+    (a) meddelelsens VWAP × gns. ujusteret volumen (Yahoo-volumen ÷ split-faktor) og
+    (b) gns. Yahoo close × Yahoo volumen (split-invariant omsætning).
+    Uden emissionsjustering er de ens; det er ukendt, om Yahoo justerer volumen ved emissioner, så det laveste bruges."""
     bars, factor, _, dates = s
     c, v, f = bars.close.to_numpy()[:ei][-ADV_BARS:], bars.volume.to_numpy()[:ei][-ADV_BARS:], factor[:ei][-ADV_BARS:]
     m = (c > 0) & (v > 0)
     if not m.any() or ei == 0:
         return 0.0
     fx = _fx_on(series(FX_USD), dates[ei - 1])
-    return float((v[m] / f[m]).mean() * vwap_sek / fx) if fx else float('nan')
+    adv_sek = min((v[m] / f[m]).mean() * vwap_sek, (c[m] * v[m]).mean())
+    return float(adv_sek / fx) if fx else float('nan')
 
 
 # ---------------------------------------------------------------- kommandoer
@@ -401,7 +406,7 @@ def build_units(s: pd.DataFrame, smap: dict) -> tuple[pd.DataFrame, pd.DataFrame
     """Status pr. kandidatsignal (første filter, der fejler) og enheder (ticker, entry-dag) – UDEN udfald."""
     costs = load_costs(*COSTS_V4)
     cands = s[s.candidate].copy()
-    st, ei_l, sym_l, adv_l = [], [], [], []
+    st, ei_l, sym_l, adv_l, ratio_l, ratio = [], [], [], [], [], float('nan')
     for r in cands.itertuples():
         status, ei, sym, adv = None, None, smap.get(r.isin), float('nan')
         if not r.vwap_sek >= MIN_PRICE_SEK:
@@ -418,13 +423,16 @@ def build_units(s: pd.DataFrame, smap: dict) -> tuple[pd.DataFrame, pd.DataFrame
                 status = 'entry ikke nået'
             elif bisect_right(ser[3], r.tday) == 0:
                 status = 'ingen kursdata'  # serien starter efter handelsdagen (afnoteret/ny ticker)
-            elif not (SIGNAL_GUARD[0] <= r.vwap_sek / raw_close_on(ser[0], ser[1], r.tday) <= SIGNAL_GUARD[1]):
-                status = 'kurs-mismatch'  # tastefejl (öre/kr., byttede felter) eller forkert ISIN i rækken
+            elif not (SIGNAL_GUARD[0] <= (ratio := r.vwap_sek / raw_close_on(ser[0], ser[1], r.tday)) <= SIGNAL_GUARD[1]):
+                status = 'kurs-mismatch'  # tastefejl (totalbeløb, öre/kronor) eller strike-køb under markedskursen
             else:
                 adv = raw_adv_usd(ser, ei, r.vwap_sek)
                 status = None if adv >= MIN_ADV else 'ADV < $500k'
         st.append(status or 'ok'), ei_l.append(ei), sym_l.append(sym), adv_l.append(adv)
+        ratio_l.append(ratio)  # sat i signal-tjekket; NaN, hvis signalet faldt før
+        ratio = float('nan')
     cands['status'], cands['entry_idx'], cands['symbol'], cands['adv'] = st, ei_l, sym_l, adv_l
+    cands['price_ratio'] = ratio_l  # VWAP ÷ Yahoo ujusteret close på handelsdagen (kun genkendelse/robusthed)
     ok = cands[cands.status == 'ok'].copy()
     ok['entry_date'] = [series(sy)[3][int(i)] for sy, i in zip(ok.symbol, ok.entry_idx)]
     units = []
@@ -439,6 +447,7 @@ def build_units(s: pd.DataFrame, smap: dict) -> tuple[pd.DataFrame, pd.DataFrame
                       'value_usd': g.value_usd.sum(), 'vwap_sek': vwap, 'adv': adv, 'cost_pct': round_trip_pct(costs, adv, 'SEK'),
                       'liquidity': liquidity_bucket(costs, adv), 'small_mid': adv < SMALL_MID_ADV_USD,
                       'role': min(g.role, key=ROLE_ORDER_SE.index), 'personal_buyers_10d': pb, 'cluster': pb >= 2,
+                      'strict_ok': bool(g.price_ratio.between(*STRICT_GUARD).any()),  # robusthed: enheden findes også med [0,5; 2]
                       'holdout': ed >= HOLDOUT_START})
     return cands, pd.DataFrame(units)
 
