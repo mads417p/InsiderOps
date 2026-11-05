@@ -169,7 +169,7 @@ function getRegionBadge(
 }
 
 export default function Dashboard() {
-  const [source, setSource] = useState<'unified' | 'csuite' | 'live' | 'nordic' | 'mock'>('unified');
+  const source = 'unified' as const; // UI'et vælger ikke kilde; ?source= findes stadig i API'et
   const [regionFilter, setRegionFilter] = useState<'all' | 'us' | 'nordic'>('all');
   const [quickFilter, setQuickFilter] = useState<
     'all' | 'ceo_cfo' | 'csuite' | 'cluster_discount' | 'below_insider' | 'csuite_cluster'
@@ -244,7 +244,6 @@ export default function Dashboard() {
   const [recommendationFilterTab, setRecommendationFilterTab] = useState<'BUY' | 'WATCH' | 'REJECTED'>('BUY');
   // Backward compatibility alias for any autoPilot references
   const autoPilotRunning = councilQueueRunning;
-  const autoPilotProgress = councilQueueProgress;
 
   const generateInvestmentMemoMarkdown = (tx: InsiderTransaction, verdict: CouncilVerdict): string => {
     const dateFormatted = tx.tradeDate ? `${tx.tradeDate} (handelsdato)` : tx.filedAt ? `${tx.filedAt.slice(0, 10)} (indberettet)` : 'ukendt';
@@ -264,7 +263,7 @@ export default function Dashboard() {
         ? `Bekræftet cluster buy med ${tx.clusterCount ?? 2} deltagere.`
         : 'Ingen andre registrerede med-købere i samme tidsvindue.';
 
-    return `# INVESTMENT MEMO: ${tx.ticker} (${tx.companyName})
+    return `# ANALYSENOTAT: ${tx.ticker} (${tx.companyName})
 **Dato for indberetning:** ${dateFormatted}  
 **Genereret af:** InsiderOps Multi-Agent Council  
 
@@ -360,9 +359,9 @@ ${
 
 ---
 
-## 5. The Council: CIO Dom & Asymmetry Score
+## 5. Rådet: dommerens afgørelse og asymmetri-score
 **Afgørelse:** ${verdictLabel(verdict.verdict)}
-**Asymmetry Score:** ${verdict.asymmetryScore}/100  
+**Asymmetri-score:** ${verdict.asymmetryScore}/100  
 **Overskrift:** ${verdict.headline}  
 
 ### CIO Syntese (${verdict.modelsUsed?.judge || 'ukendt model'}):
@@ -399,13 +398,13 @@ ${(() => {
 
 ## 6. Specialisternes Rapporter (${verdict.modelsUsed?.specialists || 'ukendt model'})
 
-### [The Insider Profiler]
+### [Insider-profiløren]
 ${verdict.reports.profiler}
 
-### [The Catalyst & Asymmetry Hunter]
+### [Katalysator-jægeren]
 ${verdict.reports.catalyst}
 
-### [The Forensic Skeptic]
+### [Den kritiske skeptiker]
 ${verdict.reports.skeptic}
 
 ---
@@ -456,32 +455,21 @@ ${verdict.judgeThinking}
     // Samme regel som isMockEntity i db.ts: kun id-præfikset "mock-", aldrig ticker.
     const isMock = (id: string) => id.startsWith('mock-');
 
+    // localStorage læses her (ikke i useState), så server- og klient-HTML er ens ved hydrering. Værdierne sættes
+    // samlet, når /api/council har svaret – én render i stedet for to, og intet setState synkront i effekten.
+    let cachedVerdicts: Record<string, SavedVerdictItem> = {};
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        const cleaned: Record<string, SavedVerdictItem> = {};
-        for (const [k, v] of Object.entries(parsed as Record<string, SavedVerdictItem>)) {
-          if (!isMock(k)) {
-            cleaned[k] = v;
-          }
-        }
-        setVerdictHistory(cleaned);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
-      }
+      if (stored) cachedVerdicts = JSON.parse(stored) as Record<string, SavedVerdictItem>;
     } catch (e) {
       console.warn('Kunne ikke hente gemt historik fra localStorage:', e);
     }
-
+    let cachedCap: number | null = null;
+    let cachedTranches = false;
     try {
-      const storedCap = localStorage.getItem(CAPITAL_STORAGE_KEY);
-      if (storedCap) {
-        const val = parseInt(storedCap, 10);
-        if ([10000, 25000, 50000, 100000].includes(val)) {
-          setMaxCapitalDkk(val);
-        }
-      }
-      setUseTranches(localStorage.getItem(TRANCHES_STORAGE_KEY) === '1');
+      const val = parseInt(localStorage.getItem(CAPITAL_STORAGE_KEY) ?? '', 10);
+      if ([10000, 25000, 50000, 100000].includes(val)) cachedCap = val;
+      cachedTranches = localStorage.getItem(TRANCHES_STORAGE_KEY) === '1';
     } catch {
       // ignore
     }
@@ -489,27 +477,28 @@ ${verdict.judgeThinking}
     // Synkroniser med den persistente server-side database (/api/council)
     fetch('/api/council')
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.verdicts) {
-          setVerdictHistory((prev) => {
-            // Serveren er sandheden (fx efter migration); localStorage er kun cache.
-            const merged = { ...prev, ...data.verdicts };
-            const cleaned: Record<string, SavedVerdictItem> = {};
-            for (const [k, v] of Object.entries(merged as Record<string, SavedVerdictItem>)) {
-              if (!isMock(k)) {
-                cleaned[k] = v;
-              }
-            }
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
-            } catch {
-              // ignore
-            }
-            return cleaned;
-          });
-        }
+      .catch((err) => {
+        console.warn('Kunne ikke synkronisere med server-database:', err);
+        return null;
       })
-      .catch((err) => console.warn('Kunne ikke synkronisere med server-database:', err));
+      .then((data) => {
+        // Serveren er sandheden (fx efter migration); localStorage er kun cache.
+        const merged = { ...cachedVerdicts, ...(data?.verdicts ?? {}) };
+        const cleaned: Record<string, SavedVerdictItem> = {};
+        for (const [k, v] of Object.entries(merged as Record<string, SavedVerdictItem>)) {
+          if (!isMock(k)) {
+            cleaned[k] = v;
+          }
+        }
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+        } catch {
+          // ignore
+        }
+        setVerdictHistory(cleaned);
+        if (cachedCap !== null) setMaxCapitalDkk(cachedCap);
+        setUseTranches(cachedTranches);
+      });
 
     // Indlæs altid friske realtids-kurser for paper-trading porteføljen ved indlæsning/F5
     fetch(`/api/portfolio?refresh=true&_t=${Date.now()}`)
@@ -531,67 +520,76 @@ ${verdict.judgeThinking}
       .catch((err) => console.warn('Kunne ikke hente paper-trading portefølje:', err));
   }, []);
 
-  const fetchScan = useCallback(
-    async (
+  const loadScan = useCallback(
+    (
       selectedSource: 'unified' | 'csuite' | 'live' | 'nordic' | 'mock',
       tickerQuery?: string | null,
       opts: { latest?: boolean } = {}
     ) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const url =
-          (tickerQuery ? `/api/scan?ticker=${encodeURIComponent(tickerQuery)}` : `/api/scan?source=${selectedSource}`) +
-          (opts.latest ? '&latest=1' : '');
+      const url =
+        (tickerQuery ? `/api/scan?ticker=${encodeURIComponent(tickerQuery)}` : `/api/scan?source=${selectedSource}`) +
+        (opts.latest ? '&latest=1' : '');
 
-        const res = await fetch(url);
-        const data: ScanResponse = await res.json().catch(() => ({}) as ScanResponse);
-        if (!res.ok) throw new Error(data.error || `HTTP-fejl ${res.status}`);
-        setItems(data.items || []);
-        setScanRejected(data.rejected ?? []);
-        setApiKeys(data.apiKeysConfigured || { gemini: false, anthropic: false });
-        setGatekeeperUsage(data.gatekeeperUsage ?? null);
-        setScannedAt(data.scannedAt ?? null);
-        setAutoQueue(data.autoQueue ?? null);
+      // Promise-kæde frem for try/await: al setState sker i callbacks (react-hooks/set-state-in-effect).
+      return fetch(url)
+        .then(async (res) => {
+          const data: ScanResponse = await res.json().catch(() => ({}) as ScanResponse);
+          if (!res.ok) throw new Error(data.error || `HTTP-fejl ${res.status}`);
+          return data;
+        })
+        .then((data) => {
+          setItems(data.items || []);
+          setScanRejected(data.rejected ?? []);
+          setApiKeys(data.apiKeysConfigured || { gemini: false, anthropic: false });
+          setGatekeeperUsage(data.gatekeeperUsage ?? null);
+          setScannedAt(data.scannedAt ?? null);
+          setAutoQueue(data.autoQueue ?? null);
 
-        // Fejl og forældede data vises som det, de er – aldrig som "ingen signaler".
-        const notes: string[] = [];
-        if (data.saved && !data.scannedAt) {
-          notes.push('Ingen gemt scan for denne kilde endnu – tryk "Scan Nu" for at hente signaler.');
-        }
-        if (data.ledger && 'error' in data.ledger) {
-          notes.push(`Signal-ledgeren blev IKKE opdateret: ${data.ledger.error}`);
-        }
-        if (data.stale) {
-          notes.push(`Viser gemt scan fra ${formatDateTimeDk(data.scannedAt ?? undefined)} – live-hentningen fejlede (forældede data).`);
-        }
-        if (data.errors?.length) {
-          notes.push(`Kilder der fejlede: ${data.errors.map((e) => `${e.source}: ${e.error}`).join(' • ')}`);
-        }
-        if (!data.stale && !data.saved && data.items.length === 0) {
-          notes.push(
-            tickerQuery
-              ? `Ingen åbne markedskøb (kode P) hos SEC for '${tickerQuery}', der består filtrene (${data.rejectedCount ?? 0} afvist).`
-              : `Ingen rækker bestod filtrene (${data.rejectedCount ?? 0} afvist).`
-          );
-        }
-        if (notes.length > 0) setError(notes.join('\n'));
-      } catch (err: unknown) {
-        console.error(err);
-        setError(`Scanningen fejlede: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
-        setLoading(false);
-      }
+          // Fejl og forældede data vises som det, de er – aldrig som "ingen signaler".
+          const notes: string[] = [];
+          if (data.saved && !data.scannedAt) {
+            notes.push('Ingen gemt scan for denne kilde endnu – tryk "Scan Nu" for at hente signaler.');
+          }
+          if (data.ledger && 'error' in data.ledger) {
+            notes.push(`Signal-ledgeren blev IKKE opdateret: ${data.ledger.error}`);
+          }
+          if (data.stale) {
+            notes.push(`Viser gemt scan fra ${formatDateTimeDk(data.scannedAt ?? undefined)} – live-hentningen fejlede (forældede data).`);
+          }
+          if (data.errors?.length) {
+            notes.push(`Kilder der fejlede: ${data.errors.map((e) => `${e.source}: ${e.error}`).join(' • ')}`);
+          }
+          if (!data.stale && !data.saved && data.items.length === 0) {
+            notes.push(
+              tickerQuery
+                ? `Ingen åbne markedskøb (kode P) hos SEC for '${tickerQuery}', der består filtrene (${data.rejectedCount ?? 0} afvist).`
+                : `Ingen rækker bestod filtrene (${data.rejectedCount ?? 0} afvist).`
+            );
+          }
+          if (notes.length > 0) setError(notes.join('\n'));
+        })
+        .catch((err: unknown) => {
+          console.error(err);
+          setError(`Scanningen fejlede: ${err instanceof Error ? err.message : String(err)}`);
+        })
+        .finally(() => setLoading(false));
     },
     []
   );
 
+  /** Til handlere: viser "henter" og rydder fejl, før scannen hentes. */
+  const fetchScan = (...args: Parameters<typeof loadScan>) => {
+    setLoading(true);
+    setError(null);
+    return loadScan(...args);
+  };
+
   // Indlæsning (og hot-reload) viser seneste gemte scan – en ny scan kører kun ved "Scan Nu" (fase 3).
+  // Søgning og nulstilling kalder selv fetchScan, så effekten afhænger ikke af activeTickerQuery
+  // (før gav "Scan Nu" efter en tickersøgning to samtidige hentninger).
   useEffect(() => {
-    if (!activeTickerQuery) {
-      fetchScan(source, null, { latest: true });
-    }
-  }, [fetchScan, source, activeTickerQuery]);
+    loadScan(source, null, { latest: true });
+  }, [loadScan, source]);
 
   const handleTickerSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1199,14 +1197,14 @@ ${verdict.judgeThinking}
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="font-mono text-base font-bold tracking-wider text-slate-100">
-                  INSIDER<span className="text-cyan-400">//</span>OPS
+                  INSIDER<span className="text-cyan-400">{'//'}</span>OPS
                 </h1>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
                   v2.0-QUANT
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-mono tracking-tight">
-                SEC Form 4 Information Asymmetry & Multi-Agent Council
+                Insiderkøb fra SEC Form 4 og Norden · AI-råd
               </p>
             </div>
           </div>
@@ -1253,10 +1251,10 @@ ${verdict.judgeThinking}
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
               </span>
               <span className="font-bold tracking-wider text-cyan-300">
-                🌍 GLOBAL OMNI-SCANNER
+                🌍 SAMLET SCANNER
               </span>
               <span className="text-[10px] text-slate-400 border-l border-slate-800 pl-2 hidden md:inline">
-                US SEC + C-Suite + Nordic MAR 19
+                USA (SEC) + C-Suite + Norden (MAR 19)
               </span>
             </div>
 
@@ -1325,7 +1323,7 @@ ${verdict.judgeThinking}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded">
             <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-              <span>SCANNEDE FILINGS</span>
+              <span>SCANNEDE INDBERETNINGER</span>
               <FileText className="w-3.5 h-3.5 text-slate-500" />
             </div>
             <div className="mt-2 text-2xl font-mono font-bold text-slate-100">
@@ -1336,7 +1334,7 @@ ${verdict.judgeThinking}
 
           <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded">
             <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-              <span>HARD FILTER AFVIST</span>
+              <span>AFVIST AF HÅRDT FILTER</span>
               <Filter className="w-3.5 h-3.5 text-rose-400" />
             </div>
             <div className="mt-2 text-2xl font-mono font-bold text-rose-400">
@@ -1360,7 +1358,7 @@ ${verdict.judgeThinking}
 
           <div className="bg-slate-900/60 border border-slate-800/80 p-3.5 rounded">
             <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-              <span>WATCHLIST / DOMME</span>
+              <span>GEMTE DOMME</span>
               <Bookmark className="w-3.5 h-3.5 text-cyan-400" />
             </div>
             <div className="mt-2 text-2xl font-mono font-bold text-cyan-400">
@@ -1423,7 +1421,7 @@ ${verdict.judgeThinking}
               }`}
             >
               <Activity className="w-3.5 h-3.5" />
-              <span>RADAR SCAN</span>
+              <span>RADAR</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
                 {filteredItems.length}
               </span>
@@ -1438,7 +1436,7 @@ ${verdict.judgeThinking}
               }`}
             >
               <Bookmark className="w-3.5 h-3.5" />
-              <span>WATCHLIST / GEMTE DOMME</span>
+              <span>GEMTE DOMME</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-800 text-cyan-300">
                 {savedVerdictItems.length}
               </span>
@@ -1456,7 +1454,7 @@ ${verdict.judgeThinking}
               }`}
             >
               <Briefcase className="w-3.5 h-3.5 text-emerald-400" />
-              <span>💼 PAPER PORTEFØLJE & LIVE P&L</span>
+              <span>💼 PORTEFØLJE</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 border border-emerald-800 text-emerald-300 font-bold">
                 {Object.keys(paperPortfolio).length}
               </span>
@@ -1524,7 +1522,7 @@ ${verdict.judgeThinking}
                 <span className="font-bold text-amber-300">⚖️ RÅDS-KØ AKTIV: </span>
                 <span>
                   {councilQueueProgress.label ||
-                    `The Council voterer på $${councilQueueProgress.ticker} (${councilQueueProgress.current} af ${councilQueueProgress.total} kandidater)...`}
+                    `Rådet voterer på $${councilQueueProgress.ticker} (${councilQueueProgress.current} af ${councilQueueProgress.total} kandidater)...`}
                 </span>
               </div>
             </div>
@@ -2492,7 +2490,7 @@ ${verdict.judgeThinking}
                                           ? 'bg-amber-950/80 border-amber-600 text-amber-300 hover:bg-amber-900'
                                           : 'bg-rose-950/80 border-rose-700 text-rose-300 hover:bg-rose-900'
                                       }`}
-                                      title="Åbn afsagt rådsdom i The Council Chamber"
+                                      title="Åbn afsagt rådsdom i rådskammeret"
                                     >
                                       <Eye className="w-3.5 h-3.5" />
                                       <span>Vis Dom ({saved.verdict.asymmetryScore}/100)</span>
@@ -2562,7 +2560,7 @@ ${verdict.judgeThinking}
               <div>
                 <h3 className="text-sm font-bold font-mono text-slate-100 flex items-center gap-2">
                   <Bookmark className="w-4 h-4 text-cyan-400" />
-                  <span>LIVE INSIDER ALPHA TRACKER</span>
+                  <span>INSIDER-ALPHA (LIVE)</span>
                 </h3>
                 <p className="text-xs text-slate-400 font-sans mt-0.5">
                   Overvågning af dine gemte cases mod aktuelle markedskurser og insider-købskurser
@@ -2728,7 +2726,7 @@ ${verdict.judgeThinking}
                         className="px-2.5 py-1 rounded bg-cyan-950 hover:bg-cyan-900 border border-cyan-800 text-cyan-300 transition-colors flex items-center gap-1"
                       >
                         <Scale className="w-3 h-3" />
-                        <span>Åbn i Council Chamber</span>
+                        <span>Åbn i rådskammeret</span>
                       </button>
                     </div>
                   </div>
@@ -2816,7 +2814,7 @@ ${verdict.judgeThinking}
               {/* Card 4: Netto Alpha vs. S&P 500 (SPY) */}
               <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg space-y-1">
                 <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-                  <span>ALPHA VS. S&P 500</span>
+                  <span>ALPHA MOD S&P 500</span>
                   <Flame className="w-4 h-4 text-amber-400" />
                 </div>
                 {typeof portfolioSummary?.avgAlphaPct === 'number' ? (
@@ -2843,7 +2841,7 @@ ${verdict.judgeThinking}
               <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-lg flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between text-slate-400 text-xs font-mono">
-                    <span>WIN-RATE (LUKKEDE)</span>
+                    <span>GEVINSTRATE (LUKKEDE)</span>
                     <Target className="w-4 h-4 text-amber-400" />
                   </div>
                   <div className="text-2xl font-mono font-bold text-amber-300 mt-1">
@@ -2879,7 +2877,7 @@ ${verdict.judgeThinking}
                   INGEN ÅBNE PAPER-TRADES ENDNU
                 </h4>
                 <p className="text-xs text-slate-400 max-w-lg mx-auto font-sans leading-relaxed">
-                  Start med at scanne Form 4 indberetninger i <span className="font-mono text-cyan-400">RADAR SCAN</span>, lad <span className="font-mono text-purple-400">The Council</span> afsige dom over en asymmetrisk case, og klik derefter på <span className="font-mono text-emerald-400">📌 Åbn Paper-Trade</span> i eksekveringsplanen for at tracke positionen her.
+                  Start med at scanne Form 4 indberetninger i <span className="font-mono text-cyan-400">RADAR</span>, lad <span className="font-mono text-purple-400">The Council</span> afsige dom over en asymmetrisk case, og klik derefter på <span className="font-mono text-emerald-400">📌 Åbn Paper-Trade</span> i eksekveringsplanen for at tracke positionen her.
                 </p>
                 <button
                   onClick={() => setActiveTab('radar')}
@@ -2944,7 +2942,7 @@ ${verdict.judgeThinking}
                         <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
                           {pos.tradeType === 'REAL_NORDNET' ? (
                             <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-950/90 border border-amber-500 text-amber-300 shadow-sm shadow-amber-950">
-                              🏦 NORDNET LIVE HANDEL
+                              🏦 NORDNET – RIGTIG HANDEL
                             </span>
                           ) : (
                             <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-cyan-950/80 border border-cyan-700 text-cyan-300">
@@ -3363,10 +3361,10 @@ ${verdict.judgeThinking}
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="font-mono text-base font-bold text-slate-100 tracking-wider">
-                    THE COUNCIL CHAMBER
+                    RÅDSKAMMERET
                   </h2>
                   <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-950 border border-purple-800 text-purple-300">
-                    TIERED MULTI-MODEL
+                    FLERE MODELLER
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 font-mono">
@@ -3439,7 +3437,7 @@ ${verdict.judgeThinking}
                   className="text-xs font-mono text-slate-400 hover:text-slate-200 flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-800"
                 >
                   <X className="w-3.5 h-3.5" />
-                  Luk Chamber
+                  Luk rådskammeret
                 </button>
               )}
             </div>
@@ -3464,10 +3462,10 @@ ${verdict.judgeThinking}
               </div>
               <div>
                 <h3 className="font-mono text-sm font-bold text-slate-200 tracking-wider">
-                  SAMLER INVESTERINGSRÅDET THE COUNCIL...
+                  SAMLER INVESTERINGSRÅDET...
                 </h3>
                 <p className="text-xs text-slate-400 mt-1 font-sans">
-                  Kører 3 specialist-agenter parallelt: Profiler, Catalyst Hunter og Forensic Skeptic.
+                  Kører 3 specialist-agenter parallelt: insider-profiløren, katalysator-jægeren og den kritiske skeptiker.
                 </p>
               </div>
 
@@ -3475,15 +3473,15 @@ ${verdict.judgeThinking}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-2xl mx-auto pt-2 text-xs font-mono text-left">
                 <div className="p-2.5 rounded bg-slate-950 border border-slate-800 flex items-center gap-2 text-cyan-300">
                   <UserCheck className="w-4 h-4 animate-pulse text-cyan-400" />
-                  <span>The Insider Profiler</span>
+                  <span>Insider-profiløren</span>
                 </div>
                 <div className="p-2.5 rounded bg-slate-950 border border-slate-800 flex items-center gap-2 text-cyan-300">
                   <Zap className="w-4 h-4 animate-pulse text-cyan-400" />
-                  <span>The Catalyst Hunter</span>
+                  <span>Katalysator-jægeren</span>
                 </div>
                 <div className="p-2.5 rounded bg-slate-950 border border-slate-800 flex items-center gap-2 text-cyan-300">
                   <ShieldAlert className="w-4 h-4 animate-pulse text-rose-400" />
-                  <span>The Forensic Skeptic</span>
+                  <span>Den kritiske skeptiker</span>
                 </div>
               </div>
             </div>
@@ -3498,7 +3496,7 @@ ${verdict.judgeThinking}
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3 mb-4">
                   <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
                     <span className="h-2 w-2 rounded-full bg-cyan-400" />
-                    <span className="font-bold text-slate-200">INVESTMENT DUE DILIGENCE MEMO</span>
+                    <span className="font-bold text-slate-200">ANALYSENOTAT</span>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -3515,7 +3513,7 @@ ${verdict.judgeThinking}
                       ) : (
                         <>
                           <FileText className="w-3.5 h-3.5 text-cyan-400" />
-                          <span>📋 Kopiér Investment Memo (MD)</span>
+                          <span>📋 Kopiér notat (MD)</span>
                         </>
                       )}
                     </button>
@@ -3526,7 +3524,7 @@ ${verdict.judgeThinking}
                       title="Gem komplet Investment Memo som .md fil på computeren"
                     >
                       <Bookmark className="w-3.5 h-3.5 text-slate-400" />
-                      <span>⬇️ Download .MD Memo</span>
+                      <span>⬇️ Download notat (.md)</span>
                     </button>
                   </div>
                 </div>
@@ -3534,7 +3532,7 @@ ${verdict.judgeThinking}
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
                   <div>
                     <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-slate-400">
-                      <span>CHIEF INVESTMENT OFFICER (THE JUDGE)</span>
+                      <span>INVESTERINGSCHEF (DOMMER)</span>
                       <span>•</span>
                       <span className="text-cyan-400 font-bold">
                         {selectedTx.ticker} ({selectedTx.insiderName}, {selectedTx.insiderTitle})
@@ -3630,7 +3628,7 @@ ${verdict.judgeThinking}
                   {/* Verdict Badge & Score */}
                   <div className="flex items-center gap-4">
                     <div className="text-right">
-                      <div className="text-[10px] font-mono text-slate-400">ASYMMETRY SCORE</div>
+                      <div className="text-[10px] font-mono text-slate-400">ASYMMETRI-SCORE</div>
                       <div className="text-3xl font-mono font-bold text-slate-100 flex items-baseline justify-end gap-1">
                         {activeVerdict.previousScore !== undefined &&
                           activeVerdict.previousScore !== activeVerdict.asymmetryScore && (
@@ -3711,7 +3709,7 @@ ${verdict.judgeThinking}
                       <div className="flex items-center gap-2">
                         <Landmark className="w-4 h-4 text-cyan-400" />
                         <span className="font-mono text-xs font-bold text-slate-200 uppercase tracking-wider">
-                          FUNDAMENTAL BALANCE, CASH RUNWAY & SHORT-SQUEEZE GUARD
+                          BALANCE, LIKVIDITET & SHORT-SQUEEZE
                         </span>
                       </div>
 
@@ -3905,7 +3903,7 @@ ${verdict.judgeThinking}
                     <div className="flex items-center gap-2">
                       <Target className="w-4 h-4 text-emerald-400" />
                       <span className="font-mono text-xs font-bold text-slate-200 uppercase tracking-wider">
-                        INSIDER TRACK RECORD & HISTORISK TRÆFSIKKERHED
+                        INSIDERENS HISTORIK & TRÆFSIKKERHED
                       </span>
                     </div>
 
@@ -4176,7 +4174,7 @@ ${verdict.judgeThinking}
                           {/* Card 2: Entry Zone */}
                           <div className="p-3 rounded bg-slate-950/70 border border-slate-800 space-y-1">
                             <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                              <span>Entry Zone</span>
+                              <span>Indgangszone</span>
                               <Target className="w-3.5 h-3.5 text-cyan-400" />
                             </div>
                             <div className="text-base font-bold font-mono text-cyan-300">
@@ -4193,7 +4191,7 @@ ${verdict.judgeThinking}
                           {/* Card 3: ATR Volatilitet Stop-Loss */}
                           <div className="p-3 rounded bg-slate-950/70 border border-slate-800 space-y-1">
                             <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                              <span>ATR Stop-Loss (Hard)</span>
+                              <span>ATR-stop-loss (hård)</span>
                               <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
                             </div>
                             <div className="text-base font-bold font-mono text-rose-400">
@@ -4346,7 +4344,7 @@ ${verdict.judgeThinking}
                       <UserCheck className="w-4 h-4" />
                     </div>
                     <div>
-                      <h4 className="font-mono text-xs font-bold text-slate-100">THE INSIDER PROFILER</h4>
+                      <h4 className="font-mono text-xs font-bold text-slate-100">INSIDER-PROFILØREN</h4>
                       <p className="text-[10px] text-slate-400">Magtposition & Skin-in-the-game</p>
                     </div>
                   </div>
@@ -4362,7 +4360,7 @@ ${verdict.judgeThinking}
                       <Zap className="w-4 h-4" />
                     </div>
                     <div>
-                      <h4 className="font-mono text-xs font-bold text-slate-100">THE CATALYST HUNTER</h4>
+                      <h4 className="font-mono text-xs font-bold text-slate-100">KATALYSATOR-JÆGEREN</h4>
                       <p className="text-[10px] text-slate-400">Informationsasymmetri & Timing</p>
                     </div>
                   </div>
@@ -4378,7 +4376,7 @@ ${verdict.judgeThinking}
                       <ShieldAlert className="w-4 h-4" />
                     </div>
                     <div>
-                      <h4 className="font-mono text-xs font-bold text-slate-100">THE FORENSIC SKEPTIC</h4>
+                      <h4 className="font-mono text-xs font-bold text-slate-100">DEN KRITISKE SKEPTIKER</h4>
                       <p className="text-[10px] text-slate-400">Djævelens Advokat & Value Traps</p>
                     </div>
                   </div>
@@ -4424,7 +4422,7 @@ ${verdict.judgeThinking}
               <Scale className="w-6 h-6 mx-auto mb-2 text-slate-600" />
               <span>Vælg en godkendt transaktion fra radaren ovenfor og klik på </span>
               <span className="text-cyan-400 font-bold">&quot;Saml Rådet&quot;</span>
-              <span> for at starte The Council Chamber.</span>
+              <span> for at åbne rådskammeret.</span>
             </div>
           )}
         </div>
@@ -4432,7 +4430,7 @@ ${verdict.judgeThinking}
 
       {/* Terminal Footer */}
       <footer className="border-t border-slate-800/80 bg-slate-950 px-4 py-3 mt-12 text-center text-[11px] font-mono text-slate-500">
-        <span>INSIDER//OPS SEC FORM 4 INTELLIGENCE • SYSTEM ACTIVE • STRICT ZERO-LEAKAGE ARCHITECTURE</span>
+        <span>INSIDER//OPS • INSIDERKØB FRA SEC FORM 4 OG NORDEN • INGEN DOKUMENTERET EDGE</span>
       </footer>
     </div>
   );

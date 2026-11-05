@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "INSIDER//OPS | SEC Form 4 Asymmetry & Multi-Agent Council",
+  title: "INSIDER//OPS | Insiderkøb og AI-råd",
   description: "Kvantitativ scanner og multi-agent råd til analyse af insider-handler og informationsasymmetri.",
 };
 
