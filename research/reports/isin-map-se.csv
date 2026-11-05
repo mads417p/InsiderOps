@@ -1,0 +1,150 @@
+isin,emittent,signaler,kilde,auto_symbol,kandidater,kursforhold,flag,beslutning,begrundelse
+SE0000115008,Wallenstam AB,64,navn,WALL-B.ST,WALL-B.ST=1.00,0.998,,,
+SE0000117970,NCC AB | NCC AKTIEBOLAG | NCCAB,43,navn,NCC-B.ST,NCC-B.ST=1.00,1.0,,,
+SE0002158568,EASTNINE AB (PUBL) | Eastnine AB | Eastnine AB (publ),43,navn,EAST.ST,EAST.ST=1.00,0.998,,,
+CA5503721063,Lundin Mining Corporation | Lundin Mining Corp. | Lundin Mining Corporation ,39,navn,LUMI.ST,LUMI.ST=1.00,1.0,,,
+SE0000112385,SAAB AB | SAAB Aktiebolag | Innovativa solution services Sweden AB,26,navn,SAAB-B.ST,SAAB-B.ST=1.08,1.08,,,
+SE0005677135,Bufab AB | Bufab AB (publ),25,navn,BUFAB.ST,BUFAB.ST=1.00,1.0,,,
+CA46016U1084,INTERNATIONAL PETROLEUM CORPORATION | International Petroleum Corp. | International Petroleum Corp. ,24,navn,IPCO.ST,IPCO.ST=1.00,0.996,,,
+SE0000950636,Fabege AB,22,navn,FABG.ST,FABG.ST=1.00,1.003,,,
+SE0017131329,Logistea AB (publ) | Logistea AB,22,navn,LOGI-B.ST,LOGI-B.ST=0.99,0.988,,,
+SE0009663834,Bambuser AB,21,navn,BUSER.ST,BUSER.ST=0.97,0.974,,,
+SE0016844831,Volvo Car AB | Lone Fønss Schrøder | Volvo Car AB (publ),19,navn,VOLCAR-B.ST,VOLCAR-B.ST=0.90,0.901,,,
+SE0000107419,Investor AB,18,navn,INVE-B.ST,INVE-B.ST=1.00,1.001,,,
+CA5503711080,Lundin Gold Inc. | Lundin Gold Inc. ,17,navn,LUG.ST,LUG.ST=1.00,0.997,,,
+SE0000193120,Svenska Handelsbanken AB,17,navn,SHB-A.ST,SHB-A.ST=1.04 SHB-B.ST=1.04,1.045,,,
+SE0001413600,Wihlborgs Fastigheter AB | Wihlborgs Fastigheter AB  | WIhlborgs FAstigheter AB ,16,navn,WIHL.ST,WIHL.ST=1.00,1.001,,,
+SE0000103814,"AB Electrolux | Electrolux, AB | Aktiebolaget Electrolux",15,navn,ELUX-B.ST,ELUX-B.ST=1.18 EPRO-B.ST=3.19,1.183,,,
+SE0015810247,KINNEVIK AB | Kinnevik AB (publ) | Kinnevik AB,14,navn,KINV-B.ST,KINV-A.ST=0.96 KINV-B.ST=0.99,0.987,,,
+SE0016828511,Embracer Group AB,13,navn,EMBRAC-B.ST,EMBRAC-B.ST=1.00,1.001,,,
+SE0000102378,Betsson AB | NetEnt AB (publ) | Betsson AB ,12,navn,BETS-B.ST,BETS-B.ST=0.99,0.995,,,
+SE0002683557,Loomis AB | Loomis AB ,12,navn,LOOMIS.ST,LOOMIS.ST=0.98,0.981,,,
+SE0000170110,Avanza Bank Holding AB,11,navn,AZA.ST,AZA.ST=1.00,0.997,,,
+SE0003210590,Arbona AB (publ) | Arbona AB,11,navn,ARBO-A.ST,ARBO-A.ST=1.00,0.995,,,
+GB0009895292,AstraZeneca PLC,9,navn,AZN.ST,AZN.ST=1.00,0.995,,,
+SE0005127818,AB Sagax | Sagax AB,9,navn,SAGA-B.ST,SAGA-B.ST=0.99 SAGA-A.ST=0.97 SAGA-D.ST=4.89,0.993,,,
+SE0009161052,AB Sagax | Sagax AB,9,navn,SAGA-D.ST,SAGA-B.ST=0.25 SAGA-A.ST=0.23 SAGA-D.ST=1.00,0.999,,,
+SE0000112906,Beijer Ref AB (publ) | Beijer Ref AB,8,navn,BEIJ-B.ST,BEIJ-B.ST=1.04,1.039,,,
+SE0000390296,NIBE Industrier AB,8,navn,NIBE-B.ST,NIBE-B.ST=1.00,1.0,,,
+SE0014957320,Eniro Group AB | Eniro AB,8,navn,ENRO.ST,ENRO.ST=0.85,0.847,,,
+SE0022243812,Sveafastigheter AB | Sveafastigheter AB (publ),8,navn,SVEAF-B.ST,SVEAF-B.ST=1.00,0.999,,,
+SE0011166628,Atlas Copco AB | ATLAS COPCO AKTIEBOLAG | Atlas Copco B,7,navn,ATCO-B.ST,ATCO-A.ST=0.86 ATCO-B.ST=0.98,0.984,,,
+SE0013883337,AFRY AB,7,navn,AFRY.ST,AFRY.ST=1.01,1.008,,,
+SE0000371296,Nordnet AB (publ),6,navn,SAVE.ST,SAVE.ST=0.99,0.994,,,
+SE0009779291,Genova Property Group AB | Henrik Raspe Design AB | Genova Property Group AB ST,6,navn,GPG.ST,GPG.ST=0.86,0.855,,,
+CA54928Q1081,LUCARA DIAMOND CORP. | Lucara Diamond Corp.  | Lucara Diamond Corp.,5,navn,LUC.ST,LUC.ST=1.00,0.995,,,
+SE0000190134,Beijer Alma AB,5,navn,BEIA-B.ST,BEIA-B.ST=0.99,0.991,,,
+SE0011166933,Epiroc AB | Epiroc Aktiebolag | EPIROC AB,5,navn,EPI-A.ST,EPI-A.ST=1.00 EPI-B.ST=1.04,1.0,,,
+SE0000427361,Nordea Bank AB (publ) | Nordea Bank AB | Nordea Bank Finland Abp,4,navn,NDA-SE.ST,NDA-SE.ST=1.00,1.0,,,
+SE0000514630,Vitec Software Group AB | Vitec Software Group AB (publ),4,navn,VIT-B.ST,VIT-B.ST=0.99,0.987,,,
+SE0000816043,Vitrolife AB | AzAj AB,4,navn,VITR.ST,VITR.ST=0.99,0.985,,,
+SE0000869646,Boliden AB,4,navn,BOL.ST,BOL.ST=0.99,0.994,,,
+SE0001105487,Brinova Fastigheter AB,4,navn,BRIN-B.ST,BRIN-B.ST=0.96,0.958,,,
+SE0011256312,Eniro Group AB | Eniro AB,4,navn,ENRO.ST,ENRO.ST=1.03,1.025,,,
+SE0012729994,Byggmax Group AB | Byggmax AB,4,navn,BMAX.ST,BMAX.ST=0.97,0.97,,,
+SE0015193719,Arbona AB (publ) | Arbona AB,4,navn,ARBO-A.ST,ARBO-A.ST=0.97,0.974,,,
+SE0015948591,Modelon AB (publ) | ERIC BANTEGNIE | Pareto Öhman AB,4,navn,MODEL.ST,MODEL.ST=1.10,1.099,,,
+SE0000109290,Holmen AB | Holmen Aktiebolag,3,navn,HOLM-B.ST,HOLM-B.ST=1.00 HOLM-A.ST=1.00,1.0,,,
+SE0000205940,Svolder AB,3,navn,SVOL-B.ST,SVOL-B.ST=1.00 SVOL-A.ST=0.80,0.997,,,
+SE0000567729,Sensys Gatso Group AB,3,navn,SGG.ST,SGG.ST=1.01,1.013,,,
+SE0000808396,Lagercrantz Group AB,3,navn,LAGR-B.ST,LAGR-B.ST=1.01,1.006,,,
+SE0001493776,AAK AB (PUBL) | AAK AB,3,navn,AAK.ST,AAK.ST=1.00,1.002,,,
+SE0002452623,HEXPOL AB,3,navn,HPOL-B.ST,HPOL-B.ST=0.98,0.985,,,
+SE0007578158,Minesto AB | Minesto ,3,navn,MINEST.ST,MINEST.ST=0.87,0.874,,,
+SE0009806896,Betsson AB,3,navn,BETS-B.ST,BETS-B.ST=0.98,0.982,,,
+CH0012221716,ABB Ltd,2,navn,ABB.ST,ABB.ST=1.04,1.041,,,
+SE0000122467,Atlas Copco AB,2,navn,ATCO-B.ST,ATCO-A.ST=0.92 ATCO-B.ST=1.01,1.01,,,
+SE0000314312,Tele2 AB,2,navn,TEL2-B.ST,TEL2-B.ST=1.00,0.999,,,
+SE0000514374,Enea AB,2,navn,ENEA.ST,ENEA.ST=1.00,1.003,,,
+SE0005936234,Sandvik AB | Sandvik Aktiebolag,2,navn,SAND.ST,SAND.ST=1.05,1.051,,,
+SE0008186886,Bilia AB,2,navn,BILI-A.ST,BILI-A.ST=1.01,1.005,,,
+SE0008242358,Betsson AB,2,navn,BETS-B.ST,BETS-B.ST=0.96,0.958,,,
+SE0011166941,Epiroc AB,2,navn,EPI-B.ST,EPI-A.ST=0.97 EPI-B.ST=1.00,1.003,,,
+SE0011895952,Image Systems AB | image systems AB,2,navn,IS.ST,IS.ST=1.00,1.0,,,
+SE0012827822,Acrinova AB  | Acrinova AB,2,navn,ACRI-A.ST,ACRI-A.ST=1.06 ACRI-B.ST=–,1.057,,,
+SE0018535684,Betsson AB,2,navn,BETS-B.ST,BETS-B.ST=0.99,0.988,,,
+CA00830W1059,AFRICA ENERGY CORP.,1,navn,AEC.ST,AEC.ST=0.93,0.933,,,
+SE0000102295,Bilia AB,1,navn,BILI-A.ST,BILI-A.ST=1.01,1.008,,,
+SE0000110116,OEM International AB,1,navn,OEM-B.ST,OEM-B.ST=0.97,0.974,,,
+SE0000115420,"Volvo, AB",1,navn,VOLV-A.ST,VOLCAR-B.ST=– VOLV-B.ST=1.01 VOLV-A.ST=1.01,1.006,,,
+SE0000122111,Swedbank AB,1,navn,SWED-A.ST,SWED-A.ST=0.99,0.991,,,
+SE0000164626,KINNEVIK AB,1,navn,KINV-B.ST,KINV-A.ST=0.94 KINV-B.ST=1.02,1.015,,,
+SE0000171696,Trelleborg AB,1,navn,TREL-B.ST,TREL-B.ST=0.99,0.989,,,
+SE0000255648,ASSA ABLOY AB,1,navn,ASSA-B.ST,ASSA-B.ST=1.00,1.001,,,
+SE0000547929,Anoto Group AB,1,navn,INQ.ST,INQ.ST=0.98,0.981,,,
+SE0000556292,Image Systems AB,1,navn,IS.ST,IS.ST=1.06,1.064,,,
+SE0000718017,Eniro AB,1,navn,ENRO.ST,ENRO.ST=0.95,0.946,,,
+SE0000808370,Addtech AB,1,navn,ADDT-B.ST,ADDT-B.ST=1.00,1.0,,,
+SE0001629288,AB Sagax,1,navn,SAGA-D.ST,SAGA-B.ST=0.21 SAGA-A.ST=0.21 SAGA-D.ST=1.13,1.132,,,
+SE0003620947,HEXAGON,1,navn,HEXA-B.ST,HEXA-B.ST=1.01,1.007,,,
+SE0005424314,Castellum AB,1,navn,CAST.ST,CAST.ST=1.18,1.183,,,
+SE0005465853,Sandvik AB,1,navn,SAND.ST,SAND.ST=1.05,1.049,,,
+SE0005935558,"Fagerhult, AB",1,navn,FAG.ST,FAG.ST=1.15,1.153,,,
+SE0006024956,Scandi Standard AB (publ),1,navn,SCST.ST,SCST.ST=0.98,0.979,,,
+SE0006886750,Atlas Copco AB,1,navn,ATCO-A.ST,ATCO-A.ST=1.28 ATCO-B.ST=1.47,1.276,,,
+SE0006886768,Atlas Copco AB,1,navn,ATCO-B.ST,ATCO-A.ST=0.92 ATCO-B.ST=0.99,0.991,,,
+SE0007045414,SciBase Holding AB (publ),1,navn,SCIB.ST,SCIB.ST=1.23,1.231,,,
+SE0007157763,Bilia AB,1,navn,BILI-A.ST,BILI-A.ST=1.00,1.003,,,
+SE0007731427,Scandi Standard AB,1,navn,SCST.ST,SCST.ST=1.01,1.008,,,
+SE0008129134,Acarix AB,1,navn,ACARIX.ST,ACARIX.ST=0.93,0.928,,,
+SE0009664253,Instalco AB,1,navn,INSTAL.ST,INSTAL.ST=0.98,0.98,,,
+SE0009889199,Diamyd Medical AB,1,navn,DMYD-B.ST,DMYD-B.ST=0.80,0.797,,,
+SE0010133470,Intea Fastigheter AB (publ),1,navn,INTEA-B.ST,INTEA-B.ST=1.00 INTEA-D.ST=1.94,0.997,,,
+SE0010494856,Corem Property Group AB,1,navn,CORE-A.ST,CORE-B.ST=0.94 CORE-PREF.ST=0.06 CORE-A.ST=0.94 CORE-D.ST=–,0.937,,,
+SE0010494864,Corem Property Group AB,1,navn,CORE-B.ST,CORE-B.ST=0.94 CORE-PREF.ST=0.06 CORE-A.ST=0.94 CORE-D.ST=–,0.942,,,
+SE0011089259,Betsson AB,1,navn,BETS-B.ST,BETS-B.ST=1.00,1.004,,,
+SE0011309236,Fastpartner AB,1,navn,FPAR-A.ST,FPAR-A.ST=1.28 FPAR-D.ST=1.49,1.276,,,
+SE0013883063,Getinge AB,1,navn,GETI-B.ST,GETI-B.ST=0.99,0.99,,,
+SE0014684528,Kinnevik AB,1,navn,KINV-B.ST,KINV-A.ST=0.91 KINV-B.ST=0.99,0.989,,,
+SE0015482740,Medivir,1,navn,MVIR.ST,MVIR.ST=1.21,1.21,,,
+SE0015812201,Bonava AB (publ),1,navn,BONAV-B.ST,BONAV-B.ST=1.00 BONAV-A.ST=1.00,0.998,,,
+SE0016278196,SECTRA AB,1,navn,SECT-B.ST,SECT-B.ST=1.00,1.004,,,
+SE0017768716,Boliden AB,1,navn,BOL.ST,BOL.ST=0.99,0.994,,,
+SE0018537987,Arjo AB (publ),1,navn,ARJO-B.ST,ARJO-B.ST=0.97,0.966,,,
+SE0020845220,Logistea AB (publ),1,navn,LOGI-B.ST,LOGI-B.ST=1.06,1.057,,,
+SE0021308962,InCoax Networks AB,1,navn,INCOAX.ST,INCOAX.ST=0.99,0.99,,,
+SE0023134945,Arjo AB (publ),1,navn,ARJO-B.ST,ARJO-B.ST=1.02,1.017,,,
+SE0030263596,Scandi Standard AB (publ),1,navn,SCST.ST,SCST.ST=0.85,0.848,,,
+US9288541082,Aktiebolaget Volvo,1,navn,VOLV-B.ST,VOLCAR-B.ST=2.44 VOLV-B.ST=1.00 VOLV-A.ST=0.97,0.995,,,
+US2948216088,Telefonaktiebolaget LM Ericsson,2,navn,ERIC-B.ST,ERIC-B.ST=0.99 ERIC-A.ST=0.92,0.994,flere kandidater efter navn,afvis,ADR-ISIN (US) – ikke den svenske aktie; aktieklasse ukendt
+SE0007640156,Scandic Hotels Group AB | Scandic Hotels AB | Scandic Hotels Group AB (SHOT),40,isin,SHOT.ST,SHOT.ST=1.40,1.395,kursafvigelse,SHOT.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0012116390,Viaplay Group AB (publ) | Nordic Entertainment Group AB | Nordic Entertainment Group AB (publ),37,isin,VPLAY-B.ST,VPLAY-B.ST=3.24,3.238,kursafvigelse,VPLAY-B.ST,Nordic Entertainment Group er omdøbt til Viaplay Group; samme ISIN
+SE0000949331,Nobia AB,19,isin,NOBI.ST,NOBI.ST=3.14,3.144,kursafvigelse,NOBI.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0000825820,Lundin Petroleum AB | Orrön Energy AB (publ) | Orrön Energy AB,16,isin,ORRON.ST,ORRON.ST=42.40,42.404,kursafvigelse,ORRON.ST,Lundin Petroleum er omdøbt til Orrön Energy; samme ISIN; Yahoo har justeret for udlodningen af Aker BP-aktier
+SE0007614722,Wifog Holding AB | Wifog | Wifog Holding,16,isin,K33.ST,K33.ST=1357.08,1357.078,kursafvigelse,K33.ST,Wifog Holding er omdøbt (K33); samme ISIN; kursforholdet skyldes sammenlægninger uden split-event
+GB00BVMN1558,Verisure plc | Verisure PLC | VERISURE PLC,12,isin,VSURE.ST,VSURE.ST=10.77,10.768,kursafvigelse,afvis,VSURE.ST er noteret i EUR (kursforhold ≈ SEK/EUR); kun SEK-noterede serier
+SE0006091997,Immunovia AB | Immunovia AB (publ),9,isin,IMMNOV.ST,IMMNOV.ST=1.54,1.544,kursafvigelse,IMMNOV.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0005308558,Clavister Holding AB | Clavister Holding AB (publ),7,isin,CLAV.ST,CLAV.ST=2.04,2.038,kursafvigelse,CLAV.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0001834821,Unlimited Travel Group | Unlimited Travel Group UTG AB (publ),6,isin,UTG.ST,UTG.ST=1.46,1.463,kursafvigelse,UTG.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0008373906,Kinnevik AB | KINNEVIK,5,isin,KINV-B.ST,KINV-B.ST=1.76,1.761,kursafvigelse,KINV-B.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0011527845,Q-linea AB | Q-line AB,5,isin,QLINEA.ST,QLINEA.ST=7.07,7.068,kursafvigelse,QLINEA.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+CH0242214887,"Fenix Outdoor International AG | FOI-B, Fenix Outdoor International AG",4,isin,FOI-B.ST,FOI-B.ST=0.67,0.671,kursafvigelse,FOI-B.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0007158928,Starbreeze AB (publ) | Starbreeze AB (publ)  | Starbreeze AB,4,isin,STAR-A.ST,STAR-A.ST=1.76,1.762,kursafvigelse,STAR-A.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0008348304,GS Sweden AB | GOMSPACE GROUP AB,4,isin,GOMX.ST,GOMX.ST=10.18,10.183,kursafvigelse,GOMX.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0000767188,Alligator Bioscience AB,3,isin,ATORX.ST,ATORX.ST=21.47,21.474,kursafvigelse,ATORX.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0005365095,Serstech AB | Serstech A,3,isin,SERT.ST,SERT.ST=49.91,49.906,kursafvigelse,SERT.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0006422309,Prime Living AB,3,isin,STUDBO.ST,STUDBO.ST=1.34,1.344,kursafvigelse,STUDBO.ST,Prime Living er omdøbt til Studentbostäder i Norden; samme ISIN
+SE0008091664,SIMRIS,3,isin,SIMRIS-B.ST,SIMRIS-B.ST=2.23,2.234,kursafvigelse,SIMRIS-B.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0010441139,Railcare Group AB,3,isin,RAIL.ST,RAIL.ST=0.72,0.724,kursafvigelse,RAIL.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0000122657,MIDWAY HOLDING AKTIEBOLAG | Micropos Medical AB,2,isin,HAKI-A.ST,HAKI-A.ST=0.55,0.553,kursafvigelse,HAKI-A.ST,Midway Holding = Haki Safety (omdøbt); rækker med Micropos Medical under samme ISIN er fejl og fanges af signal-tjekket
+SE0000483943,Hifabgroup Ak | Hulström Group AB,2,isin,SPACEN-B.ST,SPACEN-B.ST=2547.67,2547.668,kursafvigelse,afvis,"navnene (Hifab Group / Hulström Group) matcher ikke SPACEN-B.ST, og kursforholdet er urimeligt (2.548)"
+SE0003656834,medirätt | MediRätt ,2,isin,IZAFE-B.ST,IZAFE-B.ST=4.07,4.068,kursafvigelse,IZAFE-B.ST,MediRätt er omdøbt til iZafe Group; samme ISIN
+SE0007100532,Nordisk Bergteknik AB (publ) | Navigo Invest AB,2,isin,NAVIGO-STAM.ST,NAVIGO-STAM.ST=2.59,2.586,kursafvigelse,NAVIGO-STAM.ST,Navigo Invest (tidl. Pegroco) stamaktie; rækker med Nordisk Bergteknik under samme ISIN er fejl og fanges af signal-tjekket
+SE0007100540,Pegroco Invest preferens | Pegroco Invest AB,2,isin,NAVIGO-PREF.ST,NAVIGO-PREF.ST=6.91,6.907,kursafvigelse,NAVIGO-PREF.ST,Pegroco Invest præferenceaktie = Navigo Invest pref; samme ISIN
+SE0009920994,Realfiction Holding AB,2,isin,REALFI.ST,REALFI.ST=0.52,0.515,kursafvigelse,REALFI.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0010270793,Bublar Group AB | Goodbye Kansas Group,2,isin,GBK.ST,GBK.ST=8.56,8.556,kursafvigelse,GBK.ST,Bublar Group er omdøbt til Goodbye Kansas Group; samme ISIN
+SE0010600429,Triboron International AB,2,isin,TRIBO-B.ST,TRIBO-B.ST=52.04,52.038,kursafvigelse,TRIBO-B.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0014428447,ES Energy Save Holding AB (publ),2,isin,ESGR-B.ST,ESGR-B.ST=3.55,3.546,kursafvigelse,ESGR-B.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0001770702,Drillcon Aktiebolag,1,isin,DRIL.ST,DRIL.ST=4772.70,4772.699,kursafvigelse,DRIL.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0004270445,AVTECH SWEDEN AB,1,isin,AVT-B.ST,AVT-B.ST=0.67,0.67,kursafvigelse,AVT-B.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0005162880,Diamyd Medical AB,1,isin,DMYD-B.ST,DMYD-B.ST=0.72,0.723,kursafvigelse,DMYD-B.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0006091724,PRECOMP SOLUTIONS B,1,isin,PCOM-B.ST,PCOM-B.ST=0.72,0.724,kursafvigelse,PCOM-B.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0006371126,Cantargia AB,1,isin,CANTA.ST,CANTA.ST=7151.03,7151.034,kursafvigelse,CANTA.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0007603493,Lagercrantz Group Aktiebolag,1,isin,LAGR-B.ST,LAGR-B.ST=9.85,9.847,kursafvigelse,LAGR-B.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0009242654,Scandinavian Chemotech AB,1,isin,NEEMS-B.ST,NEEMS-B.ST=770.98,770.978,kursafvigelse,afvis,navnet (Scandinavian Chemotech) kan ikke knyttes sikkert til NEEMS-B.ST; kursforhold 771
+SE0009268154,ÅAC Microtec AB,1,isin,AAC.ST,AAC.ST=28258.47,28258.475,kursafvigelse,AAC.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0009664188,XMReality AB (publ),1,isin,XMR.ST,XMR.ST=2499966.50,2499966.496,kursafvigelse,XMR.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0009832595,InCoax Networks AB,1,isin,INCOAX.ST,INCOAX.ST=19405.49,19405.494,kursafvigelse,INCOAX.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0012324226,Viaplay Group AB (publ),1,isin,VPLAY-A.ST,VPLAY-A.ST=0.51,0.511,kursafvigelse,VPLAY-A.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0014684569,Prostatype Genomics AB,1,isin,PROGEN.ST,PROGEN.ST=1.54,1.538,kursafvigelse,PROGEN.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
+SE0028000190,Silex Microsystems AB (publ),1,isin,SILEX.ST,SILEX.ST=0.36,0.359,kursafvigelse,SILEX.ST,"samme selskab som symbolet (navn/omdøbning); kursforholdet skyldes Yahoos justering (emission, udlodning eller sammenlægning uden split-event) eller tastefejl, som signal-tjekket [0,5; 2] fanger række for række"
