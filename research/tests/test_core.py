@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from common import (NY, clustered_mean, cmp_class, entry_index, exchange_ok, is_entity_name, is_plan_footnote,  # noqa: E402
@@ -140,6 +141,85 @@ def test_parity_with_app_outcomes_fixture():
     iwm_dkk = ((251.82 / 248.01) * 6.4008) / 6.4381 - 1
     assert abs(o['gross_5']) < 1e-12  # aktien er SPY selv
     assert abs(o['gross_iwm_5'] - (ret_dkk - iwm_dkk)) < 1e-10
+
+
+# ---------------------------------------------------------------- fase 4-SE (research/reports/prereg-se.md)
+def test_se_costs_v4():
+    import se
+    c4, c3 = load_costs(*se.COSTS_V4), load_costs()  # fejler, hvis v4's sha256 er ændret
+    for adv, want in [(60e6, 0.6), (10e6, 0.8), (2e6, 1.1), (0.6e6, 1.7), (None, 1.7)]:
+        assert abs(round_trip_pct(c4, adv, 'SEK') - want) < 1e-9, (adv, round_trip_pct(c4, adv, 'SEK'))
+    assert abs(round_trip_pct(c3, 10e6, 'SEK') - 1.3) < 1e-9  # v3 uændret (automatisk veksling)
+    assert {k: v for k, v in c4.items() if k not in ('version', 'source', 'note', 'fxSpreadPctByCurrency')} == \
+           {k: v for k, v in c3.items() if k not in ('version', 'source', 'note', 'fxSpreadPctByCurrency')}
+    assert c4['fxSpreadPctByCurrency'] == {**c3['fxSpreadPctByCurrency'], 'SEK': 0}
+
+
+def test_se_entry_rule_stockholm():
+    import se
+    ST = lambda s: datetime.fromisoformat(s).replace(tzinfo=se.SE_TZ).astimezone(timezone.utc)
+    e = lambda days, s: days[entry_index(days, ST(s), s[:10], se.SE_TZ, se.SE_OPEN)]
+    win = ['2025-01-09', '2025-01-10', '2025-01-13']  # vintertid: 09:00 = 08:00 UTC
+    assert e(win, '2025-01-10T08:50:00') == '2025-01-10'  # 09:00 ≥ 08:50 + 10 min
+    assert e(win, '2025-01-10T08:51:00') == '2025-01-13'  # 09:00 < 09:01 → næste handelsdag (weekend)
+    assert e(win, '2025-01-09T17:40:00') == '2025-01-10'
+    sumr = ['2025-03-28', '2025-03-31', '2025-04-01']  # sommertid fra 30.3.2025: 09:00 = 07:00 UTC
+    assert e(sumr, '2025-03-31T08:50:00') == '2025-03-31'
+    assert e(sumr, '2025-03-31T08:51:00') == '2025-04-01'
+    assert sumr[entry_index(sumr, UTC('2025-03-31T06:50'), '2025-03-31', se.SE_TZ, se.SE_OPEN)] == '2025-03-31'
+    assert sumr[entry_index(sumr, UTC('2025-03-31T06:51'), '2025-03-31', se.SE_TZ, se.SE_OPEN)] == '2025-04-01'
+
+
+def test_se_fi_parse_and_population():
+    import se
+    head = ';'.join(['Publiceringsdatum', 'Emittent', 'LEI-kod', 'Anmälningsskyldig', 'Person i ledande ställning', 'Befattning',
+                     'Närstående', 'Korrigering', 'Beskrivning av korrigering', 'Är förstagångsrapportering',
+                     'Är kopplad till aktieprogram', 'Karaktär', 'Instrumenttyp', 'Instrumentnamn', 'ISIN', 'Transaktionsdatum',
+                     'Volym', 'Volymsenhet', 'Pris', 'Valuta', 'Handelsplats', 'Status', ''])
+    rows = [
+        ['2017-03-06 08:31:12', 'Acme AB', '', 'Anna A', 'Anna A', 'VD', '', '', '', 'Ja', '', 'Förvärv', '', 'Acme AB ser. B',
+         'SE0000000001', '2017-03-03 00:00:00', '12\xa0000,0', 'Antal', '45,5', 'SEK', 'NASDAQ STOCKHOLM AB', 'Aktuell', ''],
+        ['2017-03-06 08:31:12', 'Acme AB', '', 'Anna A', 'Anna A', 'VD', '', '', '', '', '', 'Förvärv', '', 'Acme AB TO 2',
+         'SE0000000002', '2017-03-03 00:00:00', '100,0', 'Antal', '1,0', 'SEK', 'NASDAQ STOCKHOLM AB', 'Aktuell', ''],
+        ['2017-03-07 10:00:00', 'Acme AB', '', 'Bo B', 'Bo B', 'CFO', '', 'Ja', 'fel antal', '', '', 'Förvärv', 'Aktie', 'Acme AB',
+         'SE0000000001', '2017-03-06 00:00:00', '10,0', 'Antal', '45,0', 'SEK', 'FIRST NORTH SWEDEN', 'Aktuell', ''],
+        ['2017-03-07 10:00:00', 'Acme AB', '', 'Cia C', 'Cia C', 'Styrelseledamot', '', '', '', '', '', 'Förvärv', 'Aktie', 'Acme AB',
+         'SE0000000001', '2017-03-06 00:00:00', '10,0', 'Antal', '45,0', 'SEK', 'Utanför handelsplats', 'Aktuell', ''],
+        ['2017-03-07 11:00:00', 'Acme AB', '', 'Dan D', 'Dan D', 'Ordförande', '', '', '', '', '', 'Förvärv', 'Aktie', 'Acme AB',
+         'SE0000000001', '2017-03-06 00:00:00', '10,0', 'Antal', '45,0', 'SEK', 'SPOTLIGHT STOCK MARKET', 'Makulerad', ''],
+    ]
+    body = '\n'.join([head] + [';'.join(r) for r in rows]).encode('utf-16-le')
+    parsed = se.parse_fi_csv(body)
+    df = pd.DataFrame(parsed, columns=se.COLS)
+    df['volume'], df['price'] = df.volume.map(se._num), df.price.map(se._num)
+    assert df.volume.iat[0] == 12000.0 and df.price.iat[0] == 45.5  # hårdt mellemrum + decimalkomma
+    assert se.market_buy(df).tolist() == [True, False, False, False, False]  # TO-option, korrektion, Utanför, makuleret ud
+    assert [se.role_se(p) for p in ('VD', 'Ekonomidirektör', 'Styrelseordförande', 'Styrelseledamot/suppleant', 'COO', '')] == \
+           ['VD', 'CFO', 'ordförande', 'styrelseledamot', 'anden ledelse', 'ukendt']
+    assert se.norm_issuer('Acme AB (publ)') == se.norm_issuer('ACME AB') == 'acme'
+
+
+def test_se_cluster_window():
+    import se
+    t = lambda s: datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+    c = pd.DataFrame({'issuer_key': ['x', 'x', 'x', 'x', 'y'], 'pdmr_key': ['a', 'b', 'a', 'c', 'd'],
+                      'anchor_utc': [t('2025-01-01T08:00'), t('2025-01-05T08:00'), t('2025-01-10T08:00'), t('2025-01-11T08:00'),
+                                     t('2025-01-10T08:00')]})
+    assert se.personal_buyers(c, 'x', t('2025-01-10T08:00')) == 2  # a og b (a to gange), c er efter ankeret, y er anden emittent
+    assert se.personal_buyers(c, 'x', t('2025-01-11T08:00')) == 3  # 1.1. 08:00 er præcis 10 dage før: med
+    assert se.personal_buyers(c, 'x', t('2025-01-11T08:01')) == 3  # 1.1. falder ud, men a købte igen 10.1.
+
+
+def test_se_dividend_window():
+    from build import _outcomes
+    dates = ['2025-05-05', '2025-05-06', '2025-05-07', '2025-05-08', '2025-05-09', '2025-05-12', '2025-05-13']
+    bars = pd.DataFrame({'date': dates, 'open': [100.0] * 7, 'close': [100.0] * 7, 'volume': [1.0] * 7})
+    flat = (bars, np.ones(7), {}, dates)  # benchmark og FX flade: AR = aktiens eget afkast
+    div = [('2025-05-05', 9.0), ('2025-05-07', 2.0), ('2025-05-13', 7.0)]  # entry-dagen, inden for, efter 5 d-exit
+    o = _outcomes(flat, 0, flat, flat, flat, 0.0, div=div)
+    assert abs(o['gross_1']) < 1e-12  # ex-dato på entry-dagen tæller ikke
+    assert abs(o['gross_5'] - 0.02) < 1e-12  # kun 7.5. i (entry, exit]
+    assert abs(_outcomes(flat, 0, flat, flat, flat, 0.0)['gross_5']) < 1e-12  # uden div = kursafkast (fase 4)
 
 
 if __name__ == '__main__':

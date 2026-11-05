@@ -19,7 +19,7 @@ Z = NormalDist().inv_cdf(0.975)  # Bonferroni over 2 tests: ensidet 97,5 %
 MIN_TEST2 = 150
 
 
-def confirm(label: str, d: pd.DataFrame, min_n: int | None = None) -> tuple[list[str], str]:
+def confirm(label: str, d: pd.DataFrame, min_n: int | None = None, bench: str = 'SPY') -> tuple[list[str], str]:
     s = stat(d, 'net_5')
     lo = s['mean'] - Z * s['se']
     x = d[['net_5', 'week']].dropna()
@@ -30,7 +30,7 @@ def confirm(label: str, d: pd.DataFrame, min_n: int | None = None) -> tuple[list
         verdict = 'bestået: nedre grænse > 0' if lo > 0 else 'ikke bestået: nedre grænse ≤ 0'
     rows = [f'### {label}', '', '| Mål | Værdi |', '|---|---|',
             f'| Enheder / uger | {num(s["n"])} / {num(x.week.nunique())} |',
-            f'| Gennemsnit netto 5 d mod SPY | {pct(s["mean"])} |',
+            f'| Gennemsnit netto 5 d mod {bench} | {pct(s["mean"])} |',
             f'| SD pr. enhed | {shr(s["sd"], 2)} |',
             f'| SE, uge-klynget | {shr(s["se"], 3)} |',
             f'| **Ensidet 97,5 %-nedre grænse (uge-klynget)** | **{pct(lo)}** |',

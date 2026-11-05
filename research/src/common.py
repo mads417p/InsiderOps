@@ -236,13 +236,14 @@ def download(url: str, dest: Path, *, sec: bool = True) -> Path | None:
 
 
 # ---------------------------------------------------------------- omkostninger (costs.ts, frosset af prereg)
-def load_costs() -> dict:
-    raw = (REPO / 'config' / 'costs.json').read_text(encoding='utf-8').replace('\r\n', '\n')
+def load_costs(name: str = 'costs.json', version: int = COSTS_VERSION, sha256: str = COSTS_SHA256) -> dict:
+    """Frosset omkostningsfil. Default = v3 (appen, prereg v1, fase 4); fase 4-SE bruger costs-v4.json (prereg-se.md)."""
+    raw = (REPO / 'config' / name).read_text(encoding='utf-8').replace('\r\n', '\n')
     sha = hashlib.sha256(raw.encode('utf-8')).hexdigest()
     c = json.loads(raw)
-    if c.get('version') != COSTS_VERSION or sha != COSTS_SHA256:
-        raise SystemExit(f'config/costs.json er ændret (version {c.get("version")}, sha256 {sha[:12]}…); '
-                         f'prereg v1 kræver version {COSTS_VERSION} og sha256 {COSTS_SHA256[:12]}…')
+    if c.get('version') != version or sha != sha256:
+        raise SystemExit(f'config/{name} er ændret (version {c.get("version")}, sha256 {sha[:12]}…); '
+                         f'prereg kræver version {version} og sha256 {sha256[:12]}…')
     return c
 
 
@@ -328,21 +329,27 @@ def pit_snapshot(bars: pd.DataFrame, factor: np.ndarray, i: int) -> dict:
 
 
 @lru_cache(maxsize=None)
+def open_utc(d: str, tz: ZoneInfo = NY, open_hm: str = US_OPEN) -> datetime:
+    """Ordinær åbning (lokal tid open_hm i børsens tidszone) på datoen, i UTC (DST håndteres af zoneinfo)."""
+    h, m = map(int, open_hm.split(':'))
+    return datetime.fromisoformat(d).replace(hour=h, minute=m, tzinfo=tz).astimezone(timezone.utc)
+
+
 def us_open_utc(d: str) -> datetime:
-    """Ordinær US-åbning 09:30 America/New_York på datoen, i UTC (DST håndteres af zoneinfo)."""
-    h, m = map(int, US_OPEN.split(':'))
-    return datetime.fromisoformat(d).replace(hour=h, minute=m, tzinfo=NY).astimezone(timezone.utc)
+    """Ordinær US-åbning 09:30 America/New_York på datoen, i UTC."""
+    return open_utc(d)
 
 
-def entry_index(dates: list[str], anchor_utc: datetime | None, filing_date: str) -> int:
+def entry_index(dates: list[str], anchor_utc: datetime | None, filing_date: str, tz: ZoneInfo = NY, open_hm: str = US_OPEN) -> int:
     """Indeks for entry-baren (len(dates) = ikke nået).
-    Med ankeret: første bar, hvis åbning ligger ≥ anker + 10 min (prereg afsnit 5).
+    Med ankeret: første bar, hvis åbning ligger ≥ anker + 10 min (prereg afsnit 5). Default = US 09:30 New York;
+    fase 4-SE: tz=Europe/Stockholm, open_hm='09:00'.
     Uden accepttid: første handelsdag efter filing-datoen (konservativt)."""
     if anchor_utc is None:
         return bisect_right(dates, filing_date)
     earliest = anchor_utc + MIN_ENTRY_LEAD
-    i = bisect_left(dates, anchor_utc.astimezone(NY).date().isoformat())
-    while i < len(dates) and us_open_utc(dates[i]) < earliest:
+    i = bisect_left(dates, anchor_utc.astimezone(tz).date().isoformat())
+    while i < len(dates) and open_utc(dates[i], tz, open_hm) < earliest:
         i += 1
     return i
 

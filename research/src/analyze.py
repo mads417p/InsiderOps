@@ -19,22 +19,26 @@ from common import (BOOTSTRAP, DATA, HOLDOUT_START, HORIZONS, MIN_UNITS, PRIMARY
 FIG = REPORTS / 'fig'
 
 
-def holdout_plan_committed() -> bool:
-    plan = REPORTS / 'holdout-plan.md'
-    if not plan.exists():
+def committed_clean(path) -> bool:
+    """Filen findes, er tracked af git og uden ucommittede ændringer (værn for prereg- og holdout-planer)."""
+    if not path.exists():
         return False
-    rel = plan.relative_to(REPO).as_posix()
+    rel = path.relative_to(REPO).as_posix()
     tracked = subprocess.run(['git', 'ls-files', '--error-unmatch', rel], cwd=REPO, capture_output=True).returncode == 0
     clean = subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--', rel], cwd=REPO).returncode == 0
     return tracked and clean
 
 
-def load_units(holdout: bool = False) -> pd.DataFrame:
-    u = pd.read_parquet(DATA / 'units.parquet')
+def holdout_plan_committed(plan: str = 'holdout-plan.md') -> bool:
+    return committed_clean(REPORTS / plan)
+
+
+def load_units(holdout: bool = False, units: str = 'units.parquet', plan: str = 'holdout-plan.md') -> pd.DataFrame:
+    u = pd.read_parquet(DATA / units)
     if not holdout:
         return u[u.entry_date < HOLDOUT_START].reset_index(drop=True)
-    if not holdout_plan_committed():
-        raise SystemExit('Holdout afvist: research/reports/holdout-plan.md er ikke committet og uændret.')
+    if not holdout_plan_committed(plan):
+        raise SystemExit(f'Holdout afvist: research/reports/{plan} er ikke committet og uændret.')
     return u[u.entry_date >= HOLDOUT_START].reset_index(drop=True)
 
 

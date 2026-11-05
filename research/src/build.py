@@ -215,7 +215,9 @@ def _fx_on(b, d: str) -> float | None:
     return float(bars.close.iat[i])
 
 
-def _outcomes(s, ei: int, spy, iwm, usd, cost: float) -> dict:
+def _outcomes(s, ei: int, spy, iwm, usd, cost: float, div=None) -> dict:
+    """div (fase 4-SE): sorteret liste af (ex-dato, beløb) i Yahoos basis; udbytte med ex-dato i (entry, exit] lægges til
+    exit-kursen (totalafkast mod et brutto-indeks). None = kursafkast som fase 4."""
     bars, _, _, dates = s
     out = {}
     for h in HORIZONS:
@@ -226,6 +228,8 @@ def _outcomes(s, ei: int, spy, iwm, usd, cost: float) -> dict:
         if not (o > 0 and c > 0):
             continue  # manglende kurs = intet udfald (aldrig 0)
         e_d, x_d = dates[ei], dates[xi]
+        if div:
+            c = c + sum(a for d, a in div if e_d < d <= x_d)
         ue, ux = _fx_on(usd, e_d), _fx_on(usd, x_d)
         rs = _bench_ret(spy, e_d, x_d)
         if ue is None or ux is None or rs is None:
